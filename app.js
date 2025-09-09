@@ -10,7 +10,10 @@ const couponsRouter = require('./routes/coupons');
 const Device = require('./models/device');
 // Load env vars
 require("dotenv").config(); // at top of app.js
-
+const ALLOWED_ORIGINS = [
+  "https://ev-charging-a5c53.web.app",
+  "http://localhost:3000",
+];
 
 // Route handlers
 const authRoutes    = require("./routes/auth");
@@ -41,7 +44,26 @@ const client_URLs = process.env.CLIENT_URL;
 
 // CORS: allow your frontend origins
 
-app.use(cors());
+app.use(
+  cors({
+    origin: function (origin, cb) {
+      if (!origin) return cb(null, true); // allow server-to-server or curl
+      return cb(null, ALLOWED_ORIGINS.includes(origin));
+    },
+    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: false, // set true only if sending cookies; then also send ACA-Credentials
+    maxAge: 86400,
+  })
+);
+
+// Ensure all preflights are handled
+app.options("*", cors({
+  origin: ALLOWED_ORIGINS,
+  methods: ["GET","HEAD","PUT","PATCH","POST","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type","Authorization"],
+  credentials: false,
+}));
 
 
 
