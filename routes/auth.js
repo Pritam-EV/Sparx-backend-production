@@ -12,7 +12,6 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 // routes/auth.js
 router.post("/phone/send-code", sendPhoneCode);
 router.post("/phone/verify-code", verifyPhoneCode);
-router.post("/signup", signup);
 
 
 router.post("/google", async (req, res) => {
