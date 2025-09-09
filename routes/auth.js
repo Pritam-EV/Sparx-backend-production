@@ -12,6 +12,7 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 // routes/auth.js
 router.post("/phone/send-code", sendPhoneCode);
 router.post("/phone/verify-code", verifyPhoneCode);
+router.post("/signup", signup);
 
 
 router.post("/google", async (req, res) => {
@@ -66,54 +67,7 @@ router.post("/google", async (req, res) => {
   }
 });
 
-router.post("/signup", async (req, res) => {
-  try {
-    console.log("Incoming Signup Request:", req.body);
 
-    const { name, mobile, vehicleType, email, googleId } = req.body;
-
-    // Validate required fields
-    if (!name || !mobile || !vehicleType || !email || !googleId) {
-      console.log("❌ Missing Fields:", req.body);
-      return res.status(400).json({ message: "All fields are required" });
-    }
-
-    // Check for existing email or mobile
-    let existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ message: "Email already exists" });
-    }
-    existingUser = await User.findOne({ mobile });
-    if (existingUser) {
-      return res.status(400).json({ message: "Mobile number already exists" });
-    }
-
-    // Create user with default role customer
-    let user = new User({
-      name,
-      email,
-      mobile,
-      vehicleType,
-      googleId,
-      role: 'customer',  // default role
-    });
-
-    await user.save();
-    console.log("✅ User Created:", user);
-
-    // Generate JWT token including role
-    const jwtToken = jwt.sign(
-      { userId: user._id, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: "30d" }
-    );
-
-    res.json({ token: jwtToken, user });
-  } catch (error) {
-    console.error("❌ Signup Error:", error);
-    res.status(500).json({ message: "Signup failed" });
-  }
-});
 
 router.delete("/delete", authMiddleware, async (req, res) => {
   try {
