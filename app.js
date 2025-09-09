@@ -27,6 +27,15 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
+const admin = require("firebase-admin");
+const serviceAccount = require(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    projectId: process.env.FIREBASE_PROJECT_ID,  // optional explicit projectId
+  });
+}
 
 // MQTT Subscriber (if you still need it)
 const startMqttSubscriber = require("./mqttSubscriber");
