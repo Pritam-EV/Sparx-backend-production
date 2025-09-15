@@ -49,14 +49,6 @@ exports.sendPhoneCode = async (req, res) => {
 exports.verifyPhoneCode = async (req, res) => {
   try {
     const { mobile, code } = req.body;
-
-    // Validate input presence
-    if (!mobile || !code) {
-      return res.status(400).json({ message: "Mobile and code are required" });
-    }
-
-    console.log("verifyPhoneCode request body:", req.body); // Debug log
-
     const user = await User.findOne({ mobile });
 
     if (
@@ -71,7 +63,6 @@ exports.verifyPhoneCode = async (req, res) => {
     user.phoneVerified = true;
     user.phoneVerificationCode = undefined;
     user.phoneVerificationExpires = undefined;
-
     await user.save();
 
     if (user.name && user.email) {
@@ -84,17 +75,12 @@ exports.verifyPhoneCode = async (req, res) => {
       return res.json({ token, user, isNewUser: false });
     }
 
-    // If no name/email, treat as new user
     return res.json({ isNewUser: true, mobile });
-
   } catch (error) {
     console.error("verifyPhoneCode Error:", error);
     return res.status(500).json({ message: "Code verification failed" });
   }
 };
-
-
-
 
 exports.signup = async (req, res) => {
   try {

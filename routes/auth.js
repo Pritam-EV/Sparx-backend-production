@@ -4,15 +4,16 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User"); // Adjust based on your project structure
 const { OAuth2Client } = require("google-auth-library");
 const authMiddleware = require("../middleware/authMiddleware");
-const { sendPhoneCode, verifyPhoneCode, signup, authController  } = require("../controllers/authController");
+const { sendPhoneCode, verifyPhoneCode, signup } = require("../controllers/authController");
+const authMiddleware = require("../middleware/authMiddleware");
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // routes/auth.js
 router.post("/phone/send-code", sendPhoneCode);
-
+router.post("/phone/verify-code", verifyPhoneCode);
 router.post("/signup", signup);
-router.post("/verify-phone", verifyPhoneCode);
+
 
 router.post("/google", async (req, res) => {
   try {
@@ -92,8 +93,6 @@ router.get("/me", authMiddleware, async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
-
-
 
 // Update profile
 // Update profile

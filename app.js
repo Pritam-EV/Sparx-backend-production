@@ -92,7 +92,6 @@ app.use('/api/users', userRoutes);
 
 app.use('/api/analytics', analyticsRoutes);
 
-
 // Legacy GET endpoint (optional; can remove if you use `/api/sessions/by-transaction`)
 app.get("/api/getDevice", async (req, res) => {
   try {
