@@ -14,6 +14,10 @@ router.post("/phone/send-code", sendPhoneCode);
 router.post("/signup", signup);
 router.post("/verify-phone", verifyPhoneCode);
 
+console.log("sendPhoneCode:", sendPhoneCode);
+console.log("verifyPhoneCode:", verifyPhoneCode);
+console.log("signup:", signup);
+
 router.post("/google", async (req, res) => {
   try {
     const { token } = req.body;
