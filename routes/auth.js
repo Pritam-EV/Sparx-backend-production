@@ -92,7 +92,8 @@ router.get("/me", authMiddleware, async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
-router.post("/verify-phone", authController.verifyPhoneCode);
+router.post("/verify-phone", verifyPhoneCode);
+
 
 // Update profile
 // Update profile
