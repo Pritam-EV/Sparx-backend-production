@@ -16,46 +16,14 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 // ✅ Google Auth Client
 const client = new OAuth2Client(GOOGLE_CLIENT_ID);
 
-exports.sendPhoneCode = async (req, res) => {
-  try {
-    const { mobile } = req.body;
-    if (!mobile) return res.status(400).json({ message: "Mobile is required" });
-
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expires = new Date(Date.now() + 10 * 60 * 1000);
-
-    let user = await User.findOne({ mobile });
-    if (!user) {
-      user = new User({ mobile, phoneVerified: false });
-    }
-
-    user.phoneVerificationCode = code;
-    user.phoneVerificationExpires = expires;
-    await user.save();
-
-    await twilio.messages.create({
-      body: `Your verification code is ${code}`,
-      from: process.env.TWILIO_NUMBER, // replace YOUR_TWILIO_NUMBER with env var
-      to: mobile,
-    });
-
-    return res.json({ message: "Code sent" });
-  } catch (error) {
-    console.error("sendPhoneCode Error:", error);
-    return res.status(500).json({ message: "Failed to send code" });
-  }
-};
-
 exports.verifyPhoneCode = async (req, res) => {
   try {
     const { mobile, code } = req.body;
-
-    // Validate input presence
     if (!mobile || !code) {
       return res.status(400).json({ message: "Mobile and code are required" });
     }
 
-    console.log("verifyPhoneCode request body:", req.body); // Debug log
+    console.log("verifyPhoneCode request body:", req.body);
 
     const user = await User.findOne({ mobile });
 
@@ -67,6 +35,8 @@ exports.verifyPhoneCode = async (req, res) => {
     ) {
       return res.status(400).json({ message: "Invalid or expired code" });
     }
+
+    // Only reach here if OTP is valid
 
     user.phoneVerified = true;
     user.phoneVerificationCode = undefined;
@@ -84,14 +54,14 @@ exports.verifyPhoneCode = async (req, res) => {
       return res.json({ token, user, isNewUser: false });
     }
 
-    // If no name/email, treat as new user
+    // For users missing name/email, treat as new user
     return res.json({ isNewUser: true, mobile });
-
   } catch (error) {
     console.error("verifyPhoneCode Error:", error);
     return res.status(500).json({ message: "Code verification failed" });
   }
 };
+
 
 
 exports.signup = async (req, res) => {
