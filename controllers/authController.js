@@ -93,33 +93,7 @@ exports.verifyPhoneCode = async (req, res) => {
   }
 };
 
-// New endpoint to check if user exists by phone number
-exports.checkUser = async (req, res) => {
-  try {
-    const { phone } = req.body;
-    // Validate input
-    if (!phone) {
-      return res.status(400).json({ message: 'Phone number is required' });
-    }
-    // Lookup user in MongoDB by phone number
-    const user = await User.findOne({ phone });
-    if (!user) {
-      // No user found: return 404
-      return res.status(404).json({ message: 'User not found' });
-    }
-    // User exists: sign a JWT token (include user ID or any payload as needed)
-    const token = jwt.sign(
-      { userId: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: '1h' }
-    );
-    // Return token and user data
-    return res.json({ token, user });
-  } catch (error) {
-    console.error('Error in checkUser:', error);
-    return res.status(500).json({ message: 'Server error' });
-  }
-};
+
 
 
 exports.signup = async (req, res) => {
