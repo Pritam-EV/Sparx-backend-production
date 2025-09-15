@@ -4,13 +4,13 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User"); // Adjust based on your project structure
 const { OAuth2Client } = require("google-auth-library");
 const authMiddleware = require("../middleware/authMiddleware");
-const { sendPhoneCode, verifyPhoneCode, signup } = require("../controllers/authController");
+const { sendPhoneCode, verifyPhoneCode, signup, authController  } = require("../controllers/authController");
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // routes/auth.js
 router.post("/phone/send-code", sendPhoneCode);
-
+router.post('/check-user', authController.checkUser);
 router.post("/signup", signup);
 router.post("/verify-phone", verifyPhoneCode);
 
