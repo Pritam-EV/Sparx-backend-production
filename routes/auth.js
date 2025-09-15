@@ -5,7 +5,7 @@ const User = require("../models/User"); // Adjust based on your project structur
 const { OAuth2Client } = require("google-auth-library");
 const authMiddleware = require("../middleware/authMiddleware");
 const { sendPhoneCode, verifyPhoneCode, signup } = require("../controllers/authController");
-
+const authMiddleware = require("../middleware/authMiddleware");
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -83,6 +83,17 @@ router.get("/test-auth", authMiddleware, (req, res) => {
   res.json({ message: "Auth Middleware Works!", userId: req.user.id });
 });
 
+router.get("/me", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.userId; // from auth middleware
+    const user = await User.findById(userId).select("-password -__v");
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: "Server error" });
+  }
+});
+router.post("/verify-phone", authController.verifyPhoneCode);
 
 // Update profile
 // Update profile
