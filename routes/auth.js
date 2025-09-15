@@ -10,9 +10,9 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // routes/auth.js
 router.post("/phone/send-code", sendPhoneCode);
-router.post("/phone/verify-code", verifyPhoneCode);
-router.post("/signup", signup);
 
+router.post("/signup", signup);
+router.post("/verify-phone", verifyPhoneCode);
 
 router.post("/google", async (req, res) => {
   try {
@@ -92,7 +92,7 @@ router.get("/me", authMiddleware, async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
-router.post("/verify-phone", verifyPhoneCode);
+
 
 
 // Update profile
