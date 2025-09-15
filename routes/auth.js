@@ -5,7 +5,6 @@ const User = require("../models/User"); // Adjust based on your project structur
 const { OAuth2Client } = require("google-auth-library");
 const authMiddleware = require("../middleware/authMiddleware");
 const { sendPhoneCode, verifyPhoneCode, signup } = require("../controllers/authController");
-const authMiddleware = require("../middleware/authMiddleware");
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
