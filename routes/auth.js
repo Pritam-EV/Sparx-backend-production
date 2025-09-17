@@ -84,53 +84,58 @@ router.get("/test-auth", authMiddleware, (req, res) => {
 });
 
 
+// GET /auth/me
 router.get("/me", async (req, res) => {
-  // 1) Extract idToken
   const authHeader = req.headers.authorization || "";
-  const idToken = authHeader.startsWith("Bearer ")
-    ? authHeader.split(" ")[1]
-    : null;
+  const idToken = authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
 
   if (!idToken) {
+    console.warn("GET /auth/me - missing Authorization header");
     return res.status(401).json({ message: "Missing auth token" });
   }
-console.log("Decoded phone from token:", phone);
-console.log("Searching DB for:", [phone, strippedPlus, last10]);
 
   try {
-    // 2) Verify Firebase ID token
+    // Verify Firebase ID token
     const decoded = await admin.auth().verifyIdToken(idToken);
-    // decoded.phone_number is typically in E.164 format, e.g. "+919876543210"
-    const phone = decoded.phone_number;
+    const phone = decoded.phone_number; // usually E.164, e.g. "+919876543210"
+    console.info("GET /auth/me - decoded phone:", phone);
+
     if (!phone) {
-      return res.status(400).json({ message: "Mobile number not verified in token" });
+      console.warn("GET /auth/me - token contains no phone_number");
+      return res.status(400).json({ message: "Token has no phone number" });
     }
 
-    // 3) Normalize / try multiple formats to match DB entries:
-    //    - E.164 canonical (phone)
-    //    - stripped leading '+'   (e.g. "919876543210")
-    //    - last 10 digits only    (e.g. "9876543210")
+    // Normalise / fallback lookup values
     const strippedPlus = phone.replace(/^\+/, ""); // "919876543210"
-    const last10 = strippedPlus.slice(-10);         // "9876543210"
+    const last10 = strippedPlus.slice(-10);        // "9876543210"
 
-    // Try to find user in multiple possible saved formats in DB
+    console.info("GET /auth/me - trying DB lookups:", { phone, strippedPlus, last10 });
+
+    // Try multiple possible formats to match DB
     let user = await User.findOne({ mobile: phone }).select("-password -__v");
     if (!user) user = await User.findOne({ mobile: strippedPlus }).select("-password -__v");
     if (!user) user = await User.findOne({ mobile: last10 }).select("-password -__v");
 
     if (!user) {
-      // Not found → 404 so frontend knows to go to signup
+      console.info("GET /auth/me - user not found for phone:", phone);
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Found → return user
+    // Success
+    console.info("GET /auth/me - user found:", { id: user._id, mobile: user.mobile });
     return res.json(user);
   } catch (err) {
-    console.error("GET /auth/me token verification error:", err);
-    // If token verification failed, return 401 (not 404)
-    return res.status(401).json({ message: "Invalid or expired auth token" });
+    // Distinguish token verification errors from DB errors
+    console.error("GET /auth/me - error verifying token or DB lookup:", err);
+    // If it's a token verification error, return 401:
+    if (err && (/Argument "token" or "Error" in token verification|invalid|expired/i.test(err.message) || err.code === 'auth/id-token-expired' || err.code === 'auth/invalid-id-token')) {
+      return res.status(401).json({ message: "Invalid/expired auth token", details: err.message });
+    }
+    // Otherwise generic 500
+    return res.status(500).json({ message: "Server error", details: err.message });
   }
 });
+
 
 
 
