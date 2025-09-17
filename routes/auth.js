@@ -85,33 +85,54 @@ router.get("/test-auth", authMiddleware, (req, res) => {
 
 
 router.get("/me", async (req, res) => {
-  // 1) Extract ID token from Authorization header
+  // 1) Extract idToken
   const authHeader = req.headers.authorization || "";
-  const idToken = authHeader.startsWith("Bearer ") 
-                  ? authHeader.split(" ")[1] 
-                  : null;
+  const idToken = authHeader.startsWith("Bearer ")
+    ? authHeader.split(" ")[1]
+    : null;
+
   if (!idToken) {
     return res.status(401).json({ message: "Missing auth token" });
   }
+console.log("Decoded phone from token:", phone);
+console.log("Searching DB for:", [phone, strippedPlus, last10]);
+
   try {
-    // 2) Verify the Firebase ID token
-    const decoded = await admin.auth().verifyIdToken(idToken);  // Admin SDK verifies token:contentReference[oaicite:3]{index=3}
+    // 2) Verify Firebase ID token
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    // decoded.phone_number is typically in E.164 format, e.g. "+919876543210"
     const phone = decoded.phone_number;
     if (!phone) {
-      return res.status(400).json({ message: "Mobile number not verified" });
+      return res.status(400).json({ message: "Mobile number not verified in token" });
     }
-    // 3) Look up user by mobile number in our MongoDB
-    const user = await User.findOne({ mobile: phone }).select("-password -__v");
+
+    // 3) Normalize / try multiple formats to match DB entries:
+    //    - E.164 canonical (phone)
+    //    - stripped leading '+'   (e.g. "919876543210")
+    //    - last 10 digits only    (e.g. "9876543210")
+    const strippedPlus = phone.replace(/^\+/, ""); // "919876543210"
+    const last10 = strippedPlus.slice(-10);         // "9876543210"
+
+    // Try to find user in multiple possible saved formats in DB
+    let user = await User.findOne({ mobile: phone }).select("-password -__v");
+    if (!user) user = await User.findOne({ mobile: strippedPlus }).select("-password -__v");
+    if (!user) user = await User.findOne({ mobile: last10 }).select("-password -__v");
+
     if (!user) {
+      // Not found → 404 so frontend knows to go to signup
       return res.status(404).json({ message: "User not found" });
     }
-    // 4) Return existing user
-    res.json(user);
+
+    // Found → return user
+    return res.json(user);
   } catch (err) {
-    console.error("Auth token error:", err);
+    console.error("GET /auth/me token verification error:", err);
+    // If token verification failed, return 401 (not 404)
     return res.status(401).json({ message: "Invalid or expired auth token" });
   }
 });
+
+
 
 // Update profile
 // Update profile
