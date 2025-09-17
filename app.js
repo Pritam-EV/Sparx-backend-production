@@ -35,6 +35,14 @@ const app = express();
 const OFFLINE_THRESHOLD_MS = 30 * 1000; // 2 minutes
 
 const allowedOrigins = [process.env.CLIENT_URL, 'https://ev-charging-a5c53.web.app'];
+
+
+if (!process.env.JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET is not defined. Set JWT_SECRET in environment variables and restart the server.');
+  // Optionally exit so you don't run in a broken state:
+  // process.exit(1);
+}
+
 // ─── MIDDLEWARE ────────────────────────────────────────────────────────────────
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
