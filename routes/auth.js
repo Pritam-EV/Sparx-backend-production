@@ -5,7 +5,7 @@ const User = require("../models/User"); // Adjust based on your project structur
 const { OAuth2Client } = require("google-auth-library");
 const authMiddleware = require("../middleware/authMiddleware");
 const { sendPhoneCode, verifyPhoneCode, signup } = require("../controllers/authController");
-
+const admin = require("../firebaseAdmin");
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -83,14 +83,33 @@ router.get("/test-auth", authMiddleware, (req, res) => {
   res.json({ message: "Auth Middleware Works!", userId: req.user.id });
 });
 
-router.get("/me", authMiddleware, async (req, res) => {
+
+router.get("/me", async (req, res) => {
+  // 1) Extract ID token from Authorization header
+  const authHeader = req.headers.authorization || "";
+  const idToken = authHeader.startsWith("Bearer ") 
+                  ? authHeader.split(" ")[1] 
+                  : null;
+  if (!idToken) {
+    return res.status(401).json({ message: "Missing auth token" });
+  }
   try {
-    const userId = req.user.userId; // from auth middleware
-    const user = await User.findById(userId).select("-password -__v");
-    if (!user) return res.status(404).json({ message: "User not found" });
+    // 2) Verify the Firebase ID token
+    const decoded = await admin.auth().verifyIdToken(idToken);  // Admin SDK verifies token:contentReference[oaicite:3]{index=3}
+    const phone = decoded.phone_number;
+    if (!phone) {
+      return res.status(400).json({ message: "Mobile number not verified" });
+    }
+    // 3) Look up user by mobile number in our MongoDB
+    const user = await User.findOne({ mobile: phone }).select("-password -__v");
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    // 4) Return existing user
     res.json(user);
   } catch (err) {
-    res.status(500).json({ message: "Server error" });
+    console.error("Auth token error:", err);
+    return res.status(401).json({ message: "Invalid or expired auth token" });
   }
 });
 
