@@ -109,11 +109,11 @@ router.get('/me', async (req, res) => {
     }
 
     // ====== NEW: issue app JWT for your server-side auth middleware ======
-    const token = jwt.sign(
-      { userId: user._id.toString(), role: user.role || 'customer' },
-      JWT_SECRET,
-      { expiresIn: '30d' }
-    );
+const token = jwt.sign(
+  { userId: user._id.toString(), role: user.role || 'customer' },
+  process.env.JWT_SECRET,
+  { expiresIn: '30d' }
+);
 
     // return both user and server JWT
     return res.json({ user, token });
