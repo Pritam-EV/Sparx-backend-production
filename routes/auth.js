@@ -85,56 +85,44 @@ router.get("/test-auth", authMiddleware, (req, res) => {
 
 
 // GET /auth/me
-router.get("/me", async (req, res) => {
-  const authHeader = req.headers.authorization || "";
-  const idToken = authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
-
-  if (!idToken) {
-    console.warn("GET /auth/me - missing Authorization header");
-    return res.status(401).json({ message: "Missing auth token" });
-  }
+// GET /auth/me
+router.get('/me', async (req, res) => {
+  const authHeader = req.headers.authorization || '';
+  const idToken = authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+  if (!idToken) return res.status(401).json({ message: 'Missing auth token' });
 
   try {
     // Verify Firebase ID token
     const decoded = await admin.auth().verifyIdToken(idToken);
-    const phone = decoded.phone_number; // usually E.164, e.g. "+919876543210"
-    console.info("GET /auth/me - decoded phone:", phone);
+    const phone = decoded.phone_number;
+    if (!phone) return res.status(400).json({ message: 'Token has no phone number' });
 
-    if (!phone) {
-      console.warn("GET /auth/me - token contains no phone_number");
-      return res.status(400).json({ message: "Token has no phone number" });
-    }
+    const strippedPlus = phone.replace(/^\+/, '');
+    const last10 = strippedPlus.slice(-10);
 
-    // Normalise / fallback lookup values
-    const strippedPlus = phone.replace(/^\+/, ""); // "919876543210"
-    const last10 = strippedPlus.slice(-10);        // "9876543210"
-
-    console.info("GET /auth/me - trying DB lookups:", { phone, strippedPlus, last10 });
-
-    // Try multiple possible formats to match DB
-    let user = await User.findOne({ mobile: phone }).select("-password -__v");
-    if (!user) user = await User.findOne({ mobile: strippedPlus }).select("-password -__v");
-    if (!user) user = await User.findOne({ mobile: last10 }).select("-password -__v");
+    let user = await User.findOne({ mobile: phone }).select('-password -__v');
+    if (!user) user = await User.findOne({ mobile: strippedPlus }).select('-password -__v');
+    if (!user) user = await User.findOne({ mobile: last10 }).select('-password -__v');
 
     if (!user) {
-      console.info("GET /auth/me - user not found for phone:", phone);
-      return res.status(404).json({ message: "User not found" });
+      return res.status(404).json({ message: 'User not found' });
     }
 
-    // Success
-    console.info("GET /auth/me - user found:", { id: user._id, mobile: user.mobile });
-    return res.json(user);
+    // ====== NEW: issue app JWT for your server-side auth middleware ======
+    const token = jwt.sign(
+      { userId: user._id.toString(), role: user.role || 'customer' },
+      JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+
+    // return both user and server JWT
+    return res.json({ user, token });
   } catch (err) {
-    // Distinguish token verification errors from DB errors
-    console.error("GET /auth/me - error verifying token or DB lookup:", err);
-    // If it's a token verification error, return 401:
-    if (err && (/Argument "token" or "Error" in token verification|invalid|expired/i.test(err.message) || err.code === 'auth/id-token-expired' || err.code === 'auth/invalid-id-token')) {
-      return res.status(401).json({ message: "Invalid/expired auth token", details: err.message });
-    }
-    // Otherwise generic 500
-    return res.status(500).json({ message: "Server error", details: err.message });
+    console.error('GET /auth/me error:', err && err.message ? err.message : err);
+    return res.status(401).json({ message: 'Invalid/expired auth token', details: err?.message });
   }
 });
+
 
 
 
