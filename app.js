@@ -80,8 +80,10 @@ mongoose
 
 // ─── ROUTES ────────────────────────────────────────────────────────────────────
 // Authentication
-app.use("/api/auth", authRoutes);
+app.get('/ping', (req, res) => res.send('pong'));
 
+app.use("/api/auth", authRoutes);
+app.use('/auth', authRoutes);
 // Devices (location, charger type, rate)
 app.use("/api/devices", deviceRoutes);
 
