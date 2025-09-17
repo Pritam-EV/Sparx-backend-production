@@ -3,7 +3,8 @@ const mongoose = require("mongoose");
 
 const userSchema = new mongoose.Schema({
   name: String,
-  email: String,
+  vehicleNumber: { type: String, trim: true, index: true, sparse: true },
+  email: { type: String, trim: true, lowercase: true, index: true, sparse: true },
   mobile: {
     type: String,
     unique: true,
@@ -22,6 +23,7 @@ const userSchema = new mongoose.Schema({
   phoneVerificationCode: String,     // store temporary OTP
   phoneVerificationExpires: Date,    // expiry time for OTP
   // Remove googleId field if unused
-});
+}, { timestamps: true }
+);
 
 module.exports = mongoose.model("User", userSchema);

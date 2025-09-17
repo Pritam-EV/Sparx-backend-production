@@ -14,7 +14,6 @@ router.post("/phone/send-code", sendPhoneCode);
 router.post("/phone/verify-code", verifyPhoneCode);
 router.post("/signup", signup);
 
-
 router.post("/google", async (req, res) => {
   try {
     const { token } = req.body;
@@ -129,27 +128,47 @@ const token = jwt.sign(
 
 // Update profile
 // Update profile
+// Update profile
 router.put("/updateProfile", authMiddleware, async (req, res) => {
-  const { name, mobile, vehicleType } = req.body;
-  const userId = req.user.userId; // ✅ Match this with how you set it in authMiddleware
+  const { name, email, vehicleType, vehicleNumber } = req.body;
+  const userId = req.user.userId; // from authMiddleware
 
   try {
-    const updatedUser = await User.findByIdAndUpdate(
-      userId,
-      { name, mobile, vehicleType },
-      { new: true }
-    );
+    // 1) basic validation
+    if (!name && !email && !vehicleType && typeof vehicleNumber === "undefined") {
+      return res.status(400).json({ message: "Nothing to update" });
+    }
+
+    // 2) If email provided, ensure uniqueness
+    if (email) {
+      const emailNormalized = email.toString().trim().toLowerCase();
+      const existing = await User.findOne({ email: emailNormalized });
+      if (existing && existing._id.toString() !== userId) {
+        return res.status(400).json({ message: "Email already exists" });
+      }
+    }
+
+    // 3) Build the update object — intentionally DO NOT change mobile here
+    const update = {};
+    if (typeof name !== "undefined") update.name = name;
+    if (typeof email !== "undefined") update.email = email.toString().trim().toLowerCase();
+    if (typeof vehicleType !== "undefined") update.vehicleType = vehicleType;
+    if (typeof vehicleNumber !== "undefined") update.vehicleNumber = vehicleNumber;
+
+    // 4) Perform update and return user (omit sensitive fields)
+    const updatedUser = await User.findByIdAndUpdate(userId, update, { new: true }).select("-password -__v");
 
     if (!updatedUser) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    res.json({ user: updatedUser });
+    return res.json({ user: updatedUser });
   } catch (err) {
     console.error("Profile update error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 });
+
 
 
 
