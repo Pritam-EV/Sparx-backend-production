@@ -21,9 +21,19 @@ const {
 
 // Example: Only admins can see all sessions in the system
 // routes/sessions.js
-router.get('/all', authMiddleware, /* authorizeRoles('admin'), */ async (req, res) => {
+// GET /api/sessions/all?status=&deviceId=&search=&from=&to=&page=1&limit=100
+router.get("/all", authMiddleware, /* authorizeRoles('admin'), */ async (req, res) => {
   try {
-    const { status, deviceId, from, to, search } = req.query;
+    const {
+      status,
+      deviceId,
+      search,
+      from,
+      to,
+      page = 1,
+      limit = 100,
+    } = req.query;
+
     const q = {};
     if (status) q.status = status;
     if (deviceId) q.deviceId = deviceId;
@@ -34,22 +44,51 @@ router.get('/all', authMiddleware, /* authorizeRoles('admin'), */ async (req, re
     }
     if (search) {
       q.$or = [
-        { sessionId: new RegExp(search, 'i') },
-        { deviceId: new RegExp(search, 'i') },
-        { transactionId: new RegExp(search, 'i') },
+        { sessionId: new RegExp(search, "i") },
+        { deviceId: new RegExp(search, "i") },
+        { transactionId: new RegExp(search, "i") },
       ];
     }
 
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const lim = Math.max(1, Math.min(500, parseInt(limit, 10) || 100));
+    const skip = (pageNum - 1) * lim;
+
+    // Pull latest telemetry entry only to surface voltage/current
     const sessions = await Session.find(q)
-      .select('sessionId deviceId transactionId userId startTime endTime status energyConsumed amountPaid amountUsed lastUpdate createdAt updatedAt')
-      .populate('userId', 'name email mobile')
+      .select(
+        "sessionId deviceId transactionId userId startTime endTime status " +
+        "energyConsumed energySelected amountPaid amountUsed discountApplied " +
+        "endTrigger lastUpdate updatedAt telemetry"
+      )
+      .populate("userId", "name email mobile")
       .sort({ startTime: -1 })
+      .skip(skip)
+      .limit(lim)
       .lean();
 
-    res.json({ sessions });
+    const shaped = sessions.map((s) => {
+      const tele = Array.isArray(s.telemetry) && s.telemetry.length
+        ? s.telemetry[s.telemetry.length - 1]
+        : null;
+      return {
+        ...s,
+        lastVoltage: tele?.voltage ?? null,
+        lastCurrent: tele?.current ?? null,
+        // Normalize optional keys that may vary by name
+        endTrigger: s.endTrigger ?? s.end_reason ?? null,
+        energySelected: s.energySelected ?? s.targetEnergy ?? s.targetEnergy_kWh ?? null,
+        discountApplied: s.discountApplied ?? s.discountAmount ?? 0,
+        lastUpdatedAt: s.lastUpdate ?? s.updatedAt ?? s.endTime ?? s.startTime ?? null,
+        telemetry: undefined, // drop array from payload
+      };
+    });
+
+    const total = await Session.countDocuments(q);
+    res.json({ total, page: pageNum, limit: lim, sessions: shaped });
   } catch (error) {
-    console.error('Error fetching sessions:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error("Error fetching sessions:", error);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
