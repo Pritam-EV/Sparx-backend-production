@@ -53,6 +53,49 @@ router.get("/check-device/:device_id", async (req, res) => {
   }
 });
 
+router.get('/admin',
+  authMiddleware,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      const { area, city, state, status } = req.query;
+      const query = {};
+      if (area) query.area = area;
+      if (city) query.city = city;
+      if (state) query.state = state;
+      if (status) query.status = status;
+
+      const projection = {
+        _id: 0,
+        device_id: 1,
+        location: 1,
+        status: 1,
+        current_session_id: 1,
+        charger_type: 1,
+        lat: 1,
+        lng: 1,
+        rate: 1,
+        area: 1,
+        city: 1,
+        state: 1,
+        totalenergy: 1,
+        lastSeen: 1,
+        relayOn: 1,
+        updatedAt: 1,
+      };
+
+      const devices = await Device.find(query, projection)
+        .sort({ updatedAt: -1 })
+        .lean();
+
+      res.json({ devices });
+    } catch (err) {
+      console.error('Device admin list error:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
 // Admin/owner only: Can view details (example, adjust logic as needed)
 router.get('/:deviceId', authMiddleware, authorizeRoles('admin', 'owner', 'customer'), async (req, res) => {
   try {
