@@ -20,14 +20,39 @@ const {
 
 
 // Example: Only admins can see all sessions in the system
-router.get('/all', authMiddleware, async (req, res) => {
+// routes/sessions.js
+router.get('/all', authMiddleware, /* authorizeRoles('admin'), */ async (req, res) => {
   try {
-    const sessions = await Session.find().sort({ startTime: -1 });
-    res.json(sessions);
+    const { status, deviceId, from, to, search } = req.query;
+    const q = {};
+    if (status) q.status = status;
+    if (deviceId) q.deviceId = deviceId;
+    if (from || to) {
+      q.startTime = {};
+      if (from) q.startTime.$gte = new Date(from);
+      if (to) q.startTime.$lte = new Date(to);
+    }
+    if (search) {
+      q.$or = [
+        { sessionId: new RegExp(search, 'i') },
+        { deviceId: new RegExp(search, 'i') },
+        { transactionId: new RegExp(search, 'i') },
+      ];
+    }
+
+    const sessions = await Session.find(q)
+      .select('sessionId deviceId transactionId userId startTime endTime status energyConsumed amountPaid amountUsed lastUpdate createdAt updatedAt')
+      .populate('userId', 'name email mobile')
+      .sort({ startTime: -1 })
+      .lean();
+
+    res.json({ sessions });
   } catch (error) {
-    res.status(500).json({ message: "Server error" });
+    console.error('Error fetching sessions:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
+
 
 
 // 1. Fetch session by transaction ID (for SessionStart page)
