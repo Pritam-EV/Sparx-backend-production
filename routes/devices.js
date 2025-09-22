@@ -4,8 +4,20 @@ const Device = require('../models/device'); // Adjust path as needed
 const authMiddleware = require('../middleware/authMiddleware');
 const authorizeRoles = require('../middleware/roleMiddleware');
 
+// Public route: Get all devices (any authenticated user)
+router.get('/', authMiddleware, async (req, res) => {
+  try {
+    const q = {};
+    if (req.user?.role === 'owner') q.ownerId = req.user.userId;
+    const devices = await Device.find(q, 'device_id location status charger_type lat lng rate current_session_id area city state totalenergy relayOn lastSeen updatedAt').lean();
+    return res.json(devices);
+  } catch (error) {
+    console.error('Error fetching devices:', error);
+    res.status(500).json({ message: 'Error fetching devices', error });
+  }
+});
 
-  router.get('/public/:deviceId', authMiddleware, authorizeRoles('customer'), async (req, res) => {
+  router.get('/public/:deviceId', authMiddleware, authorizeRoles('admin', 'owner', 'customer'), async (req, res) => {
   try {
     const { deviceId } = req.params;
     const device = await Device.findOne({ device_id: deviceId });
@@ -121,18 +133,7 @@ router.get('/:deviceId', authMiddleware, authorizeRoles('admin', 'owner', 'custo
     }
   });
 
-// Public route: Get all devices (any authenticated user)
-router.get('/', authMiddleware, async (req, res) => {
-  try {
-    const q = {};
-    if (req.user?.role === 'owner') q.ownerId = req.user.userId;
-    const devices = await Device.find(q, 'device_id location status charger_type lat lng rate current_session_id area city state totalenergy relayOn lastSeen updatedAt').lean();
-    return res.json(devices);
-  } catch (error) {
-    console.error('Error fetching devices:', error);
-    res.status(500).json({ message: 'Error fetching devices', error });
-  }
-});
+
 
 // Create new device
 router.post('/', authMiddleware, async (req, res) => {
