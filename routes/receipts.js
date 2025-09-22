@@ -20,6 +20,7 @@ router.get('/all', auth, async (req, res) => {
      const ids = owned.map(d => d.device_id);
      match.deviceId = { $in: ids.length ? ids : ['__none__'] };
    }
+   const { deviceIds } = req.query;
     if (deviceIds) {
       const list = Array.isArray(deviceIds) ? deviceIds : String(deviceIds).split(",").map(s => s.trim()).filter(Boolean);
       if (list.length) match.deviceId = match.deviceId ? { $in: list.filter(x => match.deviceId.$in?.includes(x)) } : { $in: list };
@@ -87,7 +88,7 @@ router.get('/all', auth, async (req, res) => {
         }
       }
     ];
-   // const { deviceIds } = req.query;
+  
 
     const result = await Receipt.aggregate(pipeline);
     const facet = result?.[0] || {};
