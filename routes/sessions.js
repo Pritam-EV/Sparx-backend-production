@@ -6,7 +6,7 @@ const mongoose = require("mongoose");
 const Session = require("../models/session");
 const { body } = require('express-validator');
 const Coupon = require('../models/Coupon');
-
+const Device = require('../models/device');
 const {
   startSession,
   endSession,
@@ -35,6 +35,11 @@ router.get("/all", authMiddleware, /* authorizeRoles('admin'), */ async (req, re
     } = req.query;
 
     const q = {};
+    if (req.user?.role === 'owner') {
+    const owned = await Device.find({ ownerId: req.user.userId }, 'device_id');
+    const ids = owned.map(d => d.device_id);
+    q.deviceId = { $in: ids.length ? ids : ['__none__'] };
+    }
     if (status) q.status = status;
     if (deviceId) q.deviceId = deviceId;
     if (from || to) {

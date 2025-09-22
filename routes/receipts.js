@@ -3,6 +3,7 @@ const router = express.Router();
 const auth = require('../middleware/authMiddleware');
 const authorizeRoles = require('../middleware/roleMiddleware');
 const Receipt = require('../models/Receipt');
+const Device = require('../models/device');
 
 // GET /api/receipts/all?search=&deviceId=&userId=&from=&to=&page=1&limit=100
 router.get('/all', auth, async (req, res) => {
@@ -14,6 +15,12 @@ router.get('/all', auth, async (req, res) => {
     const skip = (pageNum - 1) * lim;
 
     const match = {};
+    if (req.user?.role === 'owner') {
+    const owned = await Device.find({ ownerId: req.user.userId }, 'device_id');
+    const ids = owned.map(d => d.device_id);
+    match.deviceId = { $in: ids.length ? ids : ['__none__'] };
+    }
+    pipeline.unshift({ $match: match });
     if (deviceId) match.deviceId = deviceId;
     if (userId) match.userId = userId;
     if (from || to) {
