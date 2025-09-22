@@ -21,7 +21,7 @@ const deviceRoutes  = require("./routes/devices");
 const sessionRoutes = require("./routes/sessions");
 const userRoutes    = require('./routes/users'); // Adjust path as needed
 const analyticsRoutes = require('./routes/analytics');
-
+const receiptsRoutes = require('./routes/receipts'); // add
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
@@ -101,7 +101,7 @@ app.use("/api/sessions", sessionRoutes);
 app.use('/api/users', userRoutes);
 
 app.use('/api/analytics', analyticsRoutes);
-
+app.use('/api/receipts', receiptsRoutes);  
 // Legacy GET endpoint (optional; can remove if you use `/api/sessions/by-transaction`)
 app.get("/api/getDevice", async (req, res) => {
   try {
