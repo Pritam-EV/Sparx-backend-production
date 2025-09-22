@@ -76,7 +76,11 @@ router.get('/all', auth, async (req, res) => {
         }
       }
     ];
-
+    const { deviceIds } = req.query;
+    if (deviceIds) {
+      const list = Array.isArray(deviceIds) ? deviceIds : String(deviceIds).split(",").map(s => s.trim()).filter(Boolean);
+      if (list.length) match.deviceId = { $in: list };
+    }
     const result = await Receipt.aggregate(pipeline);
     const facet = result?.[0] || {};
     const list = facet.list || [];
@@ -85,7 +89,7 @@ router.get('/all', auth, async (req, res) => {
       totalReceipts: 0,
       totalAmountPaid: 0,
       totalAmountUtilized: 0,
-      totalAmountSelected: 0,
+      totalAmountSelected: { $sum: { $ifNull: ["$amountSelected", 0] } },
       totalDiscountApplied: 0,
       totalRefunds: 0,
       totalEnergySelected: 0,
