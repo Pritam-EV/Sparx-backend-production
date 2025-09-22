@@ -122,10 +122,11 @@ router.get('/:deviceId', authMiddleware, authorizeRoles('admin', 'owner', 'custo
   });
 
 // Public route: Get all devices (any authenticated user)
-router.get('/', async (req, res) => {
+router.get('/', authMiddleware, async (req, res) => {
   try {
-    const devices = await Device.find({},'device_id location status charger_type lat lng rate current_session_id area city state totalenergy relayOn lastSeen updatedAt'
-    ).lean();
+    const q = {};
+    if (req.user?.role === 'owner') q.ownerId = req.user.userId;
+    const devices = await Device.find(q, 'device_id location status charger_type lat lng rate current_session_id area city state totalenergy relayOn lastSeen updatedAt').lean();
     return res.json(devices);
   } catch (error) {
     console.error('Error fetching devices:', error);
