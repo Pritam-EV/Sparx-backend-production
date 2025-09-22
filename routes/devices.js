@@ -5,11 +5,12 @@ const authMiddleware = require('../middleware/authMiddleware');
 const authorizeRoles = require('../middleware/roleMiddleware');
 
 // Public route: Get all devices (any authenticated user)
-router.get('/', authMiddleware, async (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const q = {};
-    if (req.user?.role === 'owner') q.ownerId = req.user.userId;
-    const devices = await Device.find(q, 'device_id location status charger_type lat lng rate current_session_id area city state totalenergy relayOn lastSeen updatedAt').lean();
+    const devices = await Device.find(
+      {},
+      'device_id location status charger_type lat lng rate area city state lastSeen relayOn'
+    ).lean();
     return res.json(devices);
   } catch (error) {
     console.error('Error fetching devices:', error);
@@ -17,28 +18,19 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-  router.get('/public/:deviceId', authMiddleware, authorizeRoles('admin', 'owner', 'customer'), async (req, res) => {
+// 2) Public single-device view (no auth)
+router.get('/public/:deviceId', async (req, res) => {
   try {
     const { deviceId } = req.params;
-    const device = await Device.findOne({ device_id: deviceId });
-
-    if (!device) {
-      return res.status(404).json({ error: "Device not found" });
-    }
-
-    // Optionally limit fields sent to customer
-    const limitedDevice = {
-      device_id: device.device_id,
-      location: device.location,
-      charger_type: device.charger_type,
-      rate: device.rate,
-      status: device.status,
-    };
-
-    res.json(limitedDevice);
+    const device = await Device.findOne(
+      { device_id: deviceId },
+      'device_id location status charger_type lat lng rate area city state lastSeen relayOn'
+    ).lean();
+    if (!device) return res.status(404).json({ error: 'Device not found' });
+    res.json(device);
   } catch (error) {
-    console.error("Error fetching device:", error);
-    res.status(500).json({ error: "Internal server error" });
+    console.error('Error fetching device:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -62,6 +54,22 @@ router.get("/check-device/:device_id", async (req, res) => {
   } catch (error) {
     console.error("Error checking device:", error);
     res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// 3) Owner’s devices (auth, scoped) for dashboards
+router.get('/mine', authMiddleware, async (req, res) => {
+  try {
+    const q = {};
+    if (req.user?.role === 'owner') q.ownerId = req.user.userId;
+    const devices = await Device.find(
+      q,
+      'device_id location status charger_type lat lng rate current_session_id area city state totalenergy relayOn lastSeen updatedAt'
+    ).lean();
+    return res.json(devices);
+  } catch (error) {
+    console.error('Error fetching devices:', error);
+    res.status(500).json({ message: 'Error fetching devices', error });
   }
 });
 
