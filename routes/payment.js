@@ -3,6 +3,7 @@ const axios = require("axios");
 const { v4: uuidv4 } = require("uuid");
 const crypto = require("crypto");
 const router = express.Router();
+const Payment = require("../models/Payment");
 
 const CASHFREE_BASE_URL =
   process.env.CASHFREE_ENV === "PROD"
@@ -112,23 +113,44 @@ router.post(
 router.get("/verify/:orderId", async (req, res) => {
   try {
     const { orderId } = req.params;
-
-    const payment = await Payment.findOne({ orderId });
-
-    if (!payment || payment.status !== "PAID") {
+  console.log("🔍 Verifying payment for:", orderId);
+      if (!orderId) {
       return res.status(400).json({
         success: false,
-        message: "Payment not verified",
+        message: "Order ID missing",
+      });
+    }
+    const payment = await Payment.findOne({ orderId });
+
+    if (!payment) {
+      console.warn("⚠️ Payment not found for:", orderId);
+      return res.status(404).json({
+        success: false,
+        message: "Payment not found",
       });
     }
 
-    res.json({
+        if (payment.status !== "PAID") {
+      console.warn("⚠️ Payment not completed:", payment.status);
+      return res.status(400).json({
+        success: false,
+        message: "Payment not completed yet",
+      });
+    }
+
+    console.log("✅ Payment verified:", orderId);
+
+
+    return res.json({
       success: true,
       payment,
     });
   } catch (err) {
-    console.error("Verify error:", err);
-    res.status(500).json({ success: false });
+    console.error("❌ Verify route crashed:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
   }
 });
 
