@@ -4,7 +4,6 @@ const express   = require("express");
 const mongoose  = require("mongoose");
 const cors      = require("cors");
 const dotenv    = require("dotenv");
-const Razorpay = require("razorpay");
 const crypto = require('crypto');
 const couponsRouter = require('./routes/coupons');
 const Device = require('./models/device');
@@ -22,10 +21,7 @@ const sessionRoutes = require("./routes/sessions");
 const userRoutes    = require('./routes/users'); // Adjust path as needed
 const analyticsRoutes = require('./routes/analytics');
 const receiptsRoutes = require('./routes/receipts'); // add
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+
 
 // MQTT Subscriber (if you still need it)
 const startMqttSubscriber = require("./mqttSubscriber");
@@ -123,22 +119,29 @@ app.get("/api/getDevice", async (req, res) => {
 app.use("/api/payment", require("./routes/payment"));
 app.use('/api/receipts', require('./routes/receipts'));
 
-app.post("/api/payment/orders", async (req, res) => {
-  const { amount } = req.body;
+router.post("/webhook", express.json(), (req, res) => {
+  const signature = req.headers["x-webhook-signature"];
+  const rawBody = JSON.stringify(req.body);
 
-  try {
-    const order = await razorpay.orders.create({
-      amount: amount * 100, // amount in paise
-      currency: "INR",
-      receipt: `receipt_order_${Math.floor(Math.random() * 10000)}`,
-    });
+  const expectedSignature = crypto
+    .createHmac("sha256", process.env.CASHFREE_SECRET_KEY)
+    .update(rawBody)
+    .digest("base64");
 
-    res.status(200).json({ success: true, order });
-  } catch (error) {
-    console.error("Razorpay order creation failed", error);
-    res.status(500).json({ success: false, error: "Unable to create order" });
+  if (signature !== expectedSignature) {
+    return res.status(401).send("Invalid signature");
   }
+
+  const event = req.body;
+
+  if (event.type === "PAYMENT_SUCCESS") {
+    console.log("✅ Payment success:", event.data.order.order_id);
+    // update wallet, session, receipt
+  }
+
+  res.status(200).send("OK");
 });
+
 
 setInterval(async () => {
   console.log("🔍 Running offline sweep…");

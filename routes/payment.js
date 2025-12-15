@@ -1,27 +1,61 @@
 const express = require("express");
-const Razorpay = require("razorpay");
+const axios = require("axios");
+const { v4: uuidv4 } = require("uuid");
+
 const router = express.Router();
 
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET
-});
+const CASHFREE_BASE_URL =
+  process.env.CASHFREE_ENV === "PROD"
+    ? "https://api.cashfree.com"
+    : "https://sandbox.cashfree.com";
 
 router.post("/orders", async (req, res) => {
-  const { amount } = req.body;
-
   try {
-    const order = await razorpay.orders.create({
-      amount: amount * 100,
-      currency: "INR",
-      receipt: `rcpt_${Math.floor(Math.random() * 100000)}`,
-      payment_capture: 1
-    });
+    const { amount, customer } = req.body;
 
-    res.json({ success: true, order });
-  } catch (err) {
-    console.error("Razorpay error:", err);
-    res.status(500).json({ success: false, error: "Razorpay order creation failed" });
+    if (!amount) {
+      return res.status(400).json({ success: false, message: "Amount is required" });
+    }
+
+    const orderId = `order_${uuidv4()}`;
+
+    const payload = {
+      order_id: orderId,
+      order_amount: Number(amount),
+      order_currency: "INR",
+      customer_details: {
+        customer_id: customer?.id || "guest_user",
+        customer_email: customer?.email || "guest@example.com",
+        customer_phone: customer?.phone || "9999999999",
+      },
+      order_meta: {
+        return_url: `${process.env.CLIENT_URL}/payment-success?order_id={order_id}`,
+      },
+    };
+
+    const response = await axios.post(
+      `${CASHFREE_BASE_URL}/pg/orders`,
+      payload,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "x-client-id": process.env.CASHFREE_APP_ID,
+          "x-client-secret": process.env.CASHFREE_SECRET_KEY,
+          "x-api-version": "2023-08-01",
+        },
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      order: response.data, // contains order_token
+    });
+  } catch (error) {
+    console.error("Cashfree order creation failed:", error?.response?.data || error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Cashfree order creation failed",
+    });
   }
 });
 
