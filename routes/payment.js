@@ -72,7 +72,7 @@ router.post(
 
       // 🔐 Verify signature
       const expectedSignature = crypto
-        .createHmac("sha256", process.env.CASHFREE_SECRET_KEY)
+        .createHmac("sha256", process.env.CASHFREE_WEBHOOK_SECRET)
         .update(rawBody)
         .digest("base64");
 
