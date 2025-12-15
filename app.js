@@ -119,28 +119,7 @@ app.get("/api/getDevice", async (req, res) => {
 app.use("/api/payment", require("./routes/payment"));
 app.use('/api/receipts', require('./routes/receipts'));
 
-router.post("/webhook", express.json(), (req, res) => {
-  const signature = req.headers["x-webhook-signature"];
-  const rawBody = JSON.stringify(req.body);
 
-  const expectedSignature = crypto
-    .createHmac("sha256", process.env.CASHFREE_SECRET_KEY)
-    .update(rawBody)
-    .digest("base64");
-
-  if (signature !== expectedSignature) {
-    return res.status(401).send("Invalid signature");
-  }
-
-  const event = req.body;
-
-  if (event.type === "PAYMENT_SUCCESS") {
-    console.log("✅ Payment success:", event.data.order.order_id);
-    // update wallet, session, receipt
-  }
-
-  res.status(200).send("OK");
-});
 
 
 setInterval(async () => {
