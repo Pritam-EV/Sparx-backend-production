@@ -153,14 +153,16 @@ if (!transactionId) {
 
       const topic = `viz/${deviceId}/sessionCommand`;
 
+      // Line 120: CORRECT PASSCASE PAYLOAD
       const payload = {
         command: "start",
-        sessionId,                // normalized lower-case; firmware should read this
-        userId,                   // or UserId if you prefer, just be consistent
-        transactionId,
-        selectedEnergy: parseFloat(energySelected),
-        amountPaid: parseFloat(amountPaid),
+        SessionId: sessionId,           // ✅ Firmware expects PascalCase
+        UserId: userId,                 // ✅ Firmware expects PascalCase  
+        TransactionId: transactionId,
+        SelectedEnergy: parseFloat(energySelected),
+        AmountPaid: parseFloat(amountPaid),
       };
+
 
     console.log("📡 Publishing START to device:", topic, payload);
     // log the intent
@@ -414,7 +416,12 @@ const endSession = async (req, res) => {
 
     // Publish stop command
 const topic = `viz/${deviceId || session.deviceId}/sessionCommand`;
-const payload = { command: "stop", sessionId, endTrigger };
+const payload = { 
+  command: "stop", 
+  SessionId: sessionId,          // ✅ PascalCase
+  endTrigger 
+};
+
 console.log("📡 Publishing STOP to device:", topic, payload);
 await logCommand(session._id, {
   type: "stop",

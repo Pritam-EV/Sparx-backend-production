@@ -71,19 +71,16 @@ function startMqttSubscriber() {
     const now = new Date();
 
     // --- Normalize fields from telemetry payload ---
-    const status = msg.status || 'Unknown';
+    const status = msg.state || 'Unknown';                     // ✅ "state"
+    const totalEnergy = Number(msg.totalEnergy_kWh) || 0;      // ✅ "totalEnergy_kWh"
     const v = Number(msg.voltage) || 0;
     const c = Number(msg.current) || 0;
     const p = Number(msg.power) || 0;
-    const totalEnergy = Number(msg.energy_kwh) || 0;
-
-    const relayStateTxt = (msg.relay_state || '').toString().toUpperCase();
-    const relayOn = relayStateTxt === 'ON';
+    const relayOn = (msg.relay || '').toString().toUpperCase() === 'ON';  // ✅ "relay"
 
     const sessionId = msg.sessionId || null;
-    const energyConsumed = msg.energy_consumed != null
-      ? Number(msg.energy_consumed) || 0
-      : undefined;
+    const energyConsumed = msg.consumed_kWh != null 
+      ? Number(msg.consumed_kWh) || 0 : undefined;
 
     try {
       // 1) Update Device document (used on home/charging pages)
@@ -93,7 +90,7 @@ function startMqttSubscriber() {
         voltage: v,
         current: c,
         power: p,
-        energy: totalEnergy,
+        totalenergy: totalEnergy,  // ✅ Schema: "totalenergy"
         lastSeen: now,
         updatedAt: now
       };
