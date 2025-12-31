@@ -12,41 +12,7 @@ async function logCommand(sessionId, { type, topic, payload, mqtt = {} }) {
     { $push: { commands: { at: new Date(), type, topic, payload, mqtt } } }
   );
 }
-const telemetryTopic = "device/+/telemetry";
-mqttClient.subscribe(telemetryTopic);
 
-mqttClient.on("message", async (topic, message) => {
-  try {
-    if (!topic.startsWith("device/") || !topic.endsWith("/telemetry")) return;
-
-    const deviceId = topic.split("/")[1];
-    const data = JSON.parse(message.toString());
-    // expected: { voltage, current, power_W, energy_kWh, sessionId? }
-
-    const now = new Date();
-    const filter = data.sessionId
-      ? { sessionId: data.sessionId, status: "active" }
-      : { deviceId, status: "active" };
-
-    const setObj = {
-      latestVoltage: Number(data.voltage) || 0,
-      latestCurrent: Number(data.current) || 0,
-      latestPower:   Number(data.power_W) || 0,
-      lastUpdate: now
-    };
-    if (data.energy_kWh !== undefined) setObj.energyConsumed = Number(data.energy_kWh) || 0;
-
-    await Session.updateOne(
-      filter,
-      {
-        $set: setObj,
-        $push: { telemetry: { timestamp: now, power_W: data.power_W, voltage: data.voltage, current: data.current } }
-      }
-    );
-  } catch (e) {
-    console.error("MQTT telemetry ingest failed:", e);
-  }
-});
 
 // ✅ GET /api/sessions/active
 // controllers/sessionController.js
@@ -185,15 +151,17 @@ if (!transactionId) {
     device.relayOn = true;
     await device.save();
 
-    const topic = `device/${deviceId}/sessionCommand`;
-    const payload = {
-      command: "start",
-      SessionId: sessionId,
-      UserId: userId,
-      TransactionId: transactionId,
-      SelectedEnergy: parseFloat(energySelected),
-      AmountPaid: parseFloat(amountPaid),
-    };
+      const topic = `viz/${deviceId}/sessionCommand`;
+
+      const payload = {
+        command: "start",
+        sessionId,                // normalized lower-case; firmware should read this
+        userId,                   // or UserId if you prefer, just be consistent
+        transactionId,
+        selectedEnergy: parseFloat(energySelected),
+        amountPaid: parseFloat(amountPaid),
+      };
+
     console.log("📡 Publishing START to device:", topic, payload);
     // log the intent
     await logCommand(newSession._id, {
@@ -307,8 +275,9 @@ const pauseSession = async (req, res) => {
     if (!session) return res.status(404).json({ error: "Session not found" });
     
     // Publish pause command
-    const topic = `device/${deviceId || session.deviceId}/sessionCommand`;
-    const payload = { command: "pause", SessionId: sessionId };
+      const topic = `viz/${deviceId || session.deviceId}/sessionCommand`;
+      const payload = { command: "pause", sessionId };
+
     
       await logCommand(session._id, {
         type: "pause",
@@ -349,8 +318,9 @@ const resumeSession = async (req, res) => {
     if (!session) return res.status(404).json({ error: "Session not found" });
     
     // Publish resume command
-    const topic = `device/${deviceId || session.deviceId}/sessionCommand`;
-    const payload = { command: "resume", SessionId: sessionId };
+    const topic = `viz/${deviceId || session.deviceId}/sessionCommand`;
+    const payload = { command: "resume", sessionId };
+
     
         await logCommand(session._id, {
           type: "resume",
@@ -443,17 +413,15 @@ const endSession = async (req, res) => {
   await receipt.save();
 
     // Publish stop command
-    const topic = `device/${deviceId || session.deviceId}/sessionCommand`;
-    const payload = { command: "stop", SessionId: sessionId, endTrigger };
-
-    console.log("📡 Publishing STOP to device:", topic, payload);
-
-      await logCommand(session._id, {
-        type: "stop",
-        topic,
-        payload,
-        mqtt: { publishedAt: new Date() }
-      });
+const topic = `viz/${deviceId || session.deviceId}/sessionCommand`;
+const payload = { command: "stop", sessionId, endTrigger };
+console.log("📡 Publishing STOP to device:", topic, payload);
+await logCommand(session._id, {
+  type: "stop",
+  topic,
+  payload,
+  mqtt: { publishedAt: new Date() }
+});
 
     mqttClient.publish(topic, JSON.stringify(payload), { qos: 1, retain: false }, (err) => {
       if (err) {
