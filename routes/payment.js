@@ -12,7 +12,7 @@ const CASHFREE_BASE_URL =
 
 
     
-router.post("/orders", async (req, res) => {
+router.post("/order", async (req, res) => {
   try {
     const { amount, customer } = req.body;
 
@@ -32,7 +32,8 @@ router.post("/orders", async (req, res) => {
         customer_phone: customer?.phone || "9999999999",
       },
       order_meta: {
-        return_url: `${process.env.CLIENT_URL}/payment-success?order_id={order_id}`,
+        return_url: `${process.env.CLIENT_URL}?order_id={order_id}`,
+        payment_methods: "cc,dc,ccc,ppc,nb,upi"
       },
     };
 
@@ -49,9 +50,10 @@ router.post("/orders", async (req, res) => {
       }
     );
 
-    return res.status(200).json({
+    return res.status(response.status).json({
       success: true,
       order: response.data, // contains order_token
+      paymentSessionId: response.data?.payment_session_id
     });
   } catch (error) {
     console.error("Cashfree order creation failed:", error?.response?.data || error.message);
@@ -110,7 +112,7 @@ router.post("/webhook", async (req, res) => {
 });
 
 
-router.get("/verify/:orderId", async (req, res) => {
+router.get("/verify", async (req, res) => {
   try {
     const { orderId } = req.params;
   console.log("🔍 Verifying payment for:", orderId);
@@ -124,13 +126,26 @@ router.get("/verify/:orderId", async (req, res) => {
 
     if (!payment) {
       console.warn("⚠️ Payment not found for:", orderId);
-      return res.status(404).json({
-        success: false,
-        message: "Payment not found",
+
+      const response = await axios.get(
+        `${CASHFREE_BASE_URL}/pg/orders/${orderId}`,
+        {
+          headers: {
+            "x-client-id": process.env.CASHFREE_APP_ID,
+            "x-client-secret": process.env.CASHFREE_SECRET_KEY,
+            "x-api-version": "2023-08-01",
+          },
+        }
+      );
+
+      return res.status(response.status).json({
+        success: true,
+        message: response.data?.message,
+        status: response.data?.order_status ? (response.data.order_status == "PAID" ? "successful" : (response.data.order_status == "TERMINATED" ? "cancelled" : (response.data.order_status == "TERMINATION_REQUESTED" ? "pending" : "failed"))) : "failed"
       });
     }
 
-        if (payment.status !== "PAID") {
+    if (payment.status !== "PAID") {
       console.warn("⚠️ Payment not completed:", payment.status);
       return res.status(400).json({
         success: false,
