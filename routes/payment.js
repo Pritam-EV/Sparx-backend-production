@@ -115,6 +115,16 @@ router.post("/webhook", async (req, res) => {
 router.get("/verify", async (req, res) => {
   try {
     const { orderId } = req.query;
+
+// ✅ FREE / ZERO PAYMENT — skip verification
+if (orderId?.startsWith("FREE_")) {
+  return res.json({
+    success: true,
+    status: "successful",
+    gateway: "free",
+  });
+}
+
   console.log("🔍 Verifying payment for:", orderId);
       if (!orderId) {
       return res.status(400).json({
