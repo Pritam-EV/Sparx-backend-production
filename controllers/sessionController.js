@@ -227,11 +227,23 @@ if (couponCode) {
 
       // Atomically increment usageCount only if current usageCount < usageLimit (or unlimited)
       if (coupon.usageLimit == null) {
-        await Coupon.updateOne({ _id: coupon._id }, { $inc: { usageCount: 1 } });
+       await Coupon.updateOne(
+        { _id: coupon._id },
+        {
+          $set: {
+            usageCount: Number(coupon.usageCount || 0) + 1
+          }
+        }
+      );
+
       } else {
         const updated = await Coupon.findOneAndUpdate(
-          { _id: coupon._id, usageCount: { $lt: coupon.usageLimit } },
-          { $inc: { usageCount: 1 } },
+           { _id: coupon._id },
+            {
+              $set: {
+                usageCount: Number(coupon.usageCount || 0) + 1
+              }
+            },
           { new: true }
         );
         if (!updated) {
@@ -246,13 +258,23 @@ if (couponCode) {
   } else {
     // No reservation - attempt atomic consumption directly
     if (coupon.usageLimit == null) {
-      await Coupon.updateOne({ _id: coupon._id }, { $inc: { usageCount: 1 } });
+      await Coupon.updateOne(
+        { _id: coupon._id },
+        {
+          $set: {
+            usageCount: Number(coupon.usageCount || 0) + 1
+          }
+        }
+      );
+
     } else {
       const updated = await Coupon.findOneAndUpdate(
-        { _id: coupon._id, usageCount: { $lt: coupon.usageLimit } },
-        { $inc: { usageCount: 1 } },
+        { _id: coupon.id, usageLimit: null },
+        { $set: { usageCount: Number(coupon.usageCount || 0) + 1 } },
         { new: true }
       );
+      // Similar for usageLimit check, replace $inc with $set: { usageCount: current + 1 }
+
       if (!updated) return res.status(400).json({ error: 'Coupon usage limit reached' });
     }
     consumedCoupon = coupon;
@@ -263,7 +285,7 @@ if (couponCode) {
 
   } catch (err) {
     console.error("Error starting session:", err);
-    res.status(500).json({ error: "Failed to start session." });
+    return res.status(500).json({ error: "Failed to start session." });
   }
 };
 

@@ -76,10 +76,15 @@ async function consumeCoupon(req, res) {
       return res.status(400).json({ error: "Coupon usage limit reached" });
 
     // increment usage
-    await Coupon.updateOne(
-      { _id: coupon._id },
-      { $inc: { usageCount: 1 } }
-    );
+await Coupon.updateOne(
+  { _id: coupon._id },
+  {
+    $set: {
+      usageCount: Number(coupon.usageCount || 0) + 1
+    }
+  }
+);
+
 
     return res.json({ success: true, message: "Coupon consumed" });
   } catch (err) {
