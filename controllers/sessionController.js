@@ -129,68 +129,8 @@ if (!transactionId) {
       return res.status(409).json({ error: "Device is currently occupied." });
     }
 
-    // 4) Create new session and save
-      const newSession = new Session({
-        sessionId,
-        deviceId,
-        transactionId,
-        userId: userId,        // Mongoose will cast string to ObjectId
-        startTime: new Date(startTime),
-        startDate,
-        energySelected,
-        amountPaid,
-        amountSelected,
-        discountApplied, 
-        status: "active"
-      });
-    await newSession.save();
 
-    // 5) Update device and publish MQTT start command
-    device.status = "Occupied";
-    device.current_session_id = newSession._id;
-    device.relayOn = true;
-    await device.save();
-
-      const topic = `viz/${deviceId}/sessionCommand`;
-
-      // Line 120: CORRECT PASSCASE PAYLOAD
-      const payload = {
-        command: "start",
-        SessionId: sessionId,           // ✅ Firmware expects PascalCase
-        UserId: userId,                 // ✅ Firmware expects PascalCase  
-        TransactionId: transactionId,
-        SelectedEnergy: parseFloat(energySelected),
-        AmountPaid: parseFloat(amountPaid),
-      };
-
-
-    console.log("📡 Publishing START to device:", topic, payload);
-    // log the intent
-    await logCommand(newSession._id, {
-      type: "start",
-      topic,
-      payload,
-      mqtt: { publishedAt: new Date() }
-    });
-    mqttClient.publish(
-      topic,
-      JSON.stringify(payload),
-      { qos: 1, retain: false },
-      (err) => {
-        if (err) {
-          console.error("❌ MQTT publish failed:", err);
-          return res
-            .status(500)
-            .json({ error: "Session created but failed to send start command" });
-        }
-        console.log(`✅ MQTT start command sent to ${deviceId}`);
-        return res
-          .status(201)
-          .json({ message: "Session started successfully.", session: newSession });
-      }
-    );
-
-    // inside startSession handler, after validation of required fields, etc.
+        // inside startSession handler, after validation of required fields, etc.
 const { couponCode, reservationId } = req.body;
 
 // Consume coupon if supplied
@@ -280,6 +220,68 @@ if (couponCode) {
     consumedCoupon = coupon;
   }
 }
+    // 4) Create new session and save
+      const newSession = new Session({
+        sessionId,
+        deviceId,
+        transactionId,
+        userId: userId,        // Mongoose will cast string to ObjectId
+        startTime: new Date(startTime),
+        startDate,
+        energySelected,
+        amountPaid,
+        amountSelected,
+        discountApplied, 
+        status: "active"
+      });
+    await newSession.save();
+
+    // 5) Update device and publish MQTT start command
+    device.status = "Occupied";
+    device.current_session_id = newSession._id;
+    device.relayOn = true;
+    await device.save();
+
+      const topic = `viz/${deviceId}/sessionCommand`;
+
+      // Line 120: CORRECT PASSCASE PAYLOAD
+      const payload = {
+        command: "start",
+        SessionId: sessionId,           // ✅ Firmware expects PascalCase
+        UserId: userId,                 // ✅ Firmware expects PascalCase  
+        TransactionId: transactionId,
+        SelectedEnergy: parseFloat(energySelected),
+        AmountPaid: parseFloat(amountPaid),
+      };
+
+
+    console.log("📡 Publishing START to device:", topic, payload);
+    // log the intent
+    await logCommand(newSession._id, {
+      type: "start",
+      topic,
+      payload,
+      mqtt: { publishedAt: new Date() }
+    });
+mqttClient.publish(
+  topic,
+  JSON.stringify(payload),
+  { qos: 1, retain: false },
+  (err) => {
+    if (err) {
+      console.error("❌ MQTT publish failed:", err);
+    } else {
+      console.log(`✅ MQTT start command sent to ${deviceId}`);
+    }
+  }
+);
+return res.status(201).json({
+  message: "Session started successfully.",
+  session: newSession,
+});
+
+
+
 
 
 
