@@ -99,8 +99,6 @@ router.get("/all", authMiddleware, /* authorizeRoles('admin'), */ async (req, re
 
 
 
-// 1. Fetch session by transaction ID (for SessionStart page)
-router.get("/by-transaction/:transactionId", authMiddleware, getSessionByTransactionId);
 
 // Owner/customer: fetch current user's sessions
 router.get("/user-sessions", authMiddleware, async (req, res) => {
