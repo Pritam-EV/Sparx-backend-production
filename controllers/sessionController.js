@@ -469,24 +469,6 @@ await logCommand(session._id, {
   }
 };
 
-/**
- * @desc   Get session by transaction ID
- * @route  GET /api/sessions/by-transaction/:transactionId
- * @access Private
- */
-const getSessionByTransactionId = async (req, res) => {
-  try {
-    const { transactionId } = req.params;
-    const session = await Session.findOne({ transactionId });
-    if (!session) {
-      return res.status(404).json({ error: "Session not found." });
-    }
-    res.status(200).json(session);
-  } catch (err) {
-    console.error("Error fetching session by transactionId:", err);
-    res.status(500).json({ error: "Server error." });
-  }
-};
 
 /**
  * @desc   Get session by session ID
@@ -536,7 +518,6 @@ module.exports = {
   endSession,
   pauseSession, 
   resumeSession,
-  getSessionByTransactionId,
   getSessionById,
   getLiveDeviceSensorData,
   getActiveSession,
