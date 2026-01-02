@@ -32,7 +32,7 @@ router.post("/order", async (req, res) => {
         customer_phone: customer?.phone || "9999999999",
       },
       order_meta: {
-        return_url: `${process.env.CLIENT_URL}?order_id={order_id}`,
+        return_url: `${process.env.CLIENT_URL}/payment-success?order_id={order_id}`,
         payment_methods: "cc,dc,ccc,ppc,nb,upi"
       },
     };
@@ -114,7 +114,7 @@ router.post("/webhook", async (req, res) => {
 
 router.get("/verify", async (req, res) => {
   try {
-    const { orderId } = req.params;
+    const { orderId } = req.query;
   console.log("🔍 Verifying payment for:", orderId);
       if (!orderId) {
       return res.status(400).json({
