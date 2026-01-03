@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require("uuid");
 const crypto = require("crypto");
 const router = express.Router();
 const Payment = require("../models/Payment");
+const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
 const CASHFREE_BASE_URL =
   process.env.CASHFREE_ENV === "PROD"
@@ -13,7 +14,7 @@ const CASHFREE_BASE_URL =
 
 router.post("/order", authMiddleware, async (req, res) => {
   try {
-    const { amount, customer, deviceId } = req.body;
+    const { amount, /* customer, */ deviceId } = req.body;
 
     if (!amount) {
       return res.status(400).json({
@@ -24,18 +25,25 @@ router.post("/order", authMiddleware, async (req, res) => {
 
     const orderId = `order_${uuidv4()}`;
       
-      const returnUrl =
-        req.body.returnUrl ||
-        `${process.env.CLIENT_URL}/payment-success?order_id={order_id}`;
+    const returnUrl =
+      req.body.returnUrl ||
+      `${process.env.CLIENT_URL}/payment-success?order_id={order_id}`;
+
+    const user = await User.findById(
+      req.user.userId,
+      { name: 1, mobile: 1 },
+      { lean: true }
+    ).exec();
 
     const payload = {
       order_id: orderId,
       order_amount: Number(amount),
       order_currency: "INR",
       customer_details: {
-        customer_id: customer?.id || "guest_user",
-        customer_email: customer?.email || "guest@example.com",
-        customer_phone: customer?.phone || "9999999999",
+        customer_id: req.user.userId, /* customer?.id || "guest_user", */
+        customer_name: user.name,
+        customer_email: "vjratechnologies@gmail.com", /*customer?.email || "guest@example.com", */
+        customer_phone: user.mobile /* customer?.phone || "9999999999", */
       },
 
       order_meta: {
@@ -57,8 +65,7 @@ router.post("/order", authMiddleware, async (req, res) => {
         },
       }
     );
-console.log("🔑 Cashfree ENV:", process.env.CASHFREE_ENV);
-console.log("🌍 Cashfree BASE:", CASHFREE_BASE_URL);
+    console.log("🌍 Cashfree BASE:", CASHFREE_BASE_URL, "🔑 Cashfree ENV:", process.env.CASHFREE_ENV);
 
     // ✅ CREATE PAYMENT RECORD (PENDING)
     await Payment.create({
