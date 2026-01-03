@@ -437,7 +437,7 @@ const endSession = async (req, res) => {
       await device.save();
     }
       const receipt = new Receipt({
-    receiptId: `RCPT_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+    receiptId: `VIZ_${Date.now()}_${Math.random().toString(10).slice(2,6)}`,
     userId: session.userId,
     deviceId: session.deviceId,
     sessionId: session.sessionId,
