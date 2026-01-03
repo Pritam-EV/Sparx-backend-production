@@ -72,10 +72,10 @@ console.log("🌍 Cashfree BASE:", CASHFREE_BASE_URL);
       rawResponse: response.data,
     });
     console.log("✅ Cashfree order created:", {
-  orderId,
-  cfOrderId: response.data.order_id,
-  paymentSessionId: response.data.payment_session_id,
-});
+      orderId,
+      cfOrderId: response.data.order_id,
+      paymentSessionId: response.data.payment_session_id,
+    });
 
     return res.status(200).json({
       success: true,
