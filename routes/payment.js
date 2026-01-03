@@ -4,20 +4,22 @@ const { v4: uuidv4 } = require("uuid");
 const crypto = require("crypto");
 const router = express.Router();
 const Payment = require("../models/Payment");
-
+const authMiddleware = require("../middleware/authMiddleware");
 const CASHFREE_BASE_URL =
   process.env.CASHFREE_ENV === "PROD"
     ? "https://api.cashfree.com"
     : "https://sandbox.cashfree.com";
 
 
-    
-router.post("/order", async (req, res) => {
+router.post("/order", authMiddleware, async (req, res) => {
   try {
-    const { amount, customer } = req.body;
+    const { amount, customer, deviceId } = req.body;
 
     if (!amount) {
-      return res.status(400).json({ success: false, message: "Amount is required" });
+      return res.status(400).json({
+        success: false,
+        message: "Amount is required",
+      });
     }
 
     const orderId = `order_${uuidv4()}`;
@@ -33,7 +35,7 @@ router.post("/order", async (req, res) => {
       },
       order_meta: {
         return_url: `${process.env.CLIENT_URL}/payment-success?order_id={order_id}`,
-        payment_methods: "cc,dc,ccc,ppc,nb,upi"
+        payment_methods: "cc,dc,ccc,ppc,nb,upi",
       },
     };
 
@@ -50,19 +52,35 @@ router.post("/order", async (req, res) => {
       }
     );
 
-    return res.status(response.status).json({
+    // ✅ CREATE PAYMENT RECORD (PENDING)
+    await Payment.create({
+      orderId,
+      userId: req.user?.userId,
+      deviceId,
+      amountPaid: Number(amount),
+      currency: "INR",
+      status: "PENDING",
+      gateway: "cashfree",
+      rawResponse: response.data,
+    });
+
+    return res.status(200).json({
       success: true,
-      order: response.data, // contains order_token
-      paymentSessionId: response.data?.payment_session_id
+      order: response.data,
+      paymentSessionId: response.data?.payment_session_id,
     });
   } catch (error) {
-    console.error("Cashfree order creation failed:", error?.response?.data || error.message);
+    console.error(
+      "Cashfree order creation failed:",
+      error?.response?.data || error.message
+    );
     return res.status(500).json({
       success: false,
       message: "Cashfree order creation failed",
     });
   }
 });
+
 
 router.post("/webhook", async (req, res) => {
   try {
@@ -83,26 +101,45 @@ router.post("/webhook", async (req, res) => {
       return res.status(401).send("Invalid signature");
     }
 
-    const event = req.body;
+const event = req.body;
 
-    if (event.type === "PAYMENT_SUCCESS") {
-      const orderId = event.data.order.order_id;
-      const paymentId = event.data.payment.cf_payment_id;
+if (event.type === "PAYMENT_SUCCESS") {
+  const orderId = event.data.order.order_id;
+  const payment = event.data.payment;
 
-      console.log("✅ Cashfree payment confirmed:", orderId);
+  console.log("✅ Cashfree payment success:", orderId);
 
-      await Payment.updateOne(
-        { orderId },
-        {
-          orderId,
-          status: "PAID",
-          paymentId,
-          gateway: "cashfree",
-          paidAt: new Date(),
-        },
-        { upsert: true }
-      );
+await Payment.updateOne(
+  { orderId, status: { $ne: "SUCCESS" } },
+  {
+    $set: {
+      status: "SUCCESS",
+      paymentMethod: payment.payment_method,
+      cfPaymentId: payment.cf_payment_id,
+      paidAt: new Date(payment.payment_time),
+      rawResponse: event,
+    },
+  }
+);
+
+}
+
+if (event.type === "PAYMENT_FAILED") {
+  const orderId = event.data.order.order_id;
+
+  console.log("❌ Cashfree payment failed:", orderId);
+
+  await Payment.updateOne(
+    { orderId },
+    {
+      $set: {
+        status: "FAILED",
+        rawResponse: event,
+      },
     }
+  );
+}
+
 
     return res.status(200).send("OK");
   } catch (err) {
@@ -118,12 +155,26 @@ router.get("/verify", async (req, res) => {
 
 // ✅ FREE / ZERO PAYMENT — skip verification
 if (orderId?.startsWith("FREE_")) {
+  await Payment.updateOne(
+    { orderId },
+    {
+      $set: {
+        status: "SUCCESS",
+        gateway: "free",
+        paymentMethod: "free",
+        paidAt: new Date(),
+      },
+    },
+    { upsert: true }
+  );
+
   return res.json({
     success: true,
     status: "successful",
     gateway: "free",
   });
 }
+
 
   console.log("🔍 Verifying payment for:", orderId);
       if (!orderId) {
@@ -155,7 +206,7 @@ if (orderId?.startsWith("FREE_")) {
       });
     }
 
-    if (payment.status !== "PAID") {
+   if (payment.status !== "SUCCESS") {
       console.warn("⚠️ Payment not completed:", payment.status);
       return res.status(400).json({
         success: false,
@@ -166,10 +217,12 @@ if (orderId?.startsWith("FREE_")) {
     console.log("✅ Payment verified:", orderId);
 
 
-    return res.json({
-      success: true,
-      payment,
-    });
+return res.json({
+  success: true,
+  status: "successful",
+  payment,
+});
+
   } catch (err) {
     console.error("❌ Verify route crashed:", err);
     return res.status(500).json({

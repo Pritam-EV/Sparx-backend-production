@@ -236,6 +236,20 @@ if (couponCode) {
       });
     await newSession.save();
 
+    const Payment = require("../models/Payment");
+
+await Payment.updateOne(
+  { orderId: transactionId },
+  {
+    $set: {
+      sessionId: sessionId,
+      deviceId: deviceId,
+      userId: userId,
+    },
+  }
+);
+
+
     // 5) Update device and publish MQTT start command
     device.status = "Occupied";
     device.current_session_id = newSession._id;
