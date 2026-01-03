@@ -51,6 +51,8 @@ router.post("/order", authMiddleware, async (req, res) => {
         },
       }
     );
+console.log("🔑 Cashfree ENV:", process.env.CASHFREE_ENV);
+console.log("🌍 Cashfree BASE:", CASHFREE_BASE_URL);
 
     // ✅ CREATE PAYMENT RECORD (PENDING)
     await Payment.create({
