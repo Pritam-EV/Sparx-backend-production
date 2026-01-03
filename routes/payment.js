@@ -7,7 +7,7 @@ const Payment = require("../models/Payment");
 const authMiddleware = require("../middleware/authMiddleware");
 const CASHFREE_BASE_URL =
   process.env.CASHFREE_ENV === "PROD"
-    ? "https://api.cashfree.com/pg"
+    ? "https://api.cashfree.com"
     : "https://sandbox.cashfree.com";
 
 
@@ -23,6 +23,10 @@ router.post("/order", authMiddleware, async (req, res) => {
     }
 
     const orderId = `order_${uuidv4()}`;
+      
+      const returnUrl =
+        req.body.returnUrl ||
+        `${process.env.CLIENT_URL}/payment-success?order_id={order_id}`;
 
     const payload = {
       order_id: orderId,
@@ -33,10 +37,12 @@ router.post("/order", authMiddleware, async (req, res) => {
         customer_email: customer?.email || "guest@example.com",
         customer_phone: customer?.phone || "9999999999",
       },
+
       order_meta: {
-        return_url: `${process.env.CLIENT_URL}/payment-success?order_id={order_id}`,
-        payment_methods: "cc,dc,ccc,ppc,nb,upi",
+        return_url: returnUrl,
+        payment_methods: "cc,dc,nb,upi",
       },
+
     };
 
     const response = await axios.post(
@@ -81,6 +87,11 @@ console.log("🌍 Cashfree BASE:", CASHFREE_BASE_URL);
       message: "Cashfree order creation failed",
     });
   }
+});
+console.log("✅ Cashfree order created:", {
+  orderId,
+  cfOrderId: response.data.order_id,
+  paymentSessionId: response.data.payment_session_id,
 });
 
 
@@ -283,6 +294,7 @@ if (payment.status === "PENDING") {
       success: false,
       message: "Internal server error",
     });
+    
   }
 });
 
