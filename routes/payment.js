@@ -7,7 +7,7 @@ const Payment = require("../models/Payment");
 const authMiddleware = require("../middleware/authMiddleware");
 const CASHFREE_BASE_URL =
   process.env.CASHFREE_ENV === "PROD"
-    ? "https://api.cashfree.com"
+    ? "https://api.cashfree.com/pg"
     : "https://sandbox.cashfree.com";
 
 
