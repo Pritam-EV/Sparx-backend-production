@@ -153,6 +153,12 @@ router.get("/verify", async (req, res) => {
   try {
     const { orderId } = req.query;
 
+      if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Order ID missing",
+      });
+    }
 // ✅ FREE / ZERO PAYMENT — skip verification
 if (orderId?.startsWith("FREE_")) {
   await Payment.updateOne(
@@ -177,12 +183,7 @@ if (orderId?.startsWith("FREE_")) {
 
 
   console.log("🔍 Verifying payment for:", orderId);
-      if (!orderId) {
-      return res.status(400).json({
-        success: false,
-        message: "Order ID missing",
-      });
-    }
+
     const payment = await Payment.findOne({ orderId });
 
     if (!payment) {
@@ -206,22 +207,73 @@ if (orderId?.startsWith("FREE_")) {
       });
     }
 
-   if (payment.status !== "SUCCESS") {
-      console.warn("⚠️ Payment not completed:", payment.status);
-      return res.status(400).json({
-        success: false,
-        message: "Payment not completed yet",
-      });
+// ✅ If already successful
+if (payment.status === "SUCCESS") {
+  return res.json({
+    success: true,
+    status: "successful",
+    payment,
+  });
+}
+
+// 🕒 If pending → verify from Cashfree directly
+if (payment.status === "PENDING") {
+  console.log("⏳ Payment pending in DB, checking Cashfree...");
+
+  const response = await axios.get(
+    `${CASHFREE_BASE_URL}/pg/orders/${orderId}`,
+    {
+      headers: {
+        "x-client-id": process.env.CASHFREE_APP_ID,
+        "x-client-secret": process.env.CASHFREE_SECRET_KEY,
+        "x-api-version": "2023-08-01",
+      },
     }
+  );
 
-    console.log("✅ Payment verified:", orderId);
+  const orderStatus = response.data?.order_status;
+
+  console.log("🔍 Cashfree order status:", orderStatus);
+
+  if (orderStatus === "PAID") {
+    // 🔥 Update DB immediately
+    await Payment.updateOne(
+      { orderId },
+      {
+        $set: {
+          status: "SUCCESS",
+          paidAt: new Date(),
+          rawResponse: response.data,
+        },
+      }
+    );
+
+    return res.json({
+      success: true,
+      status: "successful",
+    });
+  }
+
+  if (orderStatus === "FAILED" || orderStatus === "CANCELLED") {
+    await Payment.updateOne(
+      { orderId },
+      { $set: { status: "FAILED", rawResponse: response.data } }
+    );
+
+    return res.status(400).json({
+      success: false,
+      message: "Payment failed",
+    });
+  }
+
+  // still pending
+  return res.status(202).json({
+    success: false,
+    message: "Payment pending",
+  });
+}
 
 
-return res.json({
-  success: true,
-  status: "successful",
-  payment,
-});
 
   } catch (err) {
     console.error("❌ Verify route crashed:", err);
