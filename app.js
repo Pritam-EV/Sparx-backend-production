@@ -21,7 +21,7 @@ const sessionRoutes = require("./routes/sessions");
 const userRoutes    = require('./routes/users'); // Adjust path as needed
 const analyticsRoutes = require('./routes/analytics');
 const receiptsRoutes = require('./routes/receipts'); // add
-
+const operatorRoutes = require("./routes/operator");
 
 // MQTT Subscriber (if you still need it)
 const startMqttSubscriber = require("./mqttSubscriber");
@@ -125,7 +125,7 @@ app.get("/api/getDevice", async (req, res) => {
 
 app.use("/api/payment", require("./routes/payment"));
 app.use('/api/receipts', require('./routes/receipts'));
-
+app.use("/api/operator", operatorRoutes);
 
 
 
