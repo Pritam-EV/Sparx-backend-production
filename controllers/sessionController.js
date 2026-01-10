@@ -128,6 +128,8 @@ if (!transactionId) {
     if (device.status === "Occupied") {
       return res.status(409).json({ error: "Device is currently occupied." });
     }
+    // ✅ Always derive ratePerKwh from device at start time
+    const ratePerKwh = Number(device.rate ?? 20);
 
 
         // inside startSession handler, after validation of required fields, etc.
@@ -232,7 +234,8 @@ if (couponCode) {
         amountPaid,
         amountSelected,
         discountApplied, 
-        status: "active"
+        status: "active",
+        ratePerKwh
       });
     await newSession.save();
 
@@ -411,7 +414,7 @@ const endSession = async (req, res) => {
 
     // 2️⃣ Compute amountUtilized and refund
     const device = await Device.findOne({ device_id: deviceId || session.deviceId });
-    const rate = device?.rate || 20;
+    const rate = session.ratePerKwh ?? device?.rate ?? 20;
     const amountUtilized = Number((energyConsumed * rate).toFixed(2));
     const refund = Number(Math.max(0, session.amountPaid - amountUtilized).toFixed(2));
 
@@ -452,6 +455,7 @@ const endSession = async (req, res) => {
     energySelected: session.energySelected,
     amountSelected: session.amountSelected,
     amountPaid: session.amountPaid,
+    ratePerKwh: session.ratePerKwh, // ✅ NEW (rate stored at session start)
     discountApplied: session.discountApplied || 0,
     amountUtilized,
     refund,

@@ -12,6 +12,7 @@ const receiptSchema = new mongoose.Schema({
   energySelected:{ type: Number, required: true },
   amountSelected:{ type: Number, required: true },
   amountPaid:    { type: Number, required: true },
+  ratePerKwh: { type: Number, required: true }, // captured from Session at start time
   discountApplied:{ 
     type: Number, 
     default: function() {

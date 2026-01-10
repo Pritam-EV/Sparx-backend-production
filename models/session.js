@@ -37,7 +37,7 @@ const sessionSchema = new mongoose.Schema({
   discountApplied: { type: Number, default: 0 },
   amountPaid:     { type: Number,  required: true },    // ₹ prepaid
   amountUsed:     { type: Number,  default: 0 },        // ₹ used so far
-  ratePerKwh:     { type: Number,  default: 20 },       // ₹/kWh
+  ratePerKwh:     { type: Number, required: true },       // ₹/kWh
   status:         { type: String,  enum: ["active","completed","faulty"], default: "active" },
   endTrigger:     { type: String,  default: null },
   endTime:        { type: Date,    default: null },
