@@ -22,6 +22,8 @@ const receiptSchema = new mongoose.Schema({
   },
   amountUtilized:{ type: Number, required: true },
   refund:        { type: Number, default: 0 },
+  commission: { type: Number, default: 0 },        // rate × energyConsumed
+  paymentCharges: { type: Number, default: 0 },   // amountPaid × (PGPercent / 100)
   rating:        { type: Number, min: 1, max: 5 },     // ← new
   suggestion:    { type: String },                    // ← new
   createdAt:     { type: Date, default: Date.now }

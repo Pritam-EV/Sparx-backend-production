@@ -436,6 +436,12 @@ const endSession = async (req, res) => {
       device.relayOn = false;
       await device.save();
     }
+
+      // ✨ Calculate commission & paymentCharges
+      const commission = Number((device.rate * energyConsumed).toFixed(2));
+      const pgPercent = device.PGPercent || 2;
+      const paymentCharges = Number(((session.amountPaid * pgPercent) / 100).toFixed(2));
+    
       const receipt = new Receipt({
     receiptId: `VIZ_${Date.now()}_${Math.random().toString(10).slice(2,6)}`,
     userId: session.userId,
@@ -448,7 +454,9 @@ const endSession = async (req, res) => {
     amountPaid: session.amountPaid,
     discountApplied: session.discountApplied || 0,
     amountUtilized,
-    refund
+    refund,
+    commission,          // ✨ NEW
+    paymentCharges       // ✨ NEW
   });
   await receipt.save();
 
