@@ -5,6 +5,11 @@ const mqttClient = require('../mqttClient');
 const Coupon = require('../models/Coupon');
 const CouponReservation = require('../models/CouponReservation');
 const Receipt = require('../models/Receipt');
+const crypto = require("crypto");
+function shortId(len = 8) {
+  // alphanumeric, no symbols
+  return crypto.randomBytes(Math.ceil(len / 2)).toString("hex").slice(0, len).toUpperCase();
+}
 
 async function logCommand(sessionId, { type, topic, payload, mqtt = {} }) {
   await Session.updateOne(
@@ -446,7 +451,7 @@ const endSession = async (req, res) => {
       const paymentCharges = Number(((session.amountPaid * pgPercent) / 100).toFixed(2));
     
       const receipt = new Receipt({
-    receiptId: `VIZ_${Date.now()}_${Math.random().toString(10).slice(2,6)}`,
+    receiptId: shortId(10),
     userId: session.userId,
     deviceId: session.deviceId,
     sessionId: session.sessionId,
