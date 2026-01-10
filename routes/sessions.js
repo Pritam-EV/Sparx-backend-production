@@ -145,6 +145,10 @@ router.post("/payment-success", async (req, res) => {
         .status(200)
         .json({ message: "Session already exists", session: existingSession });
     }
+    // ✅ Fetch actual device rate
+const device = await Device.findOne({ device_id: deviceId }).lean();
+const ratePerKwh = Number(device?.rate ?? 20);
+
     const newSession = await Session.create({
       sessionId,
       deviceId,
@@ -154,6 +158,7 @@ router.post("/payment-success", async (req, res) => {
       amountPaid,
       energySelected,
       userId,      
+      ratePerKwh,
     });
     res.status(200).json({ message: "Session created successfully after payment.", session: newSession });
   } catch (err) {
