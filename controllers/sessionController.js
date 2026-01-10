@@ -6,10 +6,10 @@ const Coupon = require('../models/Coupon');
 const CouponReservation = require('../models/CouponReservation');
 const Receipt = require('../models/Receipt');
 const crypto = require("crypto");
-function shortId(len = 8) {
-  // alphanumeric, no symbols
+function rand(len = 8) {
   return crypto.randomBytes(Math.ceil(len / 2)).toString("hex").slice(0, len).toUpperCase();
 }
+
 
 async function logCommand(sessionId, { type, topic, payload, mqtt = {} }) {
   await Session.updateOne(
@@ -102,7 +102,7 @@ const startSession = async (req, res) => {
 
     let transactionId = req.body.transactionId;
 if (!transactionId) {
-  transactionId = 'sparxpay_' + Date.now().toString() + '_' + Math.random().toString(36).slice(2,9);
+  transactionId = `FREE_${rand(12)}`;
 }
 
     
@@ -451,7 +451,7 @@ const endSession = async (req, res) => {
       const paymentCharges = Number(((session.amountPaid * pgPercent) / 100).toFixed(2));
     
       const receipt = new Receipt({
-    receiptId: shortId(10),
+    receiptId: `VIZ_${rand(10)}`,
     userId: session.userId,
     deviceId: session.deviceId,
     sessionId: session.sessionId,
