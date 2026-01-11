@@ -659,6 +659,198 @@ const getOwnerPastSessions = async (req, res) => {
   }
 };
 
+
+// GET /api/sessions/owner/analytics?timeType=DAILY&duration=1day&deviceIds=A,B
+const getOwnerAnalytics = async (req, res) => {
+  try {
+    const ownerId = req.user.userId;
+    const { timeType = "DAILY", duration = "1day", deviceIds = "" } = req.query;
+
+    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+      return res.status(400).json({ error: "Invalid ownerId" });
+    }
+    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
+
+    // 1) Owner devices (device config needed for PG% and commissionPerKwh)
+    const devices = await Device.find({ ownerId: { $in: [ownerObjectId] } })
+      .select("device_id commissionPerKwh PGPercent")
+      .lean();
+
+    if (!devices.length) {
+      return res.json({
+        summary: { totalEnergy: 0, totalAmount: 0, totalProfit: 0, sessionsCount: 0 },
+        overviewData: { energyByTime: [], amountByTime: [] },
+        tableData: [],
+      });
+    }
+
+    const deviceConfigMap = Object.fromEntries(
+      devices.map((d) => [
+        d.device_id,
+        { commissionPerKwh: Number(d.commissionPerKwh || 0), pgPercent: Number(d.PGPercent || 0) },
+      ])
+    );
+
+    // 2) selected devices
+    let selectedDeviceIds = Object.keys(deviceConfigMap);
+    if (deviceIds && deviceIds.trim()) {
+      const provided = String(deviceIds)
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
+      selectedDeviceIds = provided.filter((id) => deviceConfigMap[id]);
+    }
+    if (!selectedDeviceIds.length) {
+      return res.json({
+        summary: { totalEnergy: 0, totalAmount: 0, totalProfit: 0, sessionsCount: 0 },
+        overviewData: { energyByTime: [], amountByTime: [] },
+        tableData: [],
+      });
+    }
+
+    // 3) date range
+    const now = new Date();
+    const endDate = new Date(now);
+    endDate.setHours(23, 59, 59, 999);
+
+    const startDate = new Date(now);
+    startDate.setHours(0, 0, 0, 0);
+
+    if (timeType === "DAILY") {
+      if (duration === "1day") startDate.setDate(now.getDate() - 0);
+      else if (duration === "7days") startDate.setDate(now.getDate() - 6);
+      else if (duration === "30days") startDate.setDate(now.getDate() - 29);
+    } else if (timeType === "MONTHLY") {
+      if (duration === "3months") startDate.setMonth(now.getMonth() - 2);
+      else if (duration === "6months") startDate.setMonth(now.getMonth() - 5);
+      else if (duration === "12months") startDate.setMonth(now.getMonth() - 11);
+      startDate.setDate(1);
+    }
+
+    startDate.setHours(0, 0, 0, 0);
+
+    // 4) receipts query (use receipts only)
+    const receipts = await Receipt.find({
+      deviceId: { $in: selectedDeviceIds },
+      createdAt: { $gte: startDate, $lte: endDate },
+    })
+      .select("deviceId energyConsumed amountUtilized ratePerKwh createdAt commission paymentCharges")
+      .lean();
+
+    // 5) helpers
+    const overviewMap = new Map(); // timeBucket -> { energy, amount }
+    const tableData = [];
+
+    const makeHourBucket = (dt) => {
+      const d = new Date(dt);
+      const hh = String(d.getHours()).padStart(2, "0");
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd} ${hh}:00`;
+    };
+
+    const makeDayBucket = (dt) => {
+      const d = new Date(dt);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd}`;
+    };
+
+    const makeMonthBucket = (dt) => {
+      const d = new Date(dt);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      return `${yyyy}-${mm}`;
+    };
+
+    const addToBucket = (bucketKey, energy, amount) => {
+      if (!overviewMap.has(bucketKey)) overviewMap.set(bucketKey, { energy: 0, amount: 0 });
+      const b = overviewMap.get(bucketKey);
+      b.energy += energy;
+      b.amount += amount;
+    };
+
+    // 6) build overview + table
+    for (const r of receipts) {
+      const energy = Number(r.energyConsumed || 0);
+      const amount = Number(r.amountUtilized || 0);
+      const rate = Number(r.ratePerKwh || 0);
+
+      // Use device config to calculate PG% and commissionPerKwh fields for table
+      const cfg = deviceConfigMap[r.deviceId] || { commissionPerKwh: 0, pgPercent: 0 };
+      const commissionPerKwh = Number(cfg.commissionPerKwh || 0);
+      const pgPercent = Number(cfg.pgPercent || 0);
+
+      // IMPORTANT: you said commission + PG are already stored in receipts.
+      // We will use receipt.commission and receipt.paymentCharges for math.
+      const commission = Number(r.commission || 0);
+      const pgCharge = Number(r.paymentCharges || 0);
+
+      const profit = Number((amount - commission - pgCharge).toFixed(2));
+
+      // bucket logic:
+      // - DAILY + 1day => hourly
+      // - DAILY + 7/30 => daily totals
+      // - MONTHLY => monthly totals
+      if (timeType === "DAILY" && duration === "1day") {
+        addToBucket(makeHourBucket(r.createdAt), energy, amount);
+      } else if (timeType === "DAILY") {
+        addToBucket(makeDayBucket(r.createdAt), energy, amount);
+      } else {
+        addToBucket(makeMonthBucket(r.createdAt), energy, amount);
+      }
+
+      tableData.push({
+        date: r.createdAt,
+        deviceId: r.deviceId,
+        energyConsumed: Number(energy.toFixed(2)),
+        amountUtilized: Number(amount.toFixed(2)),
+        ratePerKwh: Number(rate.toFixed(2)),
+        commissionPerKwh,
+        pgPercent,
+        profit,
+      });
+    }
+
+    // 7) sort overview data
+    const sortedBuckets = Array.from(overviewMap.entries()).sort((a, b) =>
+      a[0].localeCompare(b[0])
+    );
+
+    const energyByTime = sortedBuckets.map(([time, v]) => ({
+      time,
+      value: Number(v.energy.toFixed(2)),
+    }));
+
+    const amountByTime = sortedBuckets.map(([time, v]) => ({
+      time,
+      value: Number(v.amount.toFixed(2)),
+    }));
+
+    // 8) summary
+    const totalEnergy = Number(tableData.reduce((s, x) => s + x.energyConsumed, 0).toFixed(2));
+    const totalAmount = Number(tableData.reduce((s, x) => s + x.amountUtilized, 0).toFixed(2));
+    const totalProfit = Number(tableData.reduce((s, x) => s + x.profit, 0).toFixed(2));
+    const sessionsCount = tableData.length;
+
+    // 9) table sort desc
+    tableData.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    return res.json({
+      summary: { totalEnergy, totalAmount, totalProfit, sessionsCount },
+      overviewData: { energyByTime, amountByTime },
+      tableData,
+      filters: { timeType, duration, selectedDeviceIds, dateRange: { start: startDate, end: endDate } },
+    });
+  } catch (err) {
+    console.error("getOwnerAnalytics error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+};
+
+
 module.exports = {
   startSession,
   endSession,
@@ -669,4 +861,5 @@ module.exports = {
   getActiveSession,
   getOwnerLiveChargingSessions,
   getOwnerPastSessions,
+  getOwnerAnalytics,
 };
