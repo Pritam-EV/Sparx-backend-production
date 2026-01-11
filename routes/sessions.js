@@ -17,6 +17,7 @@ const {
   getLiveDeviceSensorData,
   getActiveSession,
   getOwnerLiveChargingSessions,
+  getOwnerPastSessions,
 } = require("../controllers/sessionController");
 
 
@@ -169,6 +170,7 @@ const ratePerKwh = Number(device?.rate ?? 20);
 });
 
 router.get("/owner/live-charging", authMiddleware, getOwnerLiveChargingSessions);
+router.get("/owner/past-sessions", authMiddleware, getOwnerPastSessions);
 
 // 7. Update session data every 5 seconds
 router.post("/update", async (req, res) => {

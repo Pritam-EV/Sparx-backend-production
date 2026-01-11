@@ -602,6 +602,62 @@ const getOwnerLiveChargingSessions = async (req, res) => {
 };
 
 
+const getOwnerPastSessions = async (req, res) => {
+  try {
+    const ownerId = req.user.userId;
+
+    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+      return res.status(400).json({ error: "Invalid ownerId" });
+    }
+    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
+
+    // 1) Owner's devices (ownerId is an array on Device)
+    const devices = await Device.find({ ownerId: { $in: [ownerObjectId] } })
+      .select("device_id location")
+      .lean();
+
+    if (!devices.length) return res.json({ sessions: [] });
+
+    const deviceIds = devices.map((d) => d.device_id);
+    const deviceMap = Object.fromEntries(devices.map((d) => [d.device_id, d]));
+
+    // 2) Completed sessions for those devices
+    const sessions = await Session.find({
+      deviceId: { $in: deviceIds },
+      status: "completed",
+      endTime: { $ne: null },
+    })
+      .populate("userId", "name vehicleNumber")
+      .sort({ endTime: -1 })
+      .limit(200) // keep list fast; increase later if needed
+      .lean();
+
+    const shaped = sessions.map((s) => {
+      const d = deviceMap[s.deviceId];
+      const rate = Number(s.ratePerKwh || 0);
+      const energy = Number(s.energyConsumed || 0);
+
+      // amountUtilized in your backend logic is typically energyConsumed * ratePerKwh
+      const amountUtilized = Number((energy * rate).toFixed(2));
+
+      return {
+        sessionId: s.sessionId,
+        deviceId: s.deviceId,
+        address: d?.location || "—",
+        vehicleNumber: s.userId?.vehicleNumber || "—",
+        startTime: s.startTime,
+        endTime: s.endTime,
+        energyUsed: Number(energy.toFixed(2)),
+        amountUtilized,
+      };
+    });
+
+    return res.json({ sessions: shaped });
+  } catch (err) {
+    console.error("getOwnerPastSessions error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+};
 
 module.exports = {
   startSession,
@@ -612,4 +668,5 @@ module.exports = {
   getLiveDeviceSensorData,
   getActiveSession,
   getOwnerLiveChargingSessions,
+  getOwnerPastSessions,
 };
