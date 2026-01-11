@@ -16,6 +16,7 @@ const {
   getSessionById,
   getLiveDeviceSensorData,
   getActiveSession,
+  getOwnerLiveChargingSessions,
 } = require("../controllers/sessionController");
 
 
@@ -166,6 +167,8 @@ const ratePerKwh = Number(device?.rate ?? 20);
     res.status(500).json({ error: "Failed to process payment success." });
   }
 });
+
+router.get("/owner/live-charging", authMiddleware, getOwnerLiveChargingSessions);
 
 // 7. Update session data every 5 seconds
 router.post("/update", async (req, res) => {

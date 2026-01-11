@@ -544,6 +544,65 @@ const getLiveDeviceSensorData = async (req, res) => {
   }
 };
 
+const getOwnerLiveChargingSessions = async (req, res) => {
+  try {
+    const ownerId = req.user.userId;
+
+    if (!mongoose.Types.ObjectId.isValid(ownerId)) {
+      return res.status(400).json({ error: "Invalid ownerId" });
+    }
+    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
+
+    // 1) Owner's devices (Device.ownerId is an array of ObjectIds)
+    const devices = await Device.find({ ownerId: { $in: [ownerObjectId] } })
+      .select("device_id location relayOn")
+      .lean();
+
+    if (!devices.length) return res.json({ sessions: [] });
+
+    const deviceIds = devices.map((d) => d.device_id);
+    const deviceMap = Object.fromEntries(devices.map((d) => [d.device_id, d]));
+
+    // 2) Active sessions for those devices
+    const sessions = await Session.find({
+      deviceId: { $in: deviceIds },
+      status: "active",
+      endTime: null,
+    })
+      .populate("userId", "name vehicleNumber")
+      .sort({ startTime: -1 })
+      .lean();
+
+    const shaped = sessions.map((s) => {
+      const d = deviceMap[s.deviceId];
+      const selected = Number(s.energySelected || 0);
+      const consumed = Number(s.energyConsumed || 0);
+      const progress = selected > 0 ? Math.min(100, (consumed / selected) * 100) : 0;
+
+      return {
+        sessionId: s.sessionId,
+        deviceId: s.deviceId,
+        address: d?.location || "—",
+        relayOn: !!d?.relayOn,
+        vehicleNumber: s.userId?.vehicleNumber || "—",
+        userName: s.userId?.name || "—",
+        startTime: s.startTime,
+        energySelected: selected,
+        energyConsumed: consumed,
+        amountPaid: Number(s.amountPaid || 0),
+        progressPercent: Math.round(progress),
+      };
+    });
+
+    return res.json({ sessions: shaped });
+  } catch (err) {
+    console.error("getOwnerLiveChargingSessions error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+};
+
+
+
 module.exports = {
   startSession,
   endSession,
@@ -552,4 +611,5 @@ module.exports = {
   getSessionById,
   getLiveDeviceSensorData,
   getActiveSession,
+  getOwnerLiveChargingSessions,
 };
