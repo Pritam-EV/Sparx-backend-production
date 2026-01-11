@@ -446,10 +446,11 @@ const endSession = async (req, res) => {
     }
 
       // ✨ Calculate commission & paymentCharges
-      const commission = Number((device.rate * energyConsumed).toFixed(2));
+      const commissionPerKwh = Number(device.commissionPerKwh || 0);
+      const commission = Number((commissionPerKwh * Number(energyConsumed || 0)).toFixed(2));
       const pgPercent = device.PGPercent || 2;
       const paymentCharges = Number(((session.amountPaid * pgPercent) / 100).toFixed(2));
-    
+  
       const receipt = new Receipt({
     receiptId: `VIZ_${rand(10)}`,
     userId: session.userId,
@@ -466,7 +467,7 @@ const endSession = async (req, res) => {
     refund,
     commission,          // ✨ NEW
     paymentCharges,       // ✨ NEW
-    commissionPerKwh: device.commissionPerKwh || 0,
+    commissionPerKwh: device.commissionPerKwh || 0,   
     PGPercent: device.PGPercent || 0
 
   });
@@ -811,8 +812,6 @@ const getOwnerAnalytics = async (req, res) => {
         energyConsumed: Number(energy.toFixed(2)),
         amountUtilized: Number(amount.toFixed(2)),
         ratePerKwh: Number(rate.toFixed(2)),
-        commissionPerKwh,
-        pgPercent,
         commissionPerKwh: Number(r.commissionPerKwh || 0),
         PGPercent: Number(r.PGPercent || 0),
         profit,

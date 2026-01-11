@@ -23,6 +23,8 @@ const receiptSchema = new mongoose.Schema({
   },
   amountUtilized:{ type: Number, required: true },
   refund:        { type: Number, default: 0 },
+  commission: { type: Number, default: 0 }, // session.energyConsumed * device.commissionPerKwh
+  paymentCharges: { type: Number, default: 0 }, // session.amountPaid * device.PGPercent / 100
   commissionPerKwh: { type: Number, default: 0 }, // stored at receipt time
   PGPercent: { type: Number, default: 0 }, // stored at receipt time
   rating:        { type: Number, min: 1, max: 5 },     // ← new
