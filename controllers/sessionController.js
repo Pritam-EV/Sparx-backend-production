@@ -465,7 +465,10 @@ const endSession = async (req, res) => {
     amountUtilized,
     refund,
     commission,          // ✨ NEW
-    paymentCharges       // ✨ NEW
+    paymentCharges,       // ✨ NEW
+    commissionPerKwh: device.commissionPerKwh || 0,
+    PGPercent: device.PGPercent || 0
+
   });
   await receipt.save();
 
@@ -810,7 +813,10 @@ const getOwnerAnalytics = async (req, res) => {
         ratePerKwh: Number(rate.toFixed(2)),
         commissionPerKwh,
         pgPercent,
+        commissionPerKwh: Number(r.commissionPerKwh || 0),
+        PGPercent: Number(r.PGPercent || 0),
         profit,
+        
       });
     }
 
