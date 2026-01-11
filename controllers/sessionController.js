@@ -812,6 +812,9 @@ const getOwnerAnalytics = async (req, res) => {
         energyConsumed: Number(energy.toFixed(2)),
         amountUtilized: Number(amount.toFixed(2)),
         ratePerKwh: Number(rate.toFixed(2)),
+          // NEW: show these in table (amounts from receipt)
+        commission: Number(r.commission || 0),
+        paymentCharges: Number(r.paymentCharges || 0),
         commissionPerKwh: Number(r.commissionPerKwh || 0),
         PGPercent: Number(r.PGPercent || 0),
         profit,
