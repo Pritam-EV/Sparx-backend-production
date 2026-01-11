@@ -734,7 +734,7 @@ const getOwnerAnalytics = async (req, res) => {
       deviceId: { $in: selectedDeviceIds },
       createdAt: { $gte: startDate, $lte: endDate },
     })
-      .select("deviceId energyConsumed amountUtilized ratePerKwh createdAt commission paymentCharges")
+      .select("deviceId energyConsumed amountUtilized ratePerKwh createdAt commission paymentCharges commissionPerKwh PGPercent")
       .lean();
 
     // 5) helpers
@@ -779,9 +779,9 @@ const getOwnerAnalytics = async (req, res) => {
       const rate = Number(r.ratePerKwh || 0);
 
       // Use device config to calculate PG% and commissionPerKwh fields for table
-      const cfg = deviceConfigMap[r.deviceId] || { commissionPerKwh: 0, pgPercent: 0 };
-      const commissionPerKwh = Number(cfg.commissionPerKwh || 0);
-      const pgPercent = Number(cfg.pgPercent || 0);
+      const commissionPerKwh = Number(r.commissionPerKwh || 0);
+      const pgPercent = Number(r.PGPercent || 0);
+
 
       // IMPORTANT: you said commission + PG are already stored in receipts.
       // We will use receipt.commission and receipt.paymentCharges for math.
