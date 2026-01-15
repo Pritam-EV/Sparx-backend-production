@@ -136,15 +136,16 @@ router.get("/user-sessions", authMiddleware, async (req, res) => {
     });
 
     // Paginated past sessions
-    const pastSessions = await Session.find({
-      userId,
-      endTime: { $exists: true }
-    })
-      .sort({ startTime: -1 })
-      .skip(pastSessionsOffset)
-      .limit(pastSessionsLimit)
-      .select("-telemetry")
-      .lean();
+      const pastSessions = await Session.find({
+        userId,
+        endTime: { $exists: true }
+      })
+        .sort({ startTime: -1 })
+        .skip(pastSessionsOffset)
+        .limit(pastSessionsLimit)
+        .select("-telemetry")
+        .lean();  // ✅ This is correct, chain ends here
+
 
     const hasMore = (pastSessionsOffset + pastSessionsLimit) < totalPastSessions;
 
