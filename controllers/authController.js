@@ -84,8 +84,8 @@ exports.verifyPhoneCode = async (req, res) => {
 
 exports.signup = async (req, res) => {
   try {
-    const { name, email, mobile, vehicleType, role } = req.body;
-    if (!name || !email || !vehicleType) {
+    const { name, email, mobile, vehicleType, vehicleNumber, role } = req.body;
+    if (!name || !email || !vehicleType || !vehicleNumber) {
       return res.status(400).json({ message: "All fields are required" });
     }
 
@@ -120,6 +120,7 @@ exports.signup = async (req, res) => {
         name,
         email,
         mobile: phone,
+        vehicleNumber,
         vehicleType,
         role: role?.trim() || "customer",
         phoneVerified: true, // trust Firebase phone
@@ -128,6 +129,7 @@ exports.signup = async (req, res) => {
       user.name = name;
       user.email = email;
       user.vehicleType = vehicleType;
+      user.vehicleNumber = vehicleNumber;
       user.role = role?.trim() || user.role || "customer";
       user.phoneVerified = true; // ensure true for existing
     }
