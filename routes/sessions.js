@@ -110,62 +110,15 @@ router.get("/user-sessions", authMiddleware, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(userIdString)) {
       return res.status(400).json({ message: "Invalid userId in token." });
     }
-
     const userId = new mongoose.Types.ObjectId(userIdString);
-    
-    // Pagination params (default to backward compatibility)
-    const pastSessionsLimit = Math.min(
-      Math.max(1, parseInt(req.query.pastSessionsLimit || 999, 10)),  // Default ALL
-      100
-    );
-    const pastSessionsOffset = Math.max(0, parseInt(req.query.pastSessionsOffset || 0, 10));
-
-    // Active sessions (no pagination)
-    const activeSessions = await Session.find({
-      userId,
-      endTime: { $exists: false }
-    })
-      .sort({ startTime: -1 })
-      .select("-telemetry")  // Exclude large telemetry array
-      .lean();
-
-    // Total count
-    const totalPastSessions = await Session.countDocuments({
-      userId,
-      endTime: { $exists: true }
-    });
-
-    // Paginated past sessions
-      const pastSessions = await Session.find({
-        userId,
-        endTime: { $exists: true }
-      })
-        .sort({ startTime: -1 })
-        .skip(pastSessionsOffset)
-        .limit(pastSessionsLimit)
-        .select("-telemetry")
-        .lean();  // ✅ This is correct, chain ends here
-
-
-    const hasMore = (pastSessionsOffset + pastSessionsLimit) < totalPastSessions;
-
-    // ✅ Backward compatible response
-    res.json({
-      activeSessions,
-      pastSessions,
-      // Pagination info (frontend ignores for now)
-      totalPastSessions,
-      hasMore,
-      offset: pastSessionsOffset,
-      limit: pastSessionsLimit,
-    });
+    const sessions = await Session.find({ userId }).sort({ startTime: -1 });
+    const activeSessions = sessions.filter(s => !s.endTime);
+    const pastSessions = sessions.filter(s => s.endTime);
+    res.json({ activeSessions, pastSessions });
   } catch (error) {
-    console.error("Error fetching user sessions:", error);
     res.status(500).json({ message: "Server error" });
   }
 });
-
-
 
 // 3. Active session lookup (unchanged)
 // Add this route for getting the active session of the authenticated user
