@@ -16,15 +16,15 @@ function startMqttSubscriber() {
     console.log('✅ Backend connected to MQTT broker');
 
     // Subscribe only to unified Telemetry topic from devices
-  const topics = [
-    'viz/+/Telemetry',           // Existing
-    'device/+/session/end'       // ← ADD THIS (matches firmware)
-  ];
+    const topics = ['viz/+/Telemetry', 'device/+/session/end'];
+    mqttClient.subscribe(topics, { qos: 1 }, (err) => {  // ✅ Correct: array + options object
+      if (err) {
+        console.error('MQTT subscribe failed:', err);
+      } else {
+        console.log('✅ Subscribed to:', topics);
+      }
+    });
 
-  mqttClient.subscribe(topics.map(t => ({ topic: t, qos: 1 })), (err) => {
-    if (err) console.error('MQTT subscribe failed:', err);
-    else console.log('Subscribed to:', topics);
-  });
   });
 
   mqttClient.on('message', async (topic, buf) => {
