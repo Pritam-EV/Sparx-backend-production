@@ -16,20 +16,15 @@ function startMqttSubscriber() {
     console.log('✅ Backend connected to MQTT broker');
 
     // Subscribe only to unified Telemetry topic from devices
-    const topics = [
-      'viz/+/Telemetry'
-    ];
+  const topics = [
+    'viz/+/Telemetry',           // Existing
+    'device/+/session/end'       // ← ADD THIS (matches firmware)
+  ];
 
-    mqttClient.subscribe(topics, { qos: 1 }, (err, granted) => {
-      if (err) {
-        console.error('❌ MQTT subscribe failed:', err);
-      } else {
-        console.log('Subscribed to topics:');
-        granted.forEach(sub => {
-          console.log(` Topic: ${sub.topic}, QoS: ${sub.qos}`);
-        });
-      }
-    });
+  mqttClient.subscribe(topics.map(t => ({ topic: t, qos: 1 })), (err) => {
+    if (err) console.error('MQTT subscribe failed:', err);
+    else console.log('Subscribed to:', topics);
+  });
   });
 
   mqttClient.on('message', async (topic, buf) => {
@@ -37,6 +32,42 @@ function startMqttSubscriber() {
     console.log(`[MQTT RX] topic=${topic} payload=${payload}`);
 
     const parts = topic.split('/');
+// device/<DEVICEID>/session/end  ← Firmware publishes here!
+if (topic.startsWith('device/') && topic.endsWith('/session/end')) {
+  const deviceId = topic.split('/')[1];  // "GLIDE01"
+  let msg;
+  try {
+    msg = JSON.parse(payload.toString());
+  } catch (e) {
+    console.error('Invalid JSON on session/end:', e);
+    return;
+  }
+
+  const { sessionId, endTime, energy_kWh, endTrigger } = msg;
+  if (!sessionId || !endTime || !endTrigger) {
+    console.warn('Incomplete session/end:', msg);
+    return;
+  }
+
+  console.log('[MQTT] session/end received:', { deviceId, sessionId, endTrigger, energy_kWh });
+
+  try {
+    const { completeSessionInternal } = require('./controllers/sessionController');  // From previous fix
+    const result = await completeSessionInternal({
+      sessionId,
+      endTime: new Date(endTime).toISOString(),  // Convert "2026-01-15 06:12:00" → ISO
+      endTrigger,
+      deltaEnergy: Number(energy_kWh),            // Firmware "energy_kWh" → deltaEnergy
+      deviceIdOverride: deviceId
+    });
+    console.log('[MQTT] ✅ Session auto-completed + receipt created:', sessionId);
+  } catch (err) {
+    console.error('[MQTT] Failed auto-completing session:', err);
+  }
+  return;  // Skip telemetry processing
+}
+
+
 
     // Expect: viz/{deviceId}/Telemetry
     if (parts.length < 3 || parts[0] !== 'viz' || parts[2] !== 'Telemetry') {

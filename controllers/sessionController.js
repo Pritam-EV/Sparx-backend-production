@@ -400,109 +400,125 @@ const resumeSession = async (req, res) => {
   }
 };
 
+
+async function completeSessionInternal({
+  sessionId,
+  endTime,
+  endTrigger,
+  deltaEnergy,
+  amountUsed,
+  currentEnergy,
+  deviceIdOverride,
+  sendStopMqtt = false
+}) {
+  const session = await Session.findOne({ sessionId });
+  if (!session) throw new Error("Session not found");
+
+  // Idempotency: if already completed, return existing receipt if any
+  if (session.status === "completed") {
+    const existingReceipt = await Receipt.findOne({ sessionId: session.sessionId });
+    return { session, receipt: existingReceipt };
+  }
+
+  const device = await Device.findOne({ device_id: deviceIdOverride || session.deviceId });
+
+  // Use deltaEnergy if provided (from device), else keep DB value
+  if (deltaEnergy !== undefined) session.energyConsumed = Number(deltaEnergy) || 0;
+  if (amountUsed !== undefined) session.amountUsed = amountUsed;
+
+  const rate = session.ratePerKwh ?? device?.rate ?? 20;
+  const energyConsumed = Number(session.energyConsumed || 0);
+  const amountUtilized = Number((energyConsumed * rate).toFixed(2));
+  const refund = Number(Math.max(0, Number(session.amountPaid || 0) - amountUtilized).toFixed(2));
+
+  session.endTime = new Date(endTime);
+  session.endTrigger = endTrigger;
+  session.status = "completed";
+  session.endEnergy = currentEnergy || (session.startEnergy || 0) + energyConsumed;
+  await session.save();
+
+  // Update device state
+  if (device) {
+    device.status = "Available";
+    device.current_session_id = null;
+    device.relayOn = false;
+    await device.save();
+  }
+
+  // Create receipt if not already present
+  let receipt = await Receipt.findOne({ sessionId: session.sessionId });
+  if (!receipt) {
+    const commissionPerKwh = Number(device?.commissionPerKwh || 0);
+    const commission = Number((commissionPerKwh * energyConsumed).toFixed(2));
+    const pgPercent = Number(device?.PGPercent || 2);
+    const paymentCharges = Number(((Number(session.amountPaid || 0) * pgPercent) / 100).toFixed(2));
+
+    receipt = new Receipt({
+      receiptId: `VIZ_${rand(10)}`,
+      userId: session.userId,
+      deviceId: session.deviceId,
+      sessionId: session.sessionId,
+      transactionId: session.transactionId,
+      energyConsumed,
+      energySelected: session.energySelected,
+      amountSelected: session.amountSelected,
+      amountPaid: session.amountPaid,
+      ratePerKwh: session.ratePerKwh,
+      discountApplied: session.discountApplied || 0,
+      amountUtilized,
+      refund,
+      commission,
+      paymentCharges,
+      commissionPerKwh: device?.commissionPerKwh || 0,
+      PGPercent: device?.PGPercent || 0
+    });
+    await receipt.save();
+  }
+
+  // Only for manual stop (optional)
+  if (sendStopMqtt) {
+    const topic = `viz/${deviceIdOverride || session.deviceId}/sessionCommand`;
+    const payload = { command: "stop", SessionId: sessionId, endTrigger };
+    await logCommand(session._id, { type: "stop", topic, payload, mqtt: { publishedAt: new Date() } });
+
+    // Fire-and-forget publish; do not block completion
+    mqttClient.publish(topic, JSON.stringify(payload), { qos: 1, retain: false }, (err) => {
+      if (err) console.error("❌ MQTT publish failed (stop):", err);
+    });
+  }
+
+  return { session, receipt };
+}
+
+
+
 // ✅ POST /api/sessions/stop
 const endSession = async (req, res) => {
   console.log("Stop request received:", req.body);
   try {
     const { sessionId, endTime, endTrigger, currentEnergy, deltaEnergy, amountUsed, deviceId } = req.body;
-
     if (!sessionId || !endTime || !endTrigger) {
       return res.status(400).json({ error: "Missing required fields." });
     }
 
-    const session = await Session.findOne({ sessionId });
-    if (!session) return res.status(404).json({ error: "Session not found." });
-
-    
-    // 1️⃣ Define energyConsumed so it’s available
-    const energyConsumed = session.energyConsumed || 0;
-
-    // 2️⃣ Compute amountUtilized and refund
-    const device = await Device.findOne({ device_id: deviceId || session.deviceId });
-    const rate = session.ratePerKwh ?? device?.rate ?? 20;
-    const amountUtilized = Number((energyConsumed * rate).toFixed(2));
-    const refund = Number(Math.max(0, session.amountPaid - amountUtilized).toFixed(2));
-
-    // Update session
-    session.endTime = new Date(endTime);
-    session.endTrigger = endTrigger;
-    if (deltaEnergy !== undefined) session.energyConsumed = deltaEnergy;
-    if (amountUsed !== undefined) session.amountUsed = amountUsed;
-    session.status = "completed";
-    session.endEnergy = currentEnergy || session.startEnergy + session.energyConsumed;
-    await session.save();
-
-
-    // Free up device
-    if (device) {
-      const rate = device.rate || 20;
-      device.status = "Available";
-      const energyConsumed = session.energyConsumed;
-      const amountUtilized = Number((energyConsumed * rate).toFixed(2));
-      const refund = Number(Math.max(0, session.amountPaid - amountUtilized).toFixed(2));
-      device.current_session_id = null;
-      device.relayOn = false;
-      await device.save();
-    }
-
-      // ✨ Calculate commission & paymentCharges
-      const commissionPerKwh = Number(device.commissionPerKwh || 0);
-      const commission = Number((commissionPerKwh * Number(energyConsumed || 0)).toFixed(2));
-      const pgPercent = device.PGPercent || 2;
-      const paymentCharges = Number(((session.amountPaid * pgPercent) / 100).toFixed(2));
-  
-      const receipt = new Receipt({
-    receiptId: `VIZ_${rand(10)}`,
-    userId: session.userId,
-    deviceId: session.deviceId,
-    sessionId: session.sessionId,
-    transactionId: session.transactionId,
-    energyConsumed,
-    energySelected: session.energySelected,
-    amountSelected: session.amountSelected,
-    amountPaid: session.amountPaid,
-    ratePerKwh: session.ratePerKwh, // ✅ NEW (rate stored at session start)
-    discountApplied: session.discountApplied || 0,
-    amountUtilized,
-    refund,
-    commission,          // ✨ NEW
-    paymentCharges,       // ✨ NEW
-    commissionPerKwh: device.commissionPerKwh || 0,   
-    PGPercent: device.PGPercent || 0
-
-  });
-  await receipt.save();
-
-    // Publish stop command
-const topic = `viz/${deviceId || session.deviceId}/sessionCommand`;
-const payload = { 
-  command: "stop", 
-  SessionId: sessionId,          // ✅ PascalCase
-  endTrigger 
-};
-
-console.log("📡 Publishing STOP to device:", topic, payload);
-await logCommand(session._id, {
-  type: "stop",
-  topic,
-  payload,
-  mqtt: { publishedAt: new Date() }
-});
-
-    mqttClient.publish(topic, JSON.stringify(payload), { qos: 1, retain: false }, (err) => {
-      if (err) {
-        console.error("❌ MQTT publish failed (stop):", err);
-        return res.status(500).json({ error: "Session ended locally but failed to send stop command" });
-      }
-      console.log(`✅ MQTT stop command sent to ${deviceId || session.deviceId}`);
-      res.status(200).json({ message: "Session ended successfully.", session });
+    const { session, receipt } = await completeSessionInternal({
+      sessionId,
+      endTime,
+      endTrigger,
+      currentEnergy,
+      deltaEnergy,
+      amountUsed,
+      deviceIdOverride: deviceId,
+      sendStopMqtt: true
     });
 
+    return res.status(200).json({ message: "Session ended successfully.", session, receipt });
   } catch (err) {
     console.error("Error ending session:", err);
-    res.status(500).json({ error: "Failed to end session." });
+    return res.status(500).json({ error: "Failed to end session." });
   }
 };
+
 
 
 /**
@@ -870,4 +886,5 @@ module.exports = {
   getOwnerLiveChargingSessions,
   getOwnerPastSessions,
   getOwnerAnalytics,
+  completeSessionInternal
 };
