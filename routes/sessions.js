@@ -113,32 +113,29 @@ router.get("/user-sessions", authMiddleware, async (req, res) => {
 
     const userId = new mongoose.Types.ObjectId(userIdString);
     
-    // ✅ Extract pagination params from query
+    // Pagination params (default to backward compatibility)
     const pastSessionsLimit = Math.min(
-      Math.max(1, parseInt(req.query.pastSessionsLimit || 10, 10)),
-      100  // Max 100 per request
+      Math.max(1, parseInt(req.query.pastSessionsLimit || 999, 10)),  // Default ALL
+      100
     );
-    const pastSessionsOffset = Math.max(
-      0,
-      parseInt(req.query.pastSessionsOffset || 0, 10)
-    );
+    const pastSessionsOffset = Math.max(0, parseInt(req.query.pastSessionsOffset || 0, 10));
 
-    // ✅ Fetch active sessions (no pagination - usually only 0-1)
+    // Active sessions (no pagination)
     const activeSessions = await Session.find({
       userId,
-      endTime: { $exists: false }  // No endTime = active
+      endTime: { $exists: false }
     })
       .sort({ startTime: -1 })
-      .select("sessionId deviceId transactionId userId startTime status amountPaid energyConsumed energySelected amountUsed")
+      .select("-telemetry")  // Exclude large telemetry array
       .lean();
 
-    // ✅ Count total past sessions
+    // Total count
     const totalPastSessions = await Session.countDocuments({
       userId,
-      endTime: { $exists: true }  // Has endTime = past
+      endTime: { $exists: true }
     });
 
-    // ✅ Fetch paginated past sessions
+    // Paginated past sessions
     const pastSessions = await Session.find({
       userId,
       endTime: { $exists: true }
@@ -146,15 +143,16 @@ router.get("/user-sessions", authMiddleware, async (req, res) => {
       .sort({ startTime: -1 })
       .skip(pastSessionsOffset)
       .limit(pastSessionsLimit)
-      .select("sessionId deviceId transactionId userId startTime endTime status amountPaid energyConsumed energySelected amountUsed discountApplied")
+      .select("-telemetry")
       .lean();
 
-    // ✅ Calculate if there are more sessions
     const hasMore = (pastSessionsOffset + pastSessionsLimit) < totalPastSessions;
 
+    // ✅ Backward compatible response
     res.json({
       activeSessions,
       pastSessions,
+      // Pagination info (frontend ignores for now)
       totalPastSessions,
       hasMore,
       offset: pastSessionsOffset,
@@ -165,6 +163,7 @@ router.get("/user-sessions", authMiddleware, async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+
 
 
 // 3. Active session lookup (unchanged)
