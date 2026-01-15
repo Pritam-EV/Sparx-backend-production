@@ -110,15 +110,62 @@ router.get("/user-sessions", authMiddleware, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(userIdString)) {
       return res.status(400).json({ message: "Invalid userId in token." });
     }
+
     const userId = new mongoose.Types.ObjectId(userIdString);
-    const sessions = await Session.find({ userId }).sort({ startTime: -1 });
-    const activeSessions = sessions.filter(s => !s.endTime);
-    const pastSessions = sessions.filter(s => s.endTime);
-    res.json({ activeSessions, pastSessions });
+    
+    // ✅ Extract pagination params from query
+    const pastSessionsLimit = Math.min(
+      Math.max(1, parseInt(req.query.pastSessionsLimit || 10, 10)),
+      100  // Max 100 per request
+    );
+    const pastSessionsOffset = Math.max(
+      0,
+      parseInt(req.query.pastSessionsOffset || 0, 10)
+    );
+
+    // ✅ Fetch active sessions (no pagination - usually only 0-1)
+    const activeSessions = await Session.find({
+      userId,
+      endTime: { $exists: false }  // No endTime = active
+    })
+      .sort({ startTime: -1 })
+      .select("sessionId deviceId transactionId userId startTime status amountPaid energyConsumed energySelected amountUsed")
+      .lean();
+
+    // ✅ Count total past sessions
+    const totalPastSessions = await Session.countDocuments({
+      userId,
+      endTime: { $exists: true }  // Has endTime = past
+    });
+
+    // ✅ Fetch paginated past sessions
+    const pastSessions = await Session.find({
+      userId,
+      endTime: { $exists: true }
+    })
+      .sort({ startTime: -1 })
+      .skip(pastSessionsOffset)
+      .limit(pastSessionsLimit)
+      .select("sessionId deviceId transactionId userId startTime endTime status amountPaid energyConsumed energySelected amountUsed discountApplied")
+      .lean();
+
+    // ✅ Calculate if there are more sessions
+    const hasMore = (pastSessionsOffset + pastSessionsLimit) < totalPastSessions;
+
+    res.json({
+      activeSessions,
+      pastSessions,
+      totalPastSessions,
+      hasMore,
+      offset: pastSessionsOffset,
+      limit: pastSessionsLimit,
+    });
   } catch (error) {
+    console.error("Error fetching user sessions:", error);
     res.status(500).json({ message: "Server error" });
   }
 });
+
 
 // 3. Active session lookup (unchanged)
 // Add this route for getting the active session of the authenticated user
