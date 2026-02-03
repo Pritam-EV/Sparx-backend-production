@@ -4,40 +4,63 @@ const deviceSchema = new mongoose.Schema({
 
   device_id: { type: String, required: true },
 
+  // NEW: Serial Number for device identification
+  serialNumber: { type: String, required: false, unique: true, sparse: true },
+
   // If ownerId is actually an array in DB, keep it as [ObjectId]
-  ownerId: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true }], // array of 4 ids [file:1]
+  ownerId: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true }],
 
-  location: { type: String, required: true }, // e.g. "DMart, Karve Nagar, Pune" [file:1]
+  // NEW: GST Number for partner onboarding
+  gstNumber: { type: String, required: false, trim: true },
+  hasGST: { type: Boolean, default: false },
 
-  lat: { type: Number, required: true },      // 18.4846539 [file:1]
-  lng: { type: Number, required: true },      // 73.8109222 [file:1]
+  // NEW: Meter details for partner onboarding
+  meterType: { 
+    type: String, 
+    enum: ['Green Meter', 'Commercial', 'Residential'], 
+    required: false 
+  },
+  meterConsumerNumber: { type: String, required: false, trim: true },
 
-  status: { type: String, required: true },   // "Offline" [file:1]
+  location: { type: String, required: true },
 
-  charger_type: { type: String, required: true }, // "Universal 3.3kV Socket" [file:1]
+  lat: { type: Number, required: true },
+  lng: { type: Number, required: true },
+
+  status: { type: String, required: true },
+
+  charger_type: { type: String, required: true },
 
   current_session_id: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'Session', 
     default: null 
-  }, // null in sample [file:1]
+  },
 
-  rate: { type: Number, required: true, default: 20 }, // you can change 9 via data, default kept [file:1]
+  rate: { type: Number, required: true, default: 20 },
 
-  area: { type: String, required: true },     // "Warje" [file:1]
-  city: { type: String, required: true },     // "Pune" [file:1]
-  state: { type: String, required: true },    // "Maharashtra" [file:1]
+  area: { type: String, required: true },
+  city: { type: String, required: true },
+  state: { type: String, required: true },
 
-  totalenergy: { type: Number, required: false, default: 0 }, // 0 in sample [file:1]
+  totalenergy: { type: Number, required: false, default: 0 },
 
-  relayOn: { type: Boolean, default: false }, // false in sample [file:1]
+  relayOn: { type: Boolean, default: false },
 
-  lastSeen: { type: Date, default: Date.now }, // 2026-01-09T22:00:21... [file:1]
+  lastSeen: { type: Date, default: Date.now },
 
-  // NEW FIELDS
-  commissionPerKwh: { type: Number, default: 2 }, // from sample and your requirement
-  PGPercent: { type: Number, default: 2 }         // PG% mapped to a valid field name
-});
+  commissionPerKwh: { type: Number, default: 2 },
+  PGPercent: { type: Number, default: 2 },
+
+  // NEW: Partner onboarding status
+  onboardingStatus: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'pending'
+  },
+  onboardedAt: { type: Date },
+  onboardedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+}, { timestamps: true });
 
 const Device = mongoose.models.Device || mongoose.model('Device', deviceSchema);
 
