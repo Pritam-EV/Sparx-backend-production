@@ -22,6 +22,7 @@ const userRoutes    = require('./routes/users'); // Adjust path as needed
 const analyticsRoutes = require('./routes/analytics');
 const receiptsRoutes = require('./routes/receipts'); // add
 const operatorRoutes = require("./routes/operator");
+const partnerRoutes = require('./routes/partner');
 
 // MQTT Subscriber (if you still need it)
 const startMqttSubscriber = require("./mqttSubscriber");
@@ -80,6 +81,7 @@ app.options("*", cors({
 // Serve static assets (e.g. your SVG/clipart for SessionStart page):
 app.use(express.static("public"));
 app.use('/api/coupons', couponsRouter);
+app.use('/api/partner', partnerRoutes);
 // ─── DATABASE ────────────────────────────────────────────────────────────────
 mongoose
   .connect(process.env.MONGO_URI)  // ✅ Modern, no options needed (Node 20+)
