@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const Device = require('../models/device');
 const User = require('../models/User');
+const authMiddleware = require('../middleware/authMiddleware');
+const authorizeRoles = require('../middleware/roleMiddleware');
 
 // POST /api/partner/onboard-device
 // Partner device onboarding endpoint
