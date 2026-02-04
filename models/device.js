@@ -5,7 +5,7 @@ const deviceSchema = new mongoose.Schema({
   device_id: { type: String, required: true },
 
   // NEW: Serial Number for device identification
-  serialNumber: { type: String, required: false, unique: true, sparse: true },
+  serialNumber: { type: String, required: false, trim: true },
 
   // If ownerId is actually an array in DB, keep it as [ObjectId]
   ownerId: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true }],

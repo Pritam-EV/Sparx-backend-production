@@ -1,89 +1,68 @@
 const express = require('express');
 const router = express.Router();
 const Device = require('../models/device');
+const User = require('../models/User');
 
 // POST /api/partner/onboard-device
 // Partner device onboarding endpoint
 router.post('/onboard-device', async (req, res) => {
   try {
-    const {
-      userId,
-      gstNumber,
-      hasGST,
-      meterType,
-      meterConsumerNumber,
-      deviceId,
-      serialNumber,
-      location,
-      lat,
-      lng,
-      rate,
-      area,
-      city,
-      state
-    } = req.body;
+// 1️⃣ Find device by deviceId
+const device = await Device.findOne({ device_id: deviceId });
 
-    // Validation
-    if (!deviceId) {
-      return res.status(400).json({ error: 'Device ID is required' });
-    }
+if (!device) {
+  return res.status(404).json({ error: 'Device ID does not exist' });
+}
 
-    if (!meterType) {
-      return res.status(400).json({ error: 'Meter Type is required' });
-    }
+// 2️⃣ Match serial number
+if (!serialNumber || device.serialNumber !== serialNumber) {
+  return res.status(400).json({ error: 'Invalid serial number for this device' });
+}
 
-    if (!meterConsumerNumber) {
-      return res.status(400).json({ error: 'Meter Consumer Number is required' });
-    }
+// 3️⃣ Add userId to ownerId array (avoid duplicates)
+if (!device.ownerId.map(id => id.toString()).includes(userId)) {
+  device.ownerId.push(userId);
+}
 
-    if (!location || !lat || !lng || !area || !city || !state) {
-      return res.status(400).json({ error: 'Location details are required' });
-    }
+// 4️⃣ Update onboarding + location + meter details
+device.gstNumber = hasGST ? gstNumber : undefined;
+device.hasGST = hasGST || false;
+device.meterType = meterType;
+device.meterConsumerNumber = meterConsumerNumber;
 
-    // Check if device already exists
-    const existingDevice = await Device.findOne({ device_id: deviceId });
-    if (existingDevice) {
-      return res.status(400).json({ error: 'Device with this ID already exists' });
-    }
+device.location = location;
+device.lat = parseFloat(lat);
+device.lng = parseFloat(lng);
+device.area = area;
+device.city = city;
+device.state = state;
 
-    // Check if serial number already exists (if provided)
-    if (serialNumber) {
-      const existingSerial = await Device.findOne({ serialNumber });
-      if (existingSerial) {
-        return res.status(400).json({ error: 'Device with this serial number already exists' });
-      }
-    }
+if (rate) {
+  device.rate = rate;
+}
 
-    // Create new device
-    const newDevice = new Device({
-      device_id: deviceId,
-      serialNumber: serialNumber || undefined,
-      ownerId: userId ? [userId] : [],
-      gstNumber: hasGST ? gstNumber : undefined,
-      hasGST: hasGST || false,
-      meterType,
-      meterConsumerNumber,
-      location,
-      lat: parseFloat(lat),
-      lng: parseFloat(lng),
-      status: 'Offline',
-      charger_type: 'Universal 3.3kV Socket', // Default, can be made configurable
-      rate: rate || 20,
-      area,
-      city,
-      state,
-      onboardingStatus: 'pending',
-      onboardedAt: new Date(),
-      onboardedBy: userId || undefined
-    });
+device.onboardingStatus = 'approved';
+device.onboardedAt = new Date();
+device.onboardedBy = userId;
 
-    await newDevice.save();
+// 5️⃣ Save device
+await device.save();
 
-    res.status(201).json({
-      success: true,
-      message: 'Device onboarded successfully',
-      device: newDevice
-    });
+// 6️⃣ Force user role → OWNER
+await User.findByIdAndUpdate(
+  userId,
+  { role: 'owner' },
+  { new: true }
+);
+
+// 7️⃣ Success response
+return res.status(200).json({
+  success: true,
+  message: 'Device linked successfully. You are now an owner.',
+  deviceId: device.device_id
+});
+
+
 
   } catch (error) {
     console.error('Error onboarding device:', error);
