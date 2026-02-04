@@ -5,10 +5,10 @@ const User = require('../models/User');
 
 // POST /api/partner/onboard-device
 // Partner device onboarding endpoint
-router.post('/onboard-device', async (req, res) => {
+router.post('/onboard-device', authMiddleware, async (req, res) => {
   try {
-    const {
-  userId,
+    const userId = req.user.userId;
+const {
   gstNumber,
   hasGST,
   meterType,
@@ -24,9 +24,11 @@ router.post('/onboard-device', async (req, res) => {
   state
 } = req.body;
 
-if (!userId || !deviceId || !serialNumber) {
-  return res.status(400).json({ error: 'userId, deviceId and serialNumber are required' });
+
+if (!deviceId || !serialNumber) {
+  return res.status(400).json({ error: 'deviceId and serialNumber are required' });
 }
+
 
 if (!meterType || !meterConsumerNumber) {
   return res.status(400).json({ error: 'Meter details are required' });
