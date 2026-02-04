@@ -7,6 +7,35 @@ const User = require('../models/User');
 // Partner device onboarding endpoint
 router.post('/onboard-device', async (req, res) => {
   try {
+    const {
+  userId,
+  gstNumber,
+  hasGST,
+  meterType,
+  meterConsumerNumber,
+  deviceId,
+  serialNumber,
+  location,
+  lat,
+  lng,
+  rate,
+  area,
+  city,
+  state
+} = req.body;
+
+if (!userId || !deviceId || !serialNumber) {
+  return res.status(400).json({ error: 'userId, deviceId and serialNumber are required' });
+}
+
+if (!meterType || !meterConsumerNumber) {
+  return res.status(400).json({ error: 'Meter details are required' });
+}
+
+if (!location || !lat || !lng || !area || !city || !state) {
+  return res.status(400).json({ error: 'Location details are required' });
+}
+
 // 1️⃣ Find device by deviceId
 const device = await Device.findOne({ device_id: deviceId });
 
@@ -23,6 +52,7 @@ if (!serialNumber || device.serialNumber !== serialNumber) {
 if (!device.ownerId.map(id => id.toString()).includes(userId)) {
   device.ownerId.push(userId);
 }
+
 
 // 4️⃣ Update onboarding + location + meter details
 device.gstNumber = hasGST ? gstNumber : undefined;
@@ -77,6 +107,7 @@ return res.status(200).json({
 // Get all devices for a partner
 router.get('/devices/:userId', async (req, res) => {
   try {
+    
     const { userId } = req.params;
 
     const devices = await Device.find({ 
