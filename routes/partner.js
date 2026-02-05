@@ -32,6 +32,18 @@ router.post('/onboard-device', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.userId;
 const {
+      consent,
+      termsVersion,
+      termsHash,
+      aadhaarOrUdyam,
+      panNumber,
+      nameAsPerKyc,
+      bankAccountNumber,
+      ifscCode,
+      accountHolderName,
+      branchName,
+      fingerprint,
+
   gstNumber,
   hasGST,
   meterType,
@@ -83,37 +95,37 @@ if (!activeTerms) {
 
 const meta = extractClientMeta(req);
 
-await DeviceConsent.create({
-  userId,
-  deviceId: device.device_id,
+// await DeviceConsent.create({
+//   userId,
+//   deviceId: device.device_id,
 
-  termsVersion: activeTerms.version,
-  termsHash: activeTerms.contentHash,
+//   termsVersion: activeTerms.version,
+//   termsHash: activeTerms.contentHash,
 
-  accepted: true,
+//   accepted: true,
 
 
-  acceptedAt: new Date(),
+//   acceptedAt: new Date(),
 
-  clientIp: meta.clientIp,
-  userAgent: meta.userAgent,
-  browser: meta.browser,
-  os: meta.os,
-  platform: meta.platform,
+//   clientIp: meta.clientIp,
+//   userAgent: meta.userAgent,
+//   browser: meta.browser,
+//   os: meta.os,
+//   platform: meta.platform,
 
-  deviceFingerprint: Buffer
-    .from(`${meta.userAgent}-${meta.platform}`)
-    .toString("base64"),
+//   deviceFingerprint: Buffer
+//     .from(`${meta.userAgent}-${meta.platform}`)
+//     .toString("base64"),
 
-  aadhaarOrUdyam,
-  panNumber,
-  nameAsPerKyc,
+//   aadhaarOrUdyam,
+//   panNumber,
+//   nameAsPerKyc,
 
-  bankAccountNumber,
-  ifscCode,
-  accountHolderName,
-  branchName
-});
+//   bankAccountNumber,
+//   ifscCode,
+//   accountHolderName,
+//   branchName
+// });
 
 
 // 3️⃣ Add userId to ownerId array (avoid duplicates)
@@ -160,19 +172,7 @@ await User.findByIdAndUpdate(
   { new: true }
 );
 
-const {
-  consent,
-  termsVersion,
-  termsHash,
-  aadhaarOrUdyam,
-  panNumber,
-  nameAsPerKyc,
-  bankAccountNumber,
-  ifscCode,
-  accountHolderName,
-  branchName,
-  fingerprint
-} = req.body;
+
 
 if (!consent || !termsVersion || !termsHash) {
   return res.status(400).json({ error: 'Terms acceptance required' });
