@@ -24,6 +24,29 @@ router.get('/terms/active', async (req, res) => {
   });
 });
 
+// GET commission for device
+router.get('/device/:deviceId/commission', authMiddleware, async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+
+    const device = await Device.findOne(
+      { device_id: deviceId },
+      { commissionPerKwh: 1 }
+    ).lean();
+
+    if (!device) {
+      return res.status(404).json({ error: "Device not found" });
+    }
+
+    res.json({
+      commissionPerKwh: device.commissionPerKwh
+    });
+  } catch (err) {
+    console.error("Commission fetch error:", err);
+    res.status(500).json({ error: "Failed to fetch commission" });
+  }
+});
+
 // POST /api/partner/onboard-device
 // Partner device onboarding endpoint
 

@@ -55,7 +55,12 @@ const deviceSchema = new mongoose.Schema({
 
   lastSeen: { type: Date, default: Date.now },
 
-  commissionPerKwh: { type: Number, default: 2 },
+  commissionPerKwh: {
+  type: Number,
+  required: true,
+  default: 2.36 // safe fallback
+},
+
   PGPercent: { type: Number, default: 2 },
 
   // NEW: Partner onboarding status
