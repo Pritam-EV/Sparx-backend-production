@@ -6,6 +6,12 @@ const deviceSchema = new mongoose.Schema({
 
   // NEW: Serial Number for device identification
   serialNumber: { type: String, required: false, trim: true },
+  GSTModel: {
+    type: String,
+    enum: ["fullGST", "nonGST", "pureagent"], // future-proof
+    required: true,
+    default: "fullGST"
+  },
 
   // If ownerId is actually an array in DB, keep it as [ObjectId]
   ownerId: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true }],

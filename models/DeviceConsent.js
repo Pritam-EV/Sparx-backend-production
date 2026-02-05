@@ -7,9 +7,9 @@ const DeviceConsentSchema = new mongoose.Schema({
     required: true
   },
 
-  GSTModel: {
+GSTModel: {
   type: String,
-  enum: ["fullGST"],
+  enum: ["fullGST", "nonGST", "pureagent"],
   required: true
 },
 
