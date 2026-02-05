@@ -3,7 +3,6 @@ const router = express.Router();
 const Device = require('../models/device');
 const User = require('../models/User');
 const authMiddleware = require('../middleware/authMiddleware');
-const DeviceOnboardingConsent = require('../models/DeviceOnboardingConsent');
 const Terms = require("../models/TermsAndConditions");
 const DeviceConsent = require("../models/DeviceConsent");
 
