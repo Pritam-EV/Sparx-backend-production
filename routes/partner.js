@@ -7,8 +7,27 @@ const DeviceOnboardingConsent = require('../models/DeviceOnboardingConsent');
 const Terms = require("../models/TermsAndConditions");
 const DeviceConsent = require("../models/DeviceConsent");
 
+
+router.get('/terms/active', async (req, res) => {
+  const terms = await Terms.findOne({ isActive: true })
+    .sort({ effectiveFrom: -1 })
+    .lean();
+
+  if (!terms) {
+    return res.status(404).json({ error: 'No active terms found' });
+  }
+
+  res.json({
+    version: terms.version,
+    title: terms.title,
+    content: terms.content,
+    contentHash: terms.contentHash,
+  });
+});
+
 // POST /api/partner/onboard-device
 // Partner device onboarding endpoint
+
 router.post('/onboard-device', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -26,15 +45,6 @@ const {
   area,
   city,
   state
-} = req.body;
-const {
-  aadhaarOrUdyam,
-  panNumber,
-  nameAsPerKyc,
-  bankAccountNumber,
-  ifscCode,
-  accountHolderName,
-  branchName
 } = req.body;
 
 
@@ -149,6 +159,49 @@ await User.findByIdAndUpdate(
   { role: 'owner' },
   { new: true }
 );
+
+const {
+  consent,
+  termsVersion,
+  termsHash,
+  aadhaarOrUdyam,
+  panNumber,
+  nameAsPerKyc,
+  bankAccountNumber,
+  ifscCode,
+  accountHolderName,
+  branchName,
+  fingerprint
+} = req.body;
+
+if (!consent || !termsVersion || !termsHash) {
+  return res.status(400).json({ error: 'Terms acceptance required' });
+}
+
+await DeviceConsent.create({
+  userId,
+  deviceId,
+  termsVersion,
+  termsHash,
+  accepted: true,
+  acceptedAt: new Date(),
+
+  clientIp:
+    req.headers['x-forwarded-for']?.split(',')[0] ||
+    req.socket.remoteAddress,
+
+  userAgent: req.headers['user-agent'],
+  deviceFingerprint: fingerprint,
+
+  aadhaarOrUdyam,
+  panNumber,
+  nameAsPerKyc,
+  bankAccountNumber,
+  ifscCode,
+  accountHolderName,
+  branchName,
+});
+
 
 // 7️⃣ Success response
 return res.status(200).json({
