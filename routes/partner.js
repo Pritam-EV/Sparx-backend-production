@@ -24,6 +24,72 @@ router.get('/terms/active', async (req, res) => {
   });
 });
 
+// Verify Device ID existence
+router.post('/verify-device', authMiddleware, async (req, res) => {
+  const { deviceId } = req.body;
+
+  if (!deviceId) {
+    return res.status(400).json({ error: 'deviceId is required' });
+  }
+
+  const device = await Device.findOne({ device_id: deviceId }).lean();
+
+  if (!device) {
+    return res.status(404).json({ error: 'Invalid Device ID' });
+  }
+
+  return res.json({
+    success: true,
+    message: 'Device ID verified'
+  });
+});
+// Verify Device ID existence
+router.post('/verify-device', authMiddleware, async (req, res) => {
+  const { deviceId } = req.body;
+
+  if (!deviceId) {
+    return res.status(400).json({ error: 'deviceId is required' });
+  }
+
+  const device = await Device.findOne({ device_id: deviceId }).lean();
+
+  if (!device) {
+    return res.status(404).json({ error: 'Invalid Device ID' });
+  }
+
+  return res.json({
+    success: true,
+    message: 'Device ID verified'
+  });
+});
+
+// Verify Serial Number against Device ID
+router.post('/verify-serial', authMiddleware, async (req, res) => {
+  const { deviceId, serialNumber } = req.body;
+
+  if (!deviceId || !serialNumber) {
+    return res.status(400).json({ error: 'deviceId and serialNumber are required' });
+  }
+
+  const device = await Device.findOne({ device_id: deviceId }).lean();
+
+  if (!device) {
+    return res.status(404).json({ error: 'Device ID not found' });
+  }
+
+  if (device.serialNumber !== serialNumber) {
+    return res.status(400).json({
+      error: 'Serial number does not match this Device ID'
+    });
+  }
+
+  return res.json({
+    success: true,
+    message: 'Serial number verified'
+  });
+});
+
+
 // GET commission for device
 router.get('/device/:deviceId/commission', authMiddleware, async (req, res) => {
   try {
