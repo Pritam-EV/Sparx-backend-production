@@ -59,7 +59,7 @@ const {
   GSTModel
 } = req.body;
 
-if (!settlementModel || settlementModel !== "fullGST") {
+if (!GSTModel || GSTModel !== "fullGST") {
   return res.status(400).json({
     error: "Invalid settlement model"
   });
