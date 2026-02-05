@@ -56,9 +56,15 @@ const {
   rate,
   area,
   city,
-  state
+  state,
+  GSTModel
 } = req.body;
 
+if (!settlementModel || settlementModel !== "fullGST") {
+  return res.status(400).json({
+    error: "Invalid settlement model"
+  });
+}
 
 if (!deviceId || !serialNumber) {
   return res.status(400).json({ error: 'deviceId and serialNumber are required' });
@@ -95,7 +101,7 @@ if (!activeTerms) {
 
 const meta = extractClientMeta(req);
 
-// await DeviceConsent.create({
+// await DeviceConsent.create({onboard
 //   userId,
 //   deviceId: device.device_id,
 
@@ -160,6 +166,7 @@ device.onboardingStatus = 'approved';
 device.onboardedAt = new Date();
 device.onboardedBy = userId;
 
+device.GSTModel = GSTModel; // "fullGST"
 
 
 // 5️⃣ Save device
@@ -185,6 +192,8 @@ await DeviceConsent.create({
   termsHash,
   accepted: true,
   acceptedAt: new Date(),
+
+  GSTModel: GSTModel, 
 
   clientIp:
     req.headers['x-forwarded-for']?.split(',')[0] ||
