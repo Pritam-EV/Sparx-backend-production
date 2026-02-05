@@ -3,7 +3,7 @@ const router = express.Router();
 const Device = require('../models/device');
 const User = require('../models/User');
 const authMiddleware = require('../middleware/authMiddleware');
-const authorizeRoles = require('../middleware/roleMiddleware');
+const DeviceOnboardingConsent = require('../models/DeviceOnboardingConsent');
 
 // POST /api/partner/onboard-device
 // Partner device onboarding endpoint
@@ -78,6 +78,14 @@ if (rate) {
 device.onboardingStatus = 'approved';
 device.onboardedAt = new Date();
 device.onboardedBy = userId;
+
+await DeviceOnboardingConsent.create({
+  userId,
+  deviceId,
+  acceptedTerms: req.body.termsConsent.acceptedTerms,
+  ...req.body.termsConsent,
+  deviceIp: req.headers['x-forwarded-for'] || req.socket.remoteAddress
+});
 
 // 5️⃣ Save device
 await device.save();
