@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "ev-charging-a5c53",
+  "private_key_id": "0b8f8dbbeb4d338d55af7c53d48663a60a579756",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEuwIBADANBgkqhkiG9w0BAQEFAASCBKUwggShAgEAAoIBAQDIr5YnIjYlAMX1\nKFlih0KGiS1PpLR5Yq0lpt/nWI3NoXOSut502W8tGBp2lGRPlY/txJRMqrae8aH3\nK3j3/grz+CIXZrE3zJ1mEDGnMo66IoVZW1qW/k2OXRYM3XN8Rj8IYIxnq12uUUoZ\n99/bGuUMNLLQfsqyFRPmK4s+SUuyAFHb3VsRkb5losv50wQbiLW3XZ2k2V67BX09\n9hcqG0/QPxlqIIIe8SNvavcZ32c6ofm8bCP15/NeRCQG5cFb6do+EKnYHl9VIjnx\n5UENZLzJ4ILit0yaJ7Q16Qxua5LL6FiMnieViU0rB+U4CU4hh275ZxKgD78BxoR9\nQRMSM5D9AgMBAAECgf8pe3dOH4Q8TIH0FaMO+rva6Kq1C8FCVg30T8ojHUAygRei\np33UKXMRnynZLlM4dXHgHqzeLBYTmgl1+JvIpyUcc5iYaGG5ZvzMsWGSGKE9WGVi\nqGomoT+RbdcLpxAitWJ8w3hCSunSXnsyuEn4FaxtbsyHdwNETEG7Z292MIW1BSja\nv6NzgCF9zFfdiiOuQYoVWgxSObYiGnf8B2UojHJQ/mwXLkWZYjnY/exTaJS/2YEw\nN1mLbspalB23RVN5G3lUrQRY+Cdsa+50d1ff2OcXwXMhD27tWzHAdm8MPk9FuCvs\nRPIq2FnCsQr7PV+FcXv7HgDNx7Zwofqsp6ZbGqECgYEA5apQhEaao4HrZtWmA3k8\nhT5nBn2aMlPXB83yUO+BNa3tgth+BHs9hkKJsws+glKTBLir75vWbKmEUR58kDf8\ncEvBEQQOC4xrdjs/UuEPcpyMuetpMZKx5XUaI5t24RRX4+TFmpVVv5cDCR0L9fJf\n9KINvCm/bcmxZx1W+TJnSWECgYEA37KZXuW0/rVLWEFdwrFRLAIoWQmz7crZTegq\nQK/Jkbdei0aNyhfcxmMOuKSbs1yAOPaWfuHFubqft66AXyEGQyP63adhWll7ZZIN\ntbJ3bSNJ51s83wVAz3Cg299nEmWVkJczFmDCLlO2yySB4Mx23xeQPkCIra9bQCwQ\n2OpC4R0CgYEAwFY7KhwLA6YZY7zHVJ9izN/u3iOwUDegnLugFKIP3smzYGI4Xz5q\nzxbIRTbEedX3o/uYmokzMTtiQaE7hngspEr8/Ggd7xQBJzoFFT7AdiafQFDjfw2w\niE7ivjFDhMpJtORxjL1F27b3Ztl5m9cI/1H8GLoJxEMmnAmZPgc1MuECgYBueLgP\nSmeZBhVAb3+LP6AzmJkuZ4FJJM0uEUKUkXt9D86L/3rUW/Z2rsK9YuVVrY/REc3+\nuSa5czWfM3lIAXojPCiOwDNuuBQddAR7P7iE2FGOBNvJ08FO8HMwQmKXjj1Pm6vq\nGDytPkBekBfn2XG2+N8OLzaQd7IbvedQCFig7QKBgFPrnE+osjfLp5PyfLhNv9FP\n3DRbzW3a8ivH15ie9NcZcXreU/Bm0wScd2bIqybdV5skoFIrS9WZ7JyIVlGwVHXE\nzYf7xAySZTFYKR9pLt7apWo1tdvj53+hg8ZRUdDvONNDP3QGTwGQe352mCg6vtHT\nuJc17rReYadVPMGD5A+t\n-----END PRIVATE KEY-----\n",
+  "client_email": "firebase-app-hosting-compute@ev-charging-a5c53.iam.gserviceaccount.com",
+  "client_id": "116647449695396580093",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-app-hosting-compute%40ev-charging-a5c53.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

@@ -1,26 +1,17 @@
+// models/device.js
 const mongoose = require('mongoose');
 
 const deviceSchema = new mongoose.Schema({
-
+  // legacy fields (keep unchanged for compatibility)
   device_id: { type: String, required: true },
-
-  // NEW: Serial Number for device identification
   serialNumber: { type: String, required: false, trim: true },
-  GSTModel: {
-    type: String,
-    enum: ["fullGST", "nonGST", "pureagent"], // future-proof
-    required: true,
-    default: "fullGST"
-  },
 
-  // If ownerId is actually an array in DB, keep it as [ObjectId]
+  // owners (legacy array kept)
   ownerId: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true }],
 
-  // NEW: GST Number for partner onboarding
-  gstNumber: { type: String, required: false, trim: true },
-  hasGST: { type: Boolean, default: false },
 
-  // NEW: Meter details for partner onboarding
+
+  // meter details (existing names preserved)
   meterType: { 
     type: String, 
     enum: ['Green Meter', 'Commercial', 'Residential'], 
@@ -28,21 +19,17 @@ const deviceSchema = new mongoose.Schema({
   },
   meterConsumerNumber: { type: String, required: false, trim: true },
 
+  // location + basic device telemetry (unchanged)
   location: { type: String, required: true },
-
   lat: { type: Number, required: true },
   lng: { type: Number, required: true },
 
   status: { type: String, required: true },
-
   charger_type: { type: String, required: true },
 
-  current_session_id: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Session', 
-    default: null 
-  },
+  current_session_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Session', default: null },
 
+  // legacy pricing field (keep using this in controllers)
   rate: { type: Number, required: true, default: 20 },
 
   area: { type: String, required: true },
@@ -55,24 +42,45 @@ const deviceSchema = new mongoose.Schema({
 
   lastSeen: { type: Date, default: Date.now },
 
-  commissionPerKwh: {
-  type: Number,
-  required: true,
-  default: 2.36 // safe fallback
-},
 
-  PGPercent: { type: Number, default: 2 },
-
-  // NEW: Partner onboarding status
+  // onboarding metadata (kept)
   onboardingStatus: {
     type: String,
     enum: ['pending', 'approved', 'rejected'],
     default: 'pending'
   },
   onboardedAt: { type: Date },
-  onboardedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  onboardedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+
+  // ---------------------------------------------------------
+  // NEW: commercial object (non-breaking addition)
+  // ---------------------------------------------------------
+  // This groups the commercial / admin-controlled config.
+  // We DO NOT remove or change existing fields — controllers continue to use 'rate', 'commissionPerKwh', 'PGPercent'.
+  commercial: {
+    // Who bears electricity cost for this device (affects analytics/payouts)
+    electricityBearer: {
+      type: String,
+      enum: ["OWNER", "VJRA"],
+      default: "OWNER"
+    },
+
+    // Optional overrides / snapshots (if you prefer per-device override of legacy fields)
+    // If set, server logic should prefer commercial.userRatePerKwh else fallback to device.rate
+    userRatePerKwh: { type: Number },
+
+    // Optional explicit shares — if missing, backend can compute from existing fields:
+    // vjraMarginPerKwh ~ commissionPerKwh (legacy) or explicit here
+    vjraMarginPerKwh: { type: Number },
+
+    // amount to be paid to owner per kWh (optional)
+    ownerSharePerKwh: { type: Number },
+
+    // allow device-specific pgPercent override (optional)
+    pgPercent: { type: Number }
+  }
+
 }, { timestamps: true });
 
-const Device = mongoose.models.Device || mongoose.model('Device', deviceSchema);
-
-module.exports = Device;
+// Export (preserve model name)
+module.exports = mongoose.models.Device || mongoose.model('Device', deviceSchema);

@@ -43,25 +43,7 @@ router.post('/verify-device', authMiddleware, async (req, res) => {
     message: 'Device ID verified'
   });
 });
-// Verify Device ID existence
-router.post('/verify-device', authMiddleware, async (req, res) => {
-  const { deviceId } = req.body;
 
-  if (!deviceId) {
-    return res.status(400).json({ error: 'deviceId is required' });
-  }
-
-  const device = await Device.findOne({ device_id: deviceId }).lean();
-
-  if (!device) {
-    return res.status(404).json({ error: 'Invalid Device ID' });
-  }
-
-  return res.json({
-    success: true,
-    message: 'Device ID verified'
-  });
-});
 
 // Verify Serial Number against Device ID
 router.post('/verify-serial', authMiddleware, async (req, res) => {
@@ -97,7 +79,7 @@ router.get('/device/:deviceId/commission', authMiddleware, async (req, res) => {
 
     const device = await Device.findOne(
       { device_id: deviceId },
-      { commissionPerKwh: 1 }
+      { commercial: 1 }
     ).lean();
 
     if (!device) {
@@ -105,13 +87,15 @@ router.get('/device/:deviceId/commission', authMiddleware, async (req, res) => {
     }
 
     res.json({
-      commissionPerKwh: device.commissionPerKwh
+      commissionPerKwh: device.commercial?.vjraMarginPerKwh ?? 0
     });
+
   } catch (err) {
     console.error("Commission fetch error:", err);
     res.status(500).json({ error: "Failed to fetch commission" });
   }
 });
+
 
 // POST /api/partner/onboard-device
 // Partner device onboarding endpoint
@@ -119,8 +103,28 @@ router.get('/device/:deviceId/commission', authMiddleware, async (req, res) => {
 router.post('/onboard-device', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.userId;
+    const {
+  DEFAULT_PG_PERCENT,
+  DEFAULT_VJRA_MARGIN_PER_KWH,
+  DEFAULT_ELECTRICITY_BEARER
+} = require("../config/commercialDefaults");
+
+const acceptedTerms =
+  req.body.acceptedTerms === true ||
+  req.body.acceptedTerms === "true";
+
+if (
+  !acceptedTerms ||
+  !req.body.termsVersion ||
+  !req.body.termsHash
+) {
+  return res.status(400).json({
+    error: "Terms acceptance required"
+  });
+}
+
+
 const {
-      consent,
       termsVersion,
       termsHash,
       aadhaarOrUdyam,
@@ -132,8 +136,7 @@ const {
       branchName,
       fingerprint,
 
-  gstNumber,
-  hasGST,
+
   meterType,
   meterConsumerNumber,
   deviceId,
@@ -145,8 +148,22 @@ const {
   area,
   city,
   state,
-  GSTModel
+  GSTModel,
+
+    electricityBearer,
+
 } = req.body;
+
+if (
+  req.body.acceptedTerms !== true ||
+  !req.body.termsVersion ||
+  !req.body.termsHash
+) {
+  return res.status(400).json({
+    error: "Terms acceptance required"
+  });
+}
+
 
 if (!GSTModel || GSTModel !== "fullGST") {
   return res.status(400).json({
@@ -175,17 +192,31 @@ if (!device) {
   return res.status(404).json({ error: 'Device ID does not exist' });
 }
 
+// lock GST model
+device.GSTModel = "fullGST";
+
 // 2️⃣ Match serial number
 if (!serialNumber || device.serialNumber !== serialNumber) {
   return res.status(400).json({ error: 'Invalid serial number for this device' });
 }
 
-// Fetch active T&C
 const activeTerms = await Terms.findOne({ isActive: true });
 
 if (!activeTerms) {
-  return res.status(500).json({ error: "No active Terms & Conditions found" });
+  return res.status(500).json({
+    error: "No active Terms & Conditions found"
+  });
 }
+
+if (
+  req.body.termsVersion !== activeTerms.version ||
+  req.body.termsHash !== activeTerms.contentHash
+) {
+  return res.status(400).json({
+    error: "Terms version mismatch. Please reload and accept again."
+  });
+}
+
 
 const meta = extractClientMeta(req);
 
@@ -227,15 +258,9 @@ if (!device.ownerId.map(id => id.toString()).includes(userId)) {
   device.ownerId.push(userId);
 }
 
-if (!req.body.acceptedTerms) {
-  return res.status(400).json({ error: "Terms must be accepted" });
-}
-
 
 
 // 4️⃣ Update onboarding + location + meter details
-device.gstNumber = hasGST ? gstNumber : undefined;
-device.hasGST = hasGST || false;
 device.meterType = meterType;
 device.meterConsumerNumber = meterConsumerNumber;
 
@@ -246,15 +271,36 @@ device.area = area;
 device.city = city;
 device.state = state;
 
-if (rate) {
-  device.rate = rate;
+// 1️⃣ Base rate set by owner (EX-GST)
+const baseRate = Number(rate); // owner input, ex-GST
+
+if (!baseRate || baseRate <= 0) {
+  return res.status(400).json({
+    error: "Invalid base rate"
+  });
 }
+
+// 2️⃣ Calculate GST-inclusive user rate
+const GST_PERCENT = 18;
+const userRateInclGst = Number((baseRate * (1 + GST_PERCENT / 100)).toFixed(2));
+
+// 3️⃣ Save canonical values
+device.commercial = {
+  electricityBearer: DEFAULT_ELECTRICITY_BEARER,
+  userRatePerKwh: baseRate,          // EX-GST
+  vjraMarginPerKwh: DEFAULT_VJRA_MARGIN_PER_KWH,
+  pgPercent: DEFAULT_PG_PERCENT
+};
+
+// 4️⃣ Save user-facing rate (INCL-GST)
+device.rate = userRateInclGst;
+
 
 device.onboardingStatus = 'approved';
 device.onboardedAt = new Date();
 device.onboardedBy = userId;
 
-device.GSTModel = GSTModel; // "fullGST"
+
 
 
 // 5️⃣ Save device
@@ -268,10 +314,6 @@ await User.findByIdAndUpdate(
 );
 
 
-
-if (!consent || !termsVersion || !termsHash) {
-  return res.status(400).json({ error: 'Terms acceptance required' });
-}
 
 await DeviceConsent.create({
   userId,
@@ -290,13 +332,18 @@ await DeviceConsent.create({
   userAgent: req.headers['user-agent'],
   deviceFingerprint: fingerprint,
 
-  aadhaarOrUdyam,
-  panNumber,
-  nameAsPerKyc,
-  bankAccountNumber,
-  ifscCode,
-  accountHolderName,
-  branchName,
+    financialAcceptance: {
+    acceptedModel: "fullGST",
+    electricityPayer: electricityBearer || "OWNER"
+  },
+
+  aadhaarOrUdyam: aadhaarOrUdyam || null,
+  panNumber: panNumber || null,
+  nameAsPerKyc: nameAsPerKyc || null,
+  bankAccountNumber: bankAccountNumber || null,
+  ifscCode: ifscCode || null,
+  accountHolderName: accountHolderName || null,
+  branchName: branchName || null
 });
 
 
@@ -317,6 +364,9 @@ return res.status(200).json({
     });
   }
 });
+
+
+
 
 function extractClientMeta(req) {
   const userAgent = req.headers["user-agent"] || "";
@@ -341,28 +391,42 @@ function extractClientMeta(req) {
 
 // GET /api/partner/devices/:userId
 // Get all devices for a partner
+// routes/partner.js - Update GET /api/partner/devices/:userId
+
+// routes/partner.js - UPDATED VERSION
 router.get('/devices/:userId', async (req, res) => {
   try {
-    
     const { userId } = req.params;
+    
+    // ✅ UPDATED: Add ALL needed fields
+    const devices = await Device.find({
+      ownerId: userId
+    })
+    .select('device_id location status charger_type rate relayOn meterType meterConsumerNumber onboardedAt lastSeen updatedAt area city state _id')  // ✅ Added lastSeen, updatedAt, area, city, state, _id
+    .sort({ createdAt: -1 })
+    .lean();
 
-    const devices = await Device.find({ 
-      ownerId: userId 
-    }).sort({ createdAt: -1 });
+    // Fetch owner profile for GST info
+    const OwnerProfile = require('../models/ownerProfile');
+    const ownerProfile = await OwnerProfile.findOne({ userId }).lean();
 
     res.status(200).json({
       success: true,
       count: devices.length,
-      devices
+      devices,
+      ownerProfile: {
+        gstin: ownerProfile?.gstin || null
+      }
     });
-
   } catch (error) {
     console.error('Error fetching partner devices:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch devices', 
-      details: error.message 
+    res.status(500).json({
+      error: 'Failed to fetch devices',
+      details: error.message
     });
   }
 });
+
+
 
 module.exports = router;

@@ -445,34 +445,113 @@ async function completeSessionInternal({
     await device.save();
   }
 
-  // Create receipt if not already present
-  let receipt = await Receipt.findOne({ sessionId: session.sessionId });
-  if (!receipt) {
-    const commissionPerKwh = Number(device?.commissionPerKwh || 0);
-    const commission = Number((commissionPerKwh * energyConsumed).toFixed(2));
-    const pgPercent = Number(device?.PGPercent || 2);
-    const paymentCharges = Number(((Number(session.amountPaid || 0) * pgPercent) / 100).toFixed(2));
+// Create receipt if not already present
+let receipt = await Receipt.findOne({ sessionId: session.sessionId });
+if (!receipt) {
+  // --- START: improved receipt creation ---
+  // Constants
+  const GST_RATE = 0.18;
+  
+  // Determine key rates (prefer explicit commercial.userRatePerKwh)
+  const userRatePerKwh = Number(device?.commercial?.userRatePerKwh ?? device?.rate ?? session.ratePerKwh ?? 0);
+  
+  // If you stored device.rate as gross incl GST and commercial.userRatePerKwh is missing, derive net rate
+  let effectiveUserRatePerKwh = userRatePerKwh;
+  if (!device?.commercial?.userRatePerKwh && device?.rate) {
+    // Assume device.rate might be gross incl GST - derive net
+    effectiveUserRatePerKwh = Number((Number(device.rate) / (1 + GST_RATE)).toFixed(6));
+  }
+  
+  // Energy consumed (computed earlier in the function)
+  const energy = Number(energyConsumed || 0);
+  
+  // Calculate userRateInclGST
+  const userRateInclGST = Number((effectiveUserRatePerKwh * 1.18).toFixed(2));
+  
+  // Amounts
+  const taxableAmount = Number((energy * effectiveUserRatePerKwh).toFixed(2));
+  const gstAmount = Number((taxableAmount * GST_RATE).toFixed(2));
+  const totalAmount = Number((taxableAmount + gstAmount).toFixed(2));
+  const totalAmountAfterGST = totalAmount; // Same as totalAmount
+  
+  // Commission & platform margin
+  const commissionPerKwh = Number(device?.commercial?.vjraMarginPerKwh ?? device?.commissionPerKwh ?? 0);
+  const vjraMarginAmount = Number((commissionPerKwh * energy).toFixed(2));
+  
+  // PG fee charges on the amount actually paid
+  const pgPercent = Number(device?.commercial?.pgPercent ?? device?.PGPercent ?? 0);
+  const paymentCharges = Number((Number(session.amountPaid || totalAmount) * (pgPercent / 100)).toFixed(2));
+  
+  // Electricity cost (meter cost per kWh)
+  const electricityCostPerKwh = Number(device?.commercial?.ownerSharePerKwh ?? 0);
+  const electricityCost = Number((electricityCostPerKwh * energy).toFixed(2));
+  
+  // Owner payout calculation (for fullGST model)
+  let ownerPayout = Number((taxableAmount - vjraMarginAmount - electricityCost).toFixed(2));
+  if (ownerPayout < 0) ownerPayout = 0; // Defensive lower bound
+  
+  // Refund amount (numeric)
+  const refundAmount = Number(refund || 0);
+  
+  // Determine refund status
+  let refundStatus = "not_applicable";
+  if (refundAmount > 0) {
+    refundStatus = "initiated"; // You can change this logic as needed
+  }
+  
+  // Build receipt document
+// Build receipt document
+receipt = new Receipt({
+  receiptId: `VIZ${rand(10)}`,
+  userId: session.userId,
+  deviceId: session.deviceId,
+  sessionId: session.sessionId,
+  transactionId: session.transactionId,
+  
+  // Energy & rates
+  energyConsumed: energy,
+  energySelected: session.energySelected,
+  amountSelected: session.amountSelected,
+  amountPaid: Number(session.amountPaid || 0),
+  
+  // Rates snapshot (removed ratePerKwh)
+  userRatePerKwh: Number(effectiveUserRatePerKwh),
+  userRateInclGST: userRateInclGST, // userRatePerKwh * 1.18
+  
+  // Tax breakdown (removed totalAmountAfterGST)
+  taxableAmount,
+  gstAmount,
+  totalAmount, // This is the final bill
+  
+  // Charges
+  amountUtilized: Number(amountUtilized || 0),
+  refundAmount: refundAmount,
+  discountApplied: session.discountApplied || 0,
+  
+  // Platform (removed commission field)
+  commissionPerKwh: Number(commissionPerKwh),
+  vjraMarginAmount,
+  PGPercent: pgPercent,
+  paymentCharges,
+  
+  // Electricity & owner
+  electricityCostPerKwh,
+  electricityCost,
+  ownerPayout,
+  
+  // Refund lifecycle
+  refund: {
+    status: refundStatus,
+    refundId: refundAmount > 0 ? `REF${rand(8)}` : undefined,
+    initiatedAt: refundAmount > 0 ? new Date() : undefined
+  }
+});
 
-    receipt = new Receipt({
-      receiptId: `VIZ_${rand(10)}`,
-      userId: session.userId,
-      deviceId: session.deviceId,
-      sessionId: session.sessionId,
-      transactionId: session.transactionId,
-      energyConsumed,
-      energySelected: session.energySelected,
-      amountSelected: session.amountSelected,
-      amountPaid: session.amountPaid,
-      ratePerKwh: session.ratePerKwh,
-      discountApplied: session.discountApplied || 0,
-      amountUtilized,
-      refund,
-      commission,
-      paymentCharges,
-      commissionPerKwh: device?.commissionPerKwh || 0,
-      PGPercent: device?.PGPercent || 0
-    });
-    await receipt.save();
+await receipt.save();
+
+
+
+
   }
 
   // Only for manual stop (optional)

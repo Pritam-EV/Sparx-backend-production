@@ -20,6 +20,11 @@ const userSchema = new mongoose.Schema({
     enum: ["customer","owner","admin"],
     default: "customer",
   },
+  ownerProfile: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "OwnerProfile"
+},
+
   phoneVerified: {
     type: Boolean,
     default: false,

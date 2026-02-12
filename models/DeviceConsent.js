@@ -1,3 +1,4 @@
+// models/DeviceConsent.js
 const mongoose = require("mongoose");
 
 const DeviceConsentSchema = new mongoose.Schema({
@@ -7,12 +8,13 @@ const DeviceConsentSchema = new mongoose.Schema({
     required: true
   },
 
-GSTModel: {
-  type: String,
-  enum: ["fullGST", "nonGST", "pureagent"],
-  required: true
-},
-
+  // keep GSTModel for backward compatibility; default locked to 'fullGST' recommended.
+  GSTModel: {
+    type: String,
+    enum: ["fullGST", "nonGST", "pureagent"],
+    required: true,
+    default: "fullGST"
+  },
 
   deviceId: {
     type: String,
@@ -29,10 +31,10 @@ GSTModel: {
     required: true
   },
 
-accepted: {
-  type: Boolean,
-  required: true
-},
+  accepted: {
+    type: Boolean,
+    required: true
+  },
 
   acceptedAt: {
     type: Date,
@@ -44,29 +46,38 @@ accepted: {
     required: true
   },
 
-  userAgent: {
-    type: String
-  },
-
+  userAgent: { type: String },
   browser: String,
   os: String,
   platform: String,
 
-  // MAC ID (⚠️ explained below)
+  // deviceFingerprint kept but non-identifying (base64 hash of UA+platform)
   deviceFingerprint: String,
 
-  aadhaarOrUdyam: String,
-  panNumber: String,
-  nameAsPerKyc: String,
+  // --- removed/avoided storing highly sensitive PII permanently ---
+  // note: original file contained aadhaarOrUdyam, panNumber, nameAsPerKyc, bank details.
+  // To reduce risk we keep only minimal KYC references and DO NOT store Aadhaar in plain fields.
+  // If you must collect PAN/UDYAM, store them in a secure vault or tokenize them.
+  panNumber: { type: String }, // optional, consider tokenization
+  nameAsPerKyc: { type: String },
+gstNumber: String,
 
-  bankAccountNumber: String,
-  ifscCode: String,
-  accountHolderName: String,
-  branchName: String
+  // minimal bank info for payout verification — keep to what you already had but prefer encryption at rest
+  bankAccountNumber: { type: String },
+  ifscCode: { type: String },
+  accountHolderName: { type: String },
+  branchName: { type: String },
+
+  // NEW: financial acceptance snapshot (explicit)
+  financialAcceptance: {
+    acceptedModel: { type: String, enum: ["fullGST"], default: "fullGST" },
+    electricityPayer: { type: String, enum: ["OWNER", "VJRA"], default: "OWNER" }, // snapshot at onboarding
+    acceptedAt: { type: Date, default: Date.now }
+  }
 
 }, {
-  immutable: true,
-  timestamps: false
+  immutable: true, // consent snapshots should be immutable
+  timestamps: true
 });
 
-module.exports = mongoose.model("DeviceConsent", DeviceConsentSchema);
+module.exports = mongoose.models.DeviceConsent || mongoose.model("DeviceConsent", DeviceConsentSchema);
