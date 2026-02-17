@@ -166,8 +166,8 @@ router.get('/admin-dashboard',
 // GET live monitoring data
 router.get(
   "/admin/live-monitoring/:deviceId",
-  protect,
-  requireAdmin,
+  authMiddleware,
+  authorizeRoles('admin'),
   async (req, res) => {
     try {
       const { deviceId } = req.params;
@@ -196,8 +196,8 @@ router.get(
 
 router.get(
   "/admin/live-devices",
-  protect,
-  requireAdmin,
+  authMiddleware,
+  authorizeRoles('admin'),
   async (req, res) => {
     try {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
