@@ -10,7 +10,7 @@ const Device = require('./models/device');
 // Load env vars
 require("dotenv").config(); // at top of app.js
 const ALLOWED_ORIGINS = [
-  "http://localhost:3000",
+  "https://viz.vjratechnologies.com",
   "http://localhost:3000",
 ];
 
@@ -31,7 +31,7 @@ const app = express();
 
 const OFFLINE_THRESHOLD_MS = 30 * 1000; // 2 minutes
 
-const allowedOrigins = [process.env.CLIENT_URL, 'http://localhost:3000'];
+const allowedOrigins = [process.env.CLIENT_URL, 'https://viz.vjratechnologies.com'];
 
 
 if (!process.env.JWT_SECRET) {
