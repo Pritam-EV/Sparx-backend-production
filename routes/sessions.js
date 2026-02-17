@@ -25,7 +25,7 @@ const {
 // Example: Only admins can see all sessions in the system
 // routes/sessions.js
 // GET /api/sessions/all?status=&deviceId=&search=&from=&to=&page=1&limit=100
-router.get("/all", authMiddleware, /* authorizeRoles('admin'), */ async (req, res) => {
+router.get("/all", authMiddleware, async (req, res) => {
   try {
     const {
       status,
@@ -38,18 +38,26 @@ router.get("/all", authMiddleware, /* authorizeRoles('admin'), */ async (req, re
     } = req.query;
 
     const q = {};
-    if (req.user?.role === 'owner') {
-    const owned = await Device.find({ ownerId: req.user.userId }, 'device_id');
-    const ids = owned.map(d => d.device_id);
-    q.deviceId = { $in: ids.length ? ids : ['__none__'] };
+
+    /* ================= OWNER RESTRICTION ================= */
+    if (req.user?.role === "owner") {
+      const owned = await Device.find(
+        { ownerId: req.user.userId },
+        "device_id"
+      );
+      const ids = owned.map((d) => d.device_id);
+      q.deviceId = { $in: ids.length ? ids : ["__none__"] };
     }
+
     if (status) q.status = status;
     if (deviceId) q.deviceId = deviceId;
+
     if (from || to) {
       q.startTime = {};
       if (from) q.startTime.$gte = new Date(from);
       if (to) q.startTime.$lte = new Date(to);
     }
+
     if (search) {
       q.$or = [
         { sessionId: new RegExp(search, "i") },
@@ -58,16 +66,17 @@ router.get("/all", authMiddleware, /* authorizeRoles('admin'), */ async (req, re
       ];
     }
 
-    const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const lim = Math.max(1, Math.min(500, parseInt(limit, 10) || 100));
+    const pageNum = Math.max(1, parseInt(page));
+    const lim = Math.min(Math.max(1, parseInt(limit)), 500);
     const skip = (pageNum - 1) * lim;
 
-    // Pull latest telemetry entry only to surface voltage/current
+    /* ================= QUERY ================= */
+
     const sessions = await Session.find(q)
       .select(
         "sessionId deviceId transactionId userId startTime endTime status " +
         "energyConsumed energySelected amountPaid amountUsed discountApplied " +
-        "endTrigger lastUpdate updatedAt telemetry"
+        "ratePerKwh endTrigger lastUpdate updatedAt telemetry"
       )
       .populate("userId", "name email mobile")
       .sort({ startTime: -1 })
@@ -75,30 +84,95 @@ router.get("/all", authMiddleware, /* authorizeRoles('admin'), */ async (req, re
       .limit(lim)
       .lean();
 
+    /* ================= FETCH DEVICES + OWNERS ================= */
+
+    const deviceIds = sessions.map((s) => s.deviceId);
+    const devices = await Device.find({ device_id: { $in: deviceIds } })
+      .populate("ownerId", "name email mobile")
+      .lean();
+
+    const deviceMap = {};
+    devices.forEach((d) => {
+      deviceMap[d.device_id] = d;
+    });
+
+    /* ================= SHAPE RESPONSE ================= */
+
     const shaped = sessions.map((s) => {
-      const tele = Array.isArray(s.telemetry) && s.telemetry.length
-        ? s.telemetry[s.telemetry.length - 1]
-        : null;
+      const lastTele =
+        Array.isArray(s.telemetry) && s.telemetry.length
+          ? s.telemetry[s.telemetry.length - 1]
+          : null;
+
+      const device = deviceMap[s.deviceId];
+
       return {
-        ...s,
-        lastVoltage: tele?.voltage ?? null,
-        lastCurrent: tele?.current ?? null,
-        // Normalize optional keys that may vary by name
-        endTrigger: s.endTrigger ?? s.end_reason ?? null,
-        energySelected: s.energySelected ?? s.targetEnergy ?? s.targetEnergy_kWh ?? null,
-        discountApplied: s.discountApplied ?? s.discountAmount ?? 0,
-        lastUpdatedAt: s.lastUpdate ?? s.updatedAt ?? s.endTime ?? s.startTime ?? null,
-        telemetry: undefined, // drop array from payload
+        _id: s._id,
+        sessionId: s.sessionId,
+        deviceId: s.deviceId,
+        transactionId: s.transactionId,
+        status: s.status,
+
+        startTime: s.startTime,
+        endTime: s.endTime,
+        endTrigger: s.endTrigger ?? null,
+
+        energyConsumed: s.energyConsumed,
+        energySelected: s.energySelected,
+
+        amountPaid: s.amountPaid,
+        amountUsed: s.amountUsed,
+        discountApplied: s.discountApplied ?? 0,
+        ratePerKwh: s.ratePerKwh ?? 0,
+
+        latestVoltage: lastTele?.voltage ?? null,
+        latestCurrent: lastTele?.current ?? null,
+
+        lastUpdate:
+          s.lastUpdate ?? s.updatedAt ?? s.endTime ?? s.startTime,
+
+        /* ---------- USER ---------- */
+        user: s.userId
+          ? {
+              _id: s.userId._id,
+              name: s.userId.name,
+              email: s.userId.email,
+              mobile: s.userId.mobile,
+            }
+          : null,
+
+        /* ---------- DEVICE + OWNER ---------- */
+        device: device
+          ? {
+              _id: device._id,
+              device_id: device.device_id,
+              owner: device.ownerId
+                ? {
+                    _id: device.ownerId._id,
+                    name: device.ownerId.name,
+                    email: device.ownerId.email,
+                    mobile: device.ownerId.mobile,
+                  }
+                : null,
+            }
+          : null,
       };
     });
 
     const total = await Session.countDocuments(q);
-    res.json({ total, page: pageNum, limit: lim, sessions: shaped });
+
+    res.json({
+      total,
+      page: pageNum,
+      limit: lim,
+      sessions: shaped,
+    });
   } catch (error) {
     console.error("Error fetching sessions:", error);
     res.status(500).json({ message: "Server error" });
   }
 });
+
 
 
 
