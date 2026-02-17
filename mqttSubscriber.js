@@ -6,7 +6,7 @@ const Device = require('./models/device');
 // const Telemetry = require('./models/telemetry');
 const mqttClient = require('./mqttClient'); // shared connection
 const Receipt = require('./models/Receipt');
-const DeviceTelemetry = require("../models/deviceTelemetry");
+const DeviceTelemetry = require("./models/deviceTelemetry");
 
 // Optional: simple duplicate filter (can be kept or removed)
 const processedMessages = new Set();
