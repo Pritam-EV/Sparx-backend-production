@@ -3,6 +3,7 @@ const router = express.Router();
 const Device = require('../models/device'); // Adjust path as needed
 const authMiddleware = require('../middleware/authMiddleware');
 const authorizeRoles = require('../middleware/roleMiddleware');
+const DeviceTelemetry = require("../models/deviceTelemetry");
 
 // Public route: Get all devices (any authenticated user)
 router.get('/', async (req, res) => {
@@ -160,6 +161,61 @@ router.get('/admin-dashboard',
     }
   }
 );
+
+
+// GET live monitoring data
+router.get(
+  "/admin/live-monitoring/:deviceId",
+  protect,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { deviceId } = req.params;
+
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      const data = await DeviceTelemetry.find({
+        deviceId,
+        timestamp: { $gte: since },
+      }).sort({ timestamp: 1 });
+
+      const response = {
+        timestamps: data.map(d => d.timestamp),
+        voltage: data.map(d => d.voltage),
+        current: data.map(d => d.current),
+      };
+
+      res.json(response);
+
+    } catch (err) {
+      console.error("Live monitoring fetch error:", err);
+      res.status(500).json({ error: "Failed to fetch telemetry" });
+    }
+  }
+);
+
+router.get(
+  "/admin/live-devices",
+  protect,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      const devices = await DeviceTelemetry.aggregate([
+        { $match: { timestamp: { $gte: since } } },
+        { $group: { _id: "$deviceId" } },
+      ]);
+
+      res.json(devices.map(d => d._id));
+
+    } catch (err) {
+      console.error("Live devices error:", err);
+      res.status(500).json({ error: "Failed to fetch devices" });
+    }
+  }
+);
+
 
 // Admin/owner only: Can view details (example, adjust logic as needed)
 router.get('/:deviceId', authMiddleware, authorizeRoles('admin', 'owner', 'customer'), async (req, res) => {

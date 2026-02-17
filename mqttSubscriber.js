@@ -6,6 +6,7 @@ const Device = require('./models/device');
 // const Telemetry = require('./models/telemetry');
 const mqttClient = require('./mqttClient'); // shared connection
 const Receipt = require('./models/Receipt');
+const DeviceTelemetry = require("../models/deviceTelemetry");
 
 // Optional: simple duplicate filter (can be kept or removed)
 const processedMessages = new Set();
@@ -131,6 +132,43 @@ if (topic.startsWith('device/') && topic.endsWith('/session/end')) {
         { $set: devUpdate }
       );
 
+
+            // ==============================
+      // 4) Store 1-minute telemetry history (24h rolling)
+      // ==============================
+      try {
+
+        // Round to exact minute (drop seconds)
+        const roundedTime = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+          now.getHours(),
+          now.getMinutes()
+        );
+
+        // Avoid duplicate record in same minute
+        const exists = await DeviceTelemetry.findOne({
+          deviceId: deviceId.toUpperCase(),
+          timestamp: roundedTime
+        });
+
+        if (!exists) {
+          await DeviceTelemetry.create({
+            deviceId: deviceId.toUpperCase(),
+            voltage: v,
+            current: c,
+            power: p,
+            timestamp: roundedTime
+          });
+
+          console.log(`[MQTT] 📊 Telemetry stored for ${deviceId} @ ${roundedTime.toISOString()}`);
+        }
+
+      } catch (telemetryErr) {
+        console.error("❌ Telemetry history save failed:", telemetryErr);
+      }
+
       console.log(
         '[MQTT DEBUG] Device update',
         deviceId,
@@ -187,6 +225,9 @@ if (topic.startsWith('device/') && topic.endsWith('/session/end')) {
   });
 
   mqttClient.on('error', err => console.error('❌ MQTT client error:', err));
+
+
+  
 }
 
 module.exports = startMqttSubscriber;
