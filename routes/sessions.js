@@ -34,7 +34,7 @@ router.get("/all", authMiddleware, async (req, res) => {
       from,
       to,
       page = 1,
-      limit = 100,
+      limit = 1000,
     } = req.query;
 
     const q = {};
