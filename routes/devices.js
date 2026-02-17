@@ -109,7 +109,13 @@ router.get('/admin-dashboard',
         commercial: 1,
       };
 
-      const devices = await Device.find(query, projection).sort({ updatedAt: -1 }).lean();
+      const devices = await Device.find(query)
+  .populate({
+    path: 'ownerId',
+    select: 'name email phone role',
+  })
+  .sort({ updatedAt: -1 });
+
 
       // compute useful flags & summary
       const now = Date.now();
