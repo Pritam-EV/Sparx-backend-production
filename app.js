@@ -10,7 +10,7 @@ const Device = require('./models/device');
 // Load env vars
 require("dotenv").config(); // at top of app.js
 const ALLOWED_ORIGINS = [
-  "https://viz.vjratechnologies.com",
+  "http://localhost:3000",
   "http://localhost:3000",
 ];
 

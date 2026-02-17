@@ -73,7 +73,7 @@ router.get('/mine', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/admin',
+router.get('/admin-dashboard',
   authMiddleware,
   authorizeRoles('admin'),
   async (req, res) => {
@@ -85,9 +85,12 @@ router.get('/admin',
       if (state) query.state = state;
       if (status) query.status = status;
 
+      // projection - include commercial + ownerId + onboarding + meta fields
       const projection = {
-        _id: 0,
+        _id: 1,
         device_id: 1,
+        serialNumber: 1,
+        ownerId: 1,
         location: 1,
         status: 1,
         current_session_id: 1,
@@ -102,16 +105,52 @@ router.get('/admin',
         lastSeen: 1,
         relayOn: 1,
         updatedAt: 1,
+        onboardingStatus: 1,
+        commercial: 1,
       };
 
-      const devices = await Device.find(query, projection)
-        .sort({ updatedAt: -1 })
-        .lean();
+      const devices = await Device.find(query, projection).sort({ updatedAt: -1 }).lean();
 
-      res.json({ devices });
+      // compute useful flags & summary
+      const now = Date.now();
+      const STALE_MS = 3000 * 1000; // 3000 seconds threshold for "stale" (tune as needed)
+
+      let summary = {
+        total: devices.length,
+        online: 0,
+        offline: 0,
+        chargingNow: 0,
+        faulty: 0,
+        pendingOnboard: 0,
+        stale: 0,
+        relayWithoutSession: 0,
+      };
+
+      for (const d of devices) {
+        const st = (d.status || "").toLowerCase();
+        if (st === 'online' || st === 'available') summary.online += 1;
+        if (st === 'offline') summary.offline += 1;
+        if (st === 'occupied' || st === 'busy') summary.chargingNow += 1;
+        if (st === 'faulty' || st === 'error') summary.faulty += 1;
+        if (d.onboardingStatus === 'pending') summary.pendingOnboard += 1;
+
+        // stale: lastSeen missing or older than threshold
+        const last = d.lastSeen ? new Date(d.lastSeen).getTime() : 0;
+        d.isStale = !last || (now - last) > STALE_MS;
+        if (d.isStale) summary.stale += 1;
+
+        // relay without session
+        d.relayOnWithoutSession = !!(d.relayOn && !d.current_session_id);
+        if (d.relayOnWithoutSession) summary.relayWithoutSession += 1;
+
+        // convenience default for commercial if missing (so frontend doesn't crash)
+        if (!d.commercial) d.commercial = {};
+      }
+
+      return res.json({ devices, summary });
     } catch (err) {
-      console.error('Device admin list error:', err);
-      res.status(500).json({ error: 'Internal server error' });
+      console.error('admin-dashboard error:', err);
+      res.status(500).json({ error: 'Internal server error', details: err.message });
     }
   }
 );
