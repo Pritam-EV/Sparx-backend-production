@@ -8,7 +8,25 @@ const receiptSchema = new mongoose.Schema({
   deviceId: { type: String, required: true },
   sessionId: { type: String, required: true },
   transactionId: { type: String, required: true },
-  
+
+  // OWNER SNAPSHOT
+  ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  ownerName: String,
+  ownerEmail: String,
+  ownerMobile: String,
+
+  // USER SNAPSHOT
+  userName: String,
+  userEmail: String,
+  userMobile: String,
+
+  // DEVICE SNAPSHOT
+  deviceCity: String,
+  deviceState: String,
+  deviceArea: String,
+  deviceLocation: String,
+
+    
   // ============== ENERGY METRICS ==============
   energyConsumed: { type: Number, required: true },      // Actual kWh used
   energySelected: { type: Number, required: true },      // Target kWh

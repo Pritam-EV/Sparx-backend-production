@@ -365,6 +365,204 @@ router.get('/owner/analytics', auth, async (req, res) => {
   }
 });
 
+// GET /api/receipts/admin/financial
+router.get("/admin/financial", auth, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const {
+      from,
+      to,
+      ownerId,
+      deviceId,
+      city,
+      refundStatus,
+      page = 1,
+      limit = 50
+    } = req.query;
+
+    const pageNum = parseInt(page);
+    const lim = parseInt(limit);
+    const skip = (pageNum - 1) * lim;
+const dayjs = require("dayjs");
+
+const now = dayjs();
+let startDate, endDate;
+
+switch (req.query.period) {
+  case "today":
+    startDate = now.startOf("day");
+    endDate = now.endOf("day");
+    break;
+
+  case "week":
+    startDate = now.startOf("week");
+    endDate = now.endOf("week");
+    break;
+
+  case "month":
+    startDate = now.startOf("month");
+    endDate = now.endOf("month");
+    break;
+
+  case "last_month":
+    startDate = now.subtract(1, "month").startOf("month");
+    endDate = now.subtract(1, "month").endOf("month");
+    break;
+
+  case "quarter":
+    startDate = now.startOf("quarter");
+    endDate = now.endOf("quarter");
+    break;
+
+  case "year":
+    startDate = now.startOf("year");
+    endDate = now.endOf("year");
+    break;
+
+  default:
+    startDate = now.startOf("day");
+    endDate = now.endOf("day");
+}
+
+    const match = {};
+
+// Apply period filter (highest priority)
+match.createdAt = {
+  $gte: startDate.toDate(),
+  $lte: endDate.toDate()
+};
+
+
+    if (ownerId) match.ownerId = ownerId;
+    if (deviceId) match.deviceId = deviceId;
+    if (city) match.deviceCity = city;
+    if (refundStatus) match["refund.status"] = refundStatus;
+
+    const pipeline = [
+      { $match: match },
+      {
+        $facet: {
+          summary: [
+            {
+              $group: {
+                _id: null,
+                totalReceipts: { $sum: 1 },
+                grossRevenue: { $sum: "$totalAmount" },
+                taxableRevenue: { $sum: "$taxableAmount" },
+                gstCollected: { $sum: "$gstAmount" },
+                totalEnergy: { $sum: "$energyConsumed" },
+                totalMargin: { $sum: "$vjraMarginAmount" },
+                totalOwnerPayout: { $sum: "$ownerPayout" },
+                totalPGCharges: { $sum: "$paymentCharges" },
+                totalElectricityCost: { $sum: "$electricityCost" },
+                totalRefundAmount: { $sum: "$refundAmount" }
+              }
+            }
+          ],
+          receipts: [
+            { $sort: { createdAt: -1 } },
+            { $skip: skip },
+            { $limit: lim }
+          ],
+          count: [{ $count: "total" }]
+        }
+      }
+    ];
+
+    const result = await Receipt.aggregate(pipeline);
+    const data = result[0];
+
+res.json({
+  summary: data.summary[0] || {},
+  receipts: data.receipts,
+  total: data.count[0]?.total || 0,
+  page: pageNum,
+  range: {
+    start: startDate.toDate(),
+    end: endDate.toDate(),
+    label: `${startDate.format("DD MMM YYYY, hh:mm A")} - ${endDate.format("DD MMM YYYY, hh:mm A")}`
+  }
+});
+
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Financial fetch failed" });
+  }
+});
+
+// PATCH /api/receipts/admin/refund/:receiptId
+router.patch("/admin/refund/:receiptId", auth, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const { receiptId } = req.params;
+    const { status, refundId, failureReason } = req.body;
+
+    const update = {
+      "refund.status": status,
+      "refund.refundId": refundId || null,
+      "refund.failureReason": failureReason || null,
+      "refund.processedAt": status === "processed" ? new Date() : null
+    };
+
+    const receipt = await Receipt.findOneAndUpdate(
+      { receiptId },
+      { $set: update },
+      { new: true }
+    );
+
+    if (!receipt) return res.status(404).json({ error: "Receipt not found" });
+
+    res.json({ message: "Refund updated", receipt });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Refund update failed" });
+  }
+});
+
+router.get("/admin/export", auth, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const receipts = await Receipt.find({}).lean();
+
+    const csvHeader = [
+      "Receipt ID",
+      "Date",
+      "User",
+      "Device",
+      "City",
+      "Energy",
+      "Gross",
+      "GST",
+      "Margin",
+      "Owner Payout",
+      "Refund"
+    ];
+
+    const rows = receipts.map(r => [
+      r.receiptId,
+      r.createdAt,
+      r.userName,
+      r.deviceId,
+      r.deviceCity,
+      r.energyConsumed,
+      r.totalAmount,
+      r.gstAmount,
+      r.vjraMarginAmount,
+      r.ownerPayout,
+      r.refundAmount
+    ]);
+
+    const csv = [csvHeader, ...rows].map(e => e.join(",")).join("\n");
+
+    res.header("Content-Type", "text/csv");
+    res.attachment("financial_report.csv");
+    res.send(csv);
+
+  } catch (err) {
+    res.status(500).json({ error: "Export failed" });
+  }
+});
+
+
 
 
 router.get('/:sessionId', auth, async (req, res) => {
