@@ -1,5 +1,3 @@
-// backend/models/deviceTelemetry.js
-
 const mongoose = require("mongoose");
 
 const deviceTelemetrySchema = new mongoose.Schema({
@@ -23,7 +21,13 @@ const deviceTelemetrySchema = new mongoose.Schema({
 // 🔥 TTL Index: auto delete after 24 hours
 deviceTelemetrySchema.index(
   { timestamp: 1 },
-  { expireAfterSeconds: 60 * 60 * 24 } // 24 hours
+  { expireAfterSeconds: 60 * 60 * 24 }
 );
 
-module.exports = mongoose.model("DeviceTelemetry", deviceTelemetrySchema);
+// IMPORTANT: force mongoose to sync indexes
+deviceTelemetrySchema.set("autoIndex", true);
+
+module.exports = mongoose.model(
+  "DeviceTelemetry",
+  deviceTelemetrySchema
+);
