@@ -430,7 +430,8 @@ async function completeSessionInternal({
   const energyConsumed = Number(session.energyConsumed || 0);
   const amountUtilized = Number((energyConsumed * rate).toFixed(2));
   const refund = Number(Math.max(0, Number(session.amountPaid || 0) - amountUtilized).toFixed(2));
-
+  session.energyConsumed = energyConsumed;
+  session.amountUsed = amountUtilized;
   session.endTime = new Date(endTime);
   session.endTrigger = endTrigger;
   session.status = "completed";
