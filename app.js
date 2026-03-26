@@ -31,7 +31,7 @@ const app = express();
 
 const OFFLINE_THRESHOLD_MS = 30 * 1000; // 2 minutes
 
-const allowedOrigins = [process.env.CLIENT_URL, 'https://viz.vjratechnologies.com'];
+const allowedOrigins = [process.env.CLIENT_URL, 'http://localhost:3000'];
 
 
 if (!process.env.JWT_SECRET) {

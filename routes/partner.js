@@ -271,28 +271,29 @@ device.area = area;
 device.city = city;
 device.state = state;
 
-// 1️⃣ Base rate set by owner (EX-GST)
-const baseRate = Number(rate); // owner input, ex-GST
 
-if (!baseRate || baseRate <= 0) {
+// Owner entered rate is GST-INCLUSIVE
+const userRateInclGst = Number(rate);
+
+if (!userRateInclGst || userRateInclGst <= 0) {
   return res.status(400).json({
-    error: "Invalid base rate"
+    error: "Invalid rate"
   });
 }
 
-// 2️⃣ Calculate GST-inclusive user rate
+// derive taxable rate
 const GST_PERCENT = 18;
-const userRateInclGst = Number((baseRate * (1 + GST_PERCENT / 100)).toFixed(2));
+const baseRate = Number((userRateInclGst / (1 + GST_PERCENT / 100)).toFixed(6));
 
-// 3️⃣ Save canonical values
+// Save canonical values
 device.commercial = {
   electricityBearer: DEFAULT_ELECTRICITY_BEARER,
-  userRatePerKwh: baseRate,          // EX-GST
+  userRatePerKwh: baseRate,   // EX GST
   vjraMarginPerKwh: DEFAULT_VJRA_MARGIN_PER_KWH,
   pgPercent: DEFAULT_PG_PERCENT
 };
 
-// 4️⃣ Save user-facing rate (INCL-GST)
+// Save user-facing rate (INCL GST)
 device.rate = userRateInclGst;
 
 
