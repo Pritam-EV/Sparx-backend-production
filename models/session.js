@@ -30,7 +30,6 @@ const sessionSchema = new mongoose.Schema({
   userId:         { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   startTime:      { type: Date,    required: true },
   startDate:      { type: String,  required: true },
-  startEnergy:    { type: Number,  default: null },     // kWh at start
   energySelected: { type: Number,  required: true },    // target kWh
   energyConsumed: { type: Number,  default: 0 },        // current kWh
   amountSelected: { type: Number, required: true },
@@ -41,12 +40,10 @@ const sessionSchema = new mongoose.Schema({
   status:         { type: String,  enum: ["active","completed","faulty"], default: "active" },
   endTrigger:     { type: String,  default: null },
   endTime:        { type: Date,    default: null },
-  telemetry:      { type: [telemetrySchema], default: [] }, // live data points
   latestVoltage: { type: Number, default: 0 },
   latestCurrent: { type: Number, default: 0 },
   latestPower:   { type: Number, default: 0 },
   lastUpdate:    { type: Date },
-  commands:      { type: [commandLogSchema], default: [] }
 }, {
   timestamps: true
 });
