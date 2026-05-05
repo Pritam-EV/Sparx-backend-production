@@ -16,12 +16,7 @@ const commandLogSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
-const telemetrySchema = new mongoose.Schema({
-  timestamp: { type: Date,   required: true },
-  power_W:   { type: Number, required: true },
-  voltage:   { type: Number, required: false },
-  current:   { type: Number, required: false },
-}, { _id: false });
+
 
 const sessionSchema = new mongoose.Schema({
   sessionId:      { type: String,  required: true, unique: true },
