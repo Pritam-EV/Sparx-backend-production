@@ -227,31 +227,45 @@ router.get('/owner/analytics', auth, async (req, res) => {
 
     // Fetch receipts
     const Receipt = require('../models/Receipt');
-    const receipts = await Receipt.find({
-      deviceId: { $in: targetDeviceIds },
-      createdAt: { $gte: startDate, $lte: endDate }
-    }).lean();
+const matchStage = {
+  deviceId: { $in: targetDeviceIds },
+  createdAt: { $gte: startDate, $lte: endDate }
+};
 
-    // Calculate summary
-    let totalEnergy = 0;
-    let baseRevenue = 0;
-    let gstAmount = 0;
-    let grossRevenue = 0;
-    let platformCommission = 0;
-    let pgCharges = 0;
-    let electricityCost = 0;
-    let netProfit = 0;
+// 🔥 AGGREGATION
+const [summaryResult] = await Receipt.aggregate([
+  { $match: matchStage },
+  {
+    $group: {
+      _id: null,
+      totalEnergy: { $sum: { $ifNull: ["$energyConsumed", 0] } },
+      baseRevenue: { $sum: { $ifNull: ["$taxableAmount", 0] } },
+      gstAmount: { $sum: { $ifNull: ["$gstAmount", 0] } },
+      grossRevenue: { $sum: { $ifNull: ["$totalAmount", 0] } },
+      platformCommission: { $sum: { $ifNull: ["$vjraMarginAmount", 0] } },
+      pgCharges: { $sum: { $ifNull: ["$paymentCharges", 0] } },
+      electricityCost: { $sum: { $ifNull: ["$electricityCost", 0] } },
+      netProfit: { $sum: { $ifNull: ["$ownerPayout", 0] } },
+      totalRefund: { $sum: { $ifNull: ["$refundAmount", 0] } },
+      sessions: { $addToSet: "$sessionId" }
+    }
+  }
+]);
+const receipts = await Receipt.find(matchStage).lean();
+const summary = summaryResult || {
+  totalEnergy: 0,
+  baseRevenue: 0,
+  gstAmount: 0,
+  grossRevenue: 0,
+  platformCommission: 0,
+  pgCharges: 0,
+  electricityCost: 0,
+  netProfit: 0,
+  totalRefund: 0,
+  sessions: []
+};
 
-    receipts.forEach(r => {
-      totalEnergy += Number(r.energyConsumed || 0);
-      baseRevenue += Number(r.taxableAmount || 0);
-      gstAmount += Number(r.gstAmount || 0);
-      grossRevenue += Number(r.totalAmount || 0);
-      platformCommission += Number(r.vjraMarginAmount || 0);
-      pgCharges += Number(r.paymentCharges || 0);
-      electricityCost += Number(r.electricityCost || 0);
-      netProfit += Number(r.ownerPayout || 0);
-    });
+const sessionsCount = summary.sessions?.length || 0;
 
     // Generate chart data based on duration
     let chartData = [];
@@ -345,20 +359,20 @@ router.get('/owner/analytics', auth, async (req, res) => {
       }));
     }
 
-    return res.json({
-      summary: {
-        totalEnergy: Number(totalEnergy.toFixed(2)),
-        baseRevenue: Number(baseRevenue.toFixed(2)),
-        gstAmount: Number(gstAmount.toFixed(2)),
-        grossRevenue: Number(grossRevenue.toFixed(2)),
-        platformCommission: Number(platformCommission.toFixed(2)),
-        pgCharges: Number(pgCharges.toFixed(2)),
-        electricityCost: Number(electricityCost.toFixed(2)),
-        netProfit: Number(netProfit.toFixed(2)),
-        sessionsCount: receipts.length
-      },
-      chartData
-    });
+return res.json({
+  summary: {
+    totalEnergy: Number(summary.totalEnergy.toFixed(2)),
+    baseRevenue: Number(summary.baseRevenue.toFixed(2)),
+    gstAmount: Number(summary.gstAmount.toFixed(2)),
+    grossRevenue: Number(summary.grossRevenue.toFixed(2)),
+    platformCommission: Number(summary.platformCommission.toFixed(2)),
+    pgCharges: Number(summary.pgCharges.toFixed(2)),
+    electricityCost: Number(summary.electricityCost.toFixed(2)),
+    netProfit: Number(summary.netProfit.toFixed(2)),
+    sessionsCount
+  },
+  chartData
+});
   } catch (error) {
     console.error('Owner analytics error:', error);
     return res.status(500).json({ error: 'Server error' });
