@@ -31,7 +31,7 @@ const deviceSchema = new mongoose.Schema({
 
   // legacy pricing field (keep using this in controllers)
   rate: { type: Number, required: true, default: 20 },
-
+  project: { type: String, trim: true }, // 🔥 NEW
   area: { type: String, required: true },
   city: { type: String, required: true },
   state: { type: String, required: true },

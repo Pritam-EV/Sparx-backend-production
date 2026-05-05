@@ -79,12 +79,13 @@ router.get('/admin-dashboard',
   authorizeRoles('admin'),
   async (req, res) => {
     try {
-      const { area, city, state, status } = req.query;
+      const { area, city, state, status, project  } = req.query;
       const query = {};
       if (area) query.area = area;
       if (city) query.city = city;
       if (state) query.state = state;
       if (status) query.status = status;
+      if (project) query.project = project;
 
       // projection - include commercial + ownerId + onboarding + meta fields
       const projection = {
@@ -102,6 +103,7 @@ router.get('/admin-dashboard',
         area: 1,
         city: 1,
         state: 1,
+        project: 1,
         totalenergy: 1,
         lastSeen: 1,
         relayOn: 1,
