@@ -306,4 +306,26 @@ if (payment.status === "PENDING") {
   }
 });
 
+// GET /api/payment/my-transactions
+// Returns all payments for the logged-in user, newest first
+router.get("/my-transactions", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.userId; // ✅ matches how authMiddleware sets it
+
+    const transactions = await Payment.find({ userId })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .select(
+        "orderId sessionId deviceId amountPaid currency status paymentMethod cfPaymentId paidAt createdAt"
+      );
+
+    return res.status(200).json({ success: true, transactions });
+  } catch (err) {
+    console.error("❌ Error fetching transactions:", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+
+
 module.exports = router;
