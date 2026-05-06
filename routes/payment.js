@@ -312,12 +312,13 @@ if (payment.status === "PENDING") {
 // GET /api/payment/my-transactions
 // Returns all payments for the logged-in user, newest first
 // GET /api/payment/my-transactions
+// GET /api/payment/my-transactions
 router.get("/my-transactions", authMiddleware, async (req, res) => {
   try {
     const userId = req.user.userId;
     const Receipt = require("../models/Receipt");
 
-    // Fetch all payments for this user
+    // 1. Fetch all payments
     const payments = await Payment.find({ userId })
       .sort({ createdAt: -1 })
       .limit(50)
@@ -326,48 +327,51 @@ router.get("/my-transactions", authMiddleware, async (req, res) => {
       )
       .lean();
 
-    // Collect all orderIds to match against receipts
     const orderIds = payments.map((p) => p.orderId).filter(Boolean);
 
-    // Fetch matching receipts by transactionId = orderId
+    // 2. Fetch matching receipts that have a refund
     const receipts = await Receipt.find(
-      { transactionId: { $in: orderIds }, userId },
+      {
+        transactionId: { $in: orderIds },
+        userId,
+        "refund.status": { $exists: true, $ne: null },
+      },
       {
         transactionId: 1,
         receiptId: 1,
+        amountPaid: 1,
         "refund.status": 1,
         "refund.refundId": 1,
         "refund.failureReason": 1,
         "refund.processedAt": 1,
         "refund.amount": 1,
+        createdAt: 1,
       }
     ).lean();
 
-    // Build a map: orderId → receipt refund data
-    const receiptMap = {};
-    receipts.forEach((r) => {
-      if (r.transactionId) {
-        receiptMap[r.transactionId] = {
-          receiptId: r.receiptId,
-          refund: r.refund || null,
-        };
-      }
-    });
+    // 3. Build refund entries as separate transaction-like objects
+    const refundEntries = receipts
+      .filter((r) => r.refund)
+      .map((r) => ({
+        _id: `refund_${r._id}`,
+        orderId: r.transactionId,         // original payment orderId
+        receiptId: r.receiptId,
+        amountPaid: r.refund.amount ?? r.amountPaid ?? 0,
+        status: "REFUND",
+        refundId: r.refund.refundId || null,
+        refundStatus: r.refund.status,
+        refundFailureReason: r.refund.failureReason || null,
+        paidAt: r.refund.processedAt || r.createdAt,
+        createdAt: r.refund.processedAt || r.createdAt,
+        isRefundEntry: true,              // flag so FE knows this is a refund row
+      }));
 
-    // Merge refund data into each payment
-    const transactions = payments.map((p) => {
-      const matched = receiptMap[p.orderId];
-      return {
-        ...p,
-        receiptId: matched?.receiptId || null,
-        refund: matched?.refund || null,
-        // Override status to REFUND if receipt has a processed refund
-        status:
-          matched?.refund?.status === "processed" ? "REFUND" : p.status,
-      };
-    });
+    // 4. Merge payments + refund entries, sort by date
+    const allTransactions = [...payments, ...refundEntries].sort(
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+    );
 
-    return res.status(200).json({ success: true, transactions });
+    return res.status(200).json({ success: true, transactions: allTransactions });
   } catch (err) {
     console.error("❌ Error fetching transactions:", err);
     return res.status(500).json({ success: false, message: "Server error" });
