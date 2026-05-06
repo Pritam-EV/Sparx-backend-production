@@ -63,6 +63,9 @@ const PaymentSchema = new mongoose.Schema(
     paidAt: {
       type: Date,
     },
+    bankReference: { type: String },                   // UTR/bank ref from Cashfree
+    paymentGroup: { type: String },                    // upi/credit_card/debit_card etc.
+    failureReason: { type: String },                   // payment_message on failure
   },
   { timestamps: true }
 );

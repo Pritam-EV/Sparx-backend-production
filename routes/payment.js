@@ -134,11 +134,13 @@ await Payment.updateOne(
   { orderId, status: { $ne: "SUCCESS" } },
   {
     $set: {
-      status: "SUCCESS",
-      paymentMethod: payment.payment_method,
-      cfPaymentId: payment.cf_payment_id,
-      paidAt: new Date(payment.payment_time),
-      rawResponse: event,
+        status: "SUCCESS",
+        paymentMethod: payment.payment_method,
+        paymentGroup: payment.payment_group,          // ← add
+        cfPaymentId: payment.cf_payment_id,
+        bankReference: payment.bank_reference || null, // ← add
+        paidAt: new Date(payment.payment_time),
+        rawResponse: event,
     },
   }
 );
@@ -155,6 +157,7 @@ if (event.type === "PAYMENT_FAILED") {
     {
       $set: {
         status: "FAILED",
+        failureReason: event.data.payment?.payment_message || null,
         rawResponse: event,
       },
     }
