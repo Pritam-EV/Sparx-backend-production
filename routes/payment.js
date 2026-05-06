@@ -319,7 +319,7 @@ router.get("/my-transactions", authMiddleware, async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(50)
       .select(
-        "orderId sessionId deviceId amountPaid currency status paymentMethod cfPaymentId paidAt createdAt"
+        "orderId sessionId deviceId amountPaid currency status paymentMethod paymentGroup cfPaymentId bankReference failureReason paidAt createdAt"
       );
 
     return res.status(200).json({ success: true, transactions });
