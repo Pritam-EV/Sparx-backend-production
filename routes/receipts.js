@@ -266,22 +266,7 @@ const summary = summaryResult || {
   sessions: []
 };
 // 🔥 STEP 2.1: Collect unique userIds
-const userIds = [
-  ...new Set(
-    receiptList
-      .map(r => r.userId)
-      .filter(Boolean)
-      .map(id => id.toString())
-  )
-];
-const users = await User.find(
-  { _id: { $in: userIds } },
-  { name: 1, email: 1, phone: 1 }
-).lean();
-const usersMap = {};
-users.forEach(u => {
-  usersMap[u._id.toString()] = u;
-});
+
 const sessionsCount = summary.sessions?.length || 0;
 
     // Generate chart data based on duration
