@@ -10,7 +10,7 @@ const createOperatorRequest = async (req, res) => {
     const { name, mobile, email, location, budget } = req.body;
 
     // 1️⃣ Validate
-    if (!name || !mobile || !email || !location || budget === undefined) {
+    if (!name || !mobile || !email || budget === undefined) {
       return res.status(400).json({
         success: false,
         message: "All fields are required",
