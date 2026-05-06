@@ -502,6 +502,29 @@ match.createdAt = {
     const result = await Receipt.aggregate(pipeline);
     const data = result[0];
     const receiptList = data.receipts || [];
+
+// 🔥 STEP 2.1: Collect userIds
+const userIds = [
+  ...new Set(
+    receiptList
+      .map(r => r.userId)
+      .filter(Boolean)
+      .map(id => id.toString())
+  )
+];
+
+// 🔥 STEP 2.2: Fetch users
+const users = await User.find(
+  { _id: { $in: userIds } },
+  { name: 1 }
+).lean();
+
+// 🔥 STEP 2.3: Build map
+const usersMap = {};
+users.forEach(u => {
+  usersMap[u._id.toString()] = u;
+});
+
 const enrichedReceipts = receiptList.map(r => {
   const user = usersMap[r.userId?.toString()] || null;
 
@@ -510,12 +533,11 @@ const enrichedReceipts = receiptList.map(r => {
     userName: user?.name || "-"
   };
 });
-
+console.log(enrichedReceipts[0]);
 res.json({
   summary: data.summary[0] || {},
   receipts: enrichedReceipts,
   total: data.count[0]?.total || 0,
-   receipts: enrichedReceipts,
   page: pageNum,
   range: {
     start: startDate.toDate(),
@@ -523,7 +545,6 @@ res.json({
     label: `${startDate.format("DD MMM YYYY, hh:mm A")} - ${endDate.format("DD MMM YYYY, hh:mm A")}`
   }
 });
-
 
   } catch (err) {
     console.error(err);
