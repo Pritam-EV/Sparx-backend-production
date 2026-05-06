@@ -311,16 +311,61 @@ if (payment.status === "PENDING") {
 
 // GET /api/payment/my-transactions
 // Returns all payments for the logged-in user, newest first
+// GET /api/payment/my-transactions
 router.get("/my-transactions", authMiddleware, async (req, res) => {
   try {
-    const userId = req.user.userId; // ✅ matches how authMiddleware sets it
+    const userId = req.user.userId;
+    const Receipt = require("../models/Receipt");
 
-    const transactions = await Payment.find({ userId })
+    // Fetch all payments for this user
+    const payments = await Payment.find({ userId })
       .sort({ createdAt: -1 })
       .limit(50)
       .select(
         "orderId sessionId deviceId amountPaid currency status paymentMethod paymentGroup cfPaymentId bankReference failureReason paidAt createdAt"
-      );
+      )
+      .lean();
+
+    // Collect all orderIds to match against receipts
+    const orderIds = payments.map((p) => p.orderId).filter(Boolean);
+
+    // Fetch matching receipts by transactionId = orderId
+    const receipts = await Receipt.find(
+      { transactionId: { $in: orderIds }, userId },
+      {
+        transactionId: 1,
+        receiptId: 1,
+        "refund.status": 1,
+        "refund.refundId": 1,
+        "refund.failureReason": 1,
+        "refund.processedAt": 1,
+        "refund.amount": 1,
+      }
+    ).lean();
+
+    // Build a map: orderId → receipt refund data
+    const receiptMap = {};
+    receipts.forEach((r) => {
+      if (r.transactionId) {
+        receiptMap[r.transactionId] = {
+          receiptId: r.receiptId,
+          refund: r.refund || null,
+        };
+      }
+    });
+
+    // Merge refund data into each payment
+    const transactions = payments.map((p) => {
+      const matched = receiptMap[p.orderId];
+      return {
+        ...p,
+        receiptId: matched?.receiptId || null,
+        refund: matched?.refund || null,
+        // Override status to REFUND if receipt has a processed refund
+        status:
+          matched?.refund?.status === "processed" ? "REFUND" : p.status,
+      };
+    });
 
     return res.status(200).json({ success: true, transactions });
   } catch (err) {
