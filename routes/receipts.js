@@ -4,6 +4,7 @@ const auth = require('../middleware/authMiddleware');
 const authorizeRoles = require('../middleware/roleMiddleware');
 const Receipt = require('../models/Receipt');
 const Device = require('../models/device');
+const User = require('../models/User'); // 🔥 ADD THIS
 
 // GET /api/receipts/all?search=&deviceId=&userId=&from=&to=&page=1&limit=100
 router.get('/all', auth, async (req, res) => {
@@ -267,7 +268,7 @@ const summary = summaryResult || {
 // 🔥 STEP 2.1: Collect unique userIds
 const userIds = [
   ...new Set(
-    receipts
+    receiptList
       .map(r => r.userId)
       .filter(Boolean)
       .map(id => id.toString())
@@ -500,27 +501,19 @@ match.createdAt = {
 
     const result = await Receipt.aggregate(pipeline);
     const data = result[0];
-const enrichedReceipts = receipts.map(r => {
+    const receiptList = data.receipts || [];
+const enrichedReceipts = receiptList.map(r => {
   const user = usersMap[r.userId?.toString()] || null;
 
   return {
     ...r,
-
-    user: user
-      ? {
-          name: user.name,
-          email: user.email,
-          phone: user.phone
-        }
-      : null,
-
     userName: user?.name || "-"
   };
 });
 
 res.json({
   summary: data.summary[0] || {},
-  receipts: data.receipts,
+  receipts: enrichedReceipts,
   total: data.count[0]?.total || 0,
    receipts: enrichedReceipts,
   page: pageNum,
