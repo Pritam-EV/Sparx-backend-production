@@ -264,7 +264,23 @@ const summary = summaryResult || {
   totalRefund: 0,
   sessions: []
 };
-
+// 🔥 STEP 2.1: Collect unique userIds
+const userIds = [
+  ...new Set(
+    receipts
+      .map(r => r.userId)
+      .filter(Boolean)
+      .map(id => id.toString())
+  )
+];
+const users = await User.find(
+  { _id: { $in: userIds } },
+  { name: 1, email: 1, phone: 1 }
+).lean();
+const usersMap = {};
+users.forEach(u => {
+  usersMap[u._id.toString()] = u;
+});
 const sessionsCount = summary.sessions?.length || 0;
 
     // Generate chart data based on duration
@@ -484,11 +500,29 @@ match.createdAt = {
 
     const result = await Receipt.aggregate(pipeline);
     const data = result[0];
+const enrichedReceipts = receipts.map(r => {
+  const user = usersMap[r.userId?.toString()] || null;
+
+  return {
+    ...r,
+
+    user: user
+      ? {
+          name: user.name,
+          email: user.email,
+          phone: user.phone
+        }
+      : null,
+
+    userName: user?.name || "-"
+  };
+});
 
 res.json({
   summary: data.summary[0] || {},
   receipts: data.receipts,
   total: data.count[0]?.total || 0,
+   receipts: enrichedReceipts,
   page: pageNum,
   range: {
     start: startDate.toDate(),
