@@ -460,15 +460,15 @@ match.createdAt = {
               $group: {
                 _id: null,
                 totalReceipts: { $sum: 1 },
-                grossRevenue: { $sum: "$totalAmount" },
-                taxableRevenue: { $sum: "$taxableAmount" },
-                gstCollected: { $sum: "$gstAmount" },
-                totalEnergy: { $sum: "$energyConsumed" },
-                totalMargin: { $sum: "$vjraMarginAmount" },
-                totalOwnerPayout: { $sum: "$ownerPayout" },
+                totalRevenue: { $sum: { $ifNull: ["$amountPaid", 0] } },
                 totalPGCharges: { $sum: "$paymentCharges" },
-                totalElectricityCost: { $sum: "$electricityCost" },
-                totalRefundAmount: { $sum: "$refundAmount" }
+                totalRefund: { $sum: { $ifNull: ["$refundAmount", 0] } },
+                taxableRevenue: { $sum: { $ifNull: ["$taxableAmount", 0] } },
+                gstCollected: { $sum: { $ifNull: ["$gstAmount", 0] } },
+                totalEnergy: { $sum: { $ifNull: ["$energyConsumed", 0] } },
+                totalMargin: { $sum: { $ifNull: ["$vjraMarginAmount", 0] } },
+                totalOwnerPayout: { $sum: { $ifNull: ["$ownerPayout", 0] } },
+                totalElectricity: { $sum: { $ifNull: ["$electricityCost", 0] } },
               }
             }
           ],
