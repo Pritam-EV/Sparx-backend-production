@@ -35,6 +35,12 @@ const sessionSchema = new mongoose.Schema({
   status:         { type: String,  enum: ["active","completed","faulty"], default: "active" },
   endTrigger:     { type: String,  default: null },
   endTime:        { type: Date,    default: null },
+  // ─── ETA fields ───────────────────────────────────────────────────────────
+// Continuously refined estimated session end time based on actual charge rate
+estimatedEndTime:   { type: Date,   default: null },
+// The % at which we last recalculated the estimate (avoids recalc on every tick)
+lastEstimationPct:  { type: Number, default: 0 },
+// ──────────────────────────────────────────────────────────────────────────
   latestVoltage: { type: Number, default: 0 },
   latestCurrent: { type: Number, default: 0 },
   latestPower:   { type: Number, default: 0 },

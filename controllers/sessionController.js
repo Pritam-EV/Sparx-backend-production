@@ -63,6 +63,7 @@ const getActiveSession = async (req, res) => {
       energyConsumed: Number(session.energyConsumed) || 0,
       startDate: session.startDate,
       startTime: session.startTime,
+      estimatedEndTime: session.estimatedEndTime || null, 
       voltage,
       current,
       power,

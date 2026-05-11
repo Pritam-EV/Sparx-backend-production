@@ -179,41 +179,112 @@ if (topic.startsWith('device/') && topic.endsWith('/session/end')) {
       );
 
       // 2) If there is an active sessionId, update Session snapshot
-      if (sessionId) {
-        const sessSet = {
-          latestVoltage: v,
-          latestCurrent: c,
-          latestPower: p,
-          lastUpdate: now
-        };
-        if (energyConsumed !== undefined) {
-          sessSet.energyConsumed = energyConsumed;
-        }
+// 2) If there is an active sessionId, update Session snapshot
+if (sessionId) {
+  const sessSet = {
+    latestVoltage: v,
+    latestCurrent: c,
+    latestPower: p,
+    lastUpdate: now,
+  };
+  if (energyConsumed !== undefined) {
+    sessSet.energyConsumed = energyConsumed;
+  }
 
-        const sessResult = await Session.updateOne(
-          { sessionId, status: 'active' },
-          {
-            $set: sessSet,
-            $push: {
-              telemetry: {
-                timestamp: now,
-                voltage: v,
-                current: c,
-                power_W: p
+  const sessResult = await Session.updateOne(
+    { sessionId, status: 'active' },
+    {
+      $set: sessSet,
+      $push: {
+        telemetry: {
+          timestamp: now,
+          voltage: v,
+          current: c,
+          power_W: p,
+        },
+      },
+    }
+  );
+
+  // ─────────────────────────────────────────────────────────────────────
+  // ETA ESTIMATION ENGINE
+  // Runs on every telemetry tick. Recalculates estimatedEndTime only when
+  // a new 5% threshold is crossed (or once past 90%, every tick).
+  // ─────────────────────────────────────────────────────────────────────
+  if (energyConsumed !== undefined && energyConsumed > 0) {
+    try {
+      // Fetch only the fields we need — lightweight query
+      const sessionSnap = await Session.findOne(
+        { sessionId, status: 'active' },
+        { energySelected: 1, startTime: 1, lastEstimationPct: 1, energyConsumed: 1 }
+      ).lean();
+
+      if (sessionSnap && sessionSnap.energySelected > 0) {
+        const selected       = Number(sessionSnap.energySelected);
+        const consumed       = Number(energyConsumed);           // from live telemetry
+        const startTime      = new Date(sessionSnap.startTime);
+        const lastPct        = Number(sessionSnap.lastEstimationPct || 0);
+        const currentPct     = (consumed / selected) * 100;
+
+        // ── Determine if we should recalculate ──────────────────────────
+        // Strategy: recalculate at first 1%, then every 5% milestone,
+        // then every tick once above 90% (very close to done).
+        const currentMilestone = currentPct >= 90
+          ? Math.floor(currentPct)                        // every 1% above 90
+          : Math.floor(currentPct / 5) * 5;              // every 5% milestone
+
+        const shouldRecalculate =
+          (lastPct === 0 && currentPct >= 1) ||           // first time: ≥1%
+          currentMilestone > lastPct;                     // crossed a new milestone
+
+        if (shouldRecalculate) {
+          const elapsedMs    = now.getTime() - startTime.getTime();
+
+          // Guard: need at least 30 seconds of data to avoid wild early estimates
+          if (elapsedMs >= 30_000 && consumed > 0) {
+            const rateKwhPerMs    = consumed / elapsedMs;         // kWh per millisecond
+            const remainingKwh    = Math.max(0, selected - consumed);
+            const msToFinish      = remainingKwh / rateKwhPerMs;  // time left in ms
+            const estimatedEndTime = new Date(now.getTime() + msToFinish);
+
+            // Sanity cap: estimated end can't be more than 24 hours from now
+            // (guards against garbage data causing absurd estimates)
+            const maxEnd = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+            const safeEstimatedEndTime = estimatedEndTime > maxEnd ? maxEnd : estimatedEndTime;
+
+            await Session.updateOne(
+              { sessionId, status: 'active' },
+              {
+                $set: {
+                  estimatedEndTime: safeEstimatedEndTime,
+                  lastEstimationPct: currentMilestone || Math.floor(currentPct),
+                },
               }
-            }
-          }
-        );
+            );
 
-        console.log(
-          '[MQTT DEBUG] Session update',
-          sessionId,
-          'matched=',
-          sessResult?.matchedCount ?? sessResult?.n,
-          'modified=',
-          sessResult?.modifiedCount ?? sessResult?.nModified
-        );
+            console.log(
+              `[ETA] Session ${sessionId} | ` +
+              `Progress: ${currentPct.toFixed(1)}% | ` +
+              `Rate: ${(rateKwhPerMs * 3_600_000).toFixed(3)} kWh/h | ` +
+              `ETA: ${safeEstimatedEndTime.toISOString()}`
+            );
+          }
+        }
       }
+    } catch (etaErr) {
+      // Never crash telemetry processing over ETA errors
+      console.error('[ETA] Estimation failed (non-fatal):', etaErr.message);
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────
+
+  console.log(
+    '[MQTT DEBUG] Session update',
+    sessionId,
+    'matched=', sessResult?.matchedCount ?? sessResult?.n,
+    'modified=', sessResult?.modifiedCount ?? sessResult?.nModified
+  );
+}
 
       // 3) Optional: if status becomes Available/Offline and no sessionId,
       // you could auto-mark any lingering active session as completed here.
