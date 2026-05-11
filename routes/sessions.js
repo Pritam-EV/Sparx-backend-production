@@ -263,6 +263,36 @@ router.post("/update", async (req, res) => {
 // 9. Optional: fetch live sensor data for a device
 router.get("/device/:deviceId/sensor", authMiddleware, getLiveDeviceSensorData);
 
+
+
+// GET /api/sessions/device-eta/:deviceId
+// Returns estimated end time of the active session on a device (public info — no private data exposed)
+router.get('/device-eta/:deviceId', authMiddleware, async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
+
+    const session = await Session.findOne({ deviceId, status: 'active' })
+      .select('estimatedEndTime startTime energySelected energyConsumed')
+      .lean();
+
+    if (!session) {
+      return res.status(404).json({ error: 'No active session on this device' });
+    }
+
+    return res.json({
+      estimatedEndTime: session.estimatedEndTime || null,
+      startTime: session.startTime || null,
+      // progress hint — helps FE show "X% done, ~Ym left" without exposing PII
+      energyProgressPercent: session.energySelected > 0
+        ? Math.round((session.energyConsumed / session.energySelected) * 100)
+        : 0,
+    });
+  } catch (err) {
+    console.error('device-eta error:', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
 // 2. Fetch session by session ID (for LiveSession page)
 router.get("/:sessionId", authMiddleware, getSessionById);
 
