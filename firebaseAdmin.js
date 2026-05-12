@@ -5,7 +5,7 @@
 //   • authMiddleware.js  – token verification
 //   • middleware/uploadEB.js – Firebase Storage uploads
 // ─────────────────────────────────────────────────────────────────────────────
-const admin = require('firebase-admin');
+const { admin } = require('../firebaseAdmin');
 require('dotenv').config();
 
 if (!admin.apps.length) {
