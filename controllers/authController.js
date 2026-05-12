@@ -2,7 +2,7 @@ const User = require("../models/User");
 const jwt = require("jsonwebtoken");
 const { OAuth2Client } = require("google-auth-library");
 const crypto = require("crypto");
-const admin = require("../firebaseAdmin"); // new
+const admin = require('firebase-admin');
 require("dotenv").config(); // Load environment variables
 
 // ✅ Use environment variable for JWT secret
