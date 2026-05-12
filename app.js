@@ -4,28 +4,26 @@ const express   = require("express");
 const mongoose  = require("mongoose");
 const cors      = require("cors");
 const dotenv    = require("dotenv");
-const crypto    = require('crypto');
+const crypto = require('crypto');
 const couponsRouter = require('./routes/coupons');
-const Device    = require('./models/device');
-
-require("dotenv").config();
-
+const Device = require('./models/device');
+// Load env vars
+require("dotenv").config(); // at top of app.js
 const ALLOWED_ORIGINS = [
   "https://viz.vjratechnologies.com",
   "http://localhost:3000",
 ];
 
-// ─── Route handlers ───────────────────────────────────────────────────────────
-const authRoutes            = require("./routes/auth");
-const deviceRoutes          = require("./routes/devices");
-const sessionRoutes         = require("./routes/sessions");
-const userRoutes            = require('./routes/users');
-const analyticsRoutes       = require('./routes/analytics');
-const receiptsRoutes        = require('./routes/receipts');
-const operatorRoutes        = require("./routes/operator");
-const partnerRoutes         = require('./routes/partner');
-const electricityBillRoutes = require('./routes/electricityBill');
-const monthlyReportRoutes   = require('./routes/monthlyReport');   // ← NEW
+// Route handlers
+const authRoutes         = require("./routes/auth");
+const deviceRoutes       = require("./routes/devices");
+const sessionRoutes      = require("./routes/sessions");
+const userRoutes         = require('./routes/users');
+const analyticsRoutes    = require('./routes/analytics');
+const receiptsRoutes     = require('./routes/receipts');
+const operatorRoutes     = require("./routes/operator");
+const partnerRoutes      = require('./routes/partner');
+const electricityBillRoutes = require('./routes/electricityBill'); // ← NEW
 
 // MQTT Subscriber
 const startMqttSubscriber = require("./mqttSubscriber");
@@ -34,18 +32,24 @@ const app = express();
 
 const OFFLINE_THRESHOLD_MS = 30 * 1000;
 
+const allowedOrigins = [process.env.CLIENT_URL, 'http://localhost:3000'];
+
 if (!process.env.JWT_SECRET) {
-  console.error('FATAL: JWT_SECRET is not defined.');
+  console.error('FATAL: JWT_SECRET is not defined. Set JWT_SECRET in environment variables and restart the server.');
 }
 
-// ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
+// ─── MIDDLEWARE ────────────────────────────────────────────────────────────────
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(
   express.json({
-    verify: (req, res, buf) => { req.rawBody = buf.toString("utf8"); }
+    verify: (req, res, buf) => {
+      req.rawBody = buf.toString("utf8");
+    },
   })
 );
+
+const client_URLs = process.env.CLIENT_URL;
 
 app.use(
   cors({
@@ -80,22 +84,25 @@ mongoose
 // ─── ROUTES ───────────────────────────────────────────────────────────────────
 app.get('/ping', (req, res) => res.send('pong'));
 
-app.use("/api/auth",      authRoutes);
-app.use('/auth',          authRoutes);
-app.use("/api/devices",   deviceRoutes);
-app.use("/api/sessions",  sessionRoutes);
-app.use('/api/users',     userRoutes);
+app.use("/api/auth", authRoutes);
+app.use('/auth', authRoutes);
+app.use("/api/devices", deviceRoutes);
+app.use("/api/sessions", sessionRoutes);
+app.use('/api/users', userRoutes);
 app.use('/api/analytics', analyticsRoutes);
-app.use('/api/receipts',  receiptsRoutes);
-app.use('/api/eb',        electricityBillRoutes);
-app.use('/api/reports',   monthlyReportRoutes);   // ← NEW: monthly financial reports
+app.use('/api/receipts', receiptsRoutes);
+app.use('/api/eb', electricityBillRoutes);   // ← NEW: EB management
 
 app.get("/api/getDevice", async (req, res) => {
   try {
     const { transactionId } = req.query;
-    if (!transactionId) return res.status(400).json({ error: "Transaction ID is required" });
+    if (!transactionId) {
+      return res.status(400).json({ error: "Transaction ID is required" });
+    }
     const session = await require("./models/session").findOne({ transactionId });
-    if (!session)       return res.status(404).json({ error: "Transaction ID not found" });
+    if (!session) {
+      return res.status(404).json({ error: "Transaction ID not found" });
+    }
     res.json(session);
   } catch (err) {
     console.error("Error fetching session:", err);
@@ -103,7 +110,7 @@ app.get("/api/getDevice", async (req, res) => {
   }
 });
 
-app.use("/api/payment",  require("./routes/payment"));
+app.use("/api/payment", require("./routes/payment"));
 app.use("/api/operator", operatorRoutes);
 
 // ─── OFFLINE SWEEP ────────────────────────────────────────────────────────────
