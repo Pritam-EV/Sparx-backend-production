@@ -15,29 +15,27 @@ const ALLOWED_ORIGINS = [
 ];
 
 // Route handlers
-const authRoutes    = require("./routes/auth");
-const deviceRoutes  = require("./routes/devices");
-const sessionRoutes = require("./routes/sessions");
-const userRoutes    = require('./routes/users'); // Adjust path as needed
-const analyticsRoutes = require('./routes/analytics');
-const receiptsRoutes = require('./routes/receipts'); // add
-const operatorRoutes = require("./routes/operator");
-const partnerRoutes = require('./routes/partner');
+const authRoutes         = require("./routes/auth");
+const deviceRoutes       = require("./routes/devices");
+const sessionRoutes      = require("./routes/sessions");
+const userRoutes         = require('./routes/users');
+const analyticsRoutes    = require('./routes/analytics');
+const receiptsRoutes     = require('./routes/receipts');
+const operatorRoutes     = require("./routes/operator");
+const partnerRoutes      = require('./routes/partner');
+const electricityBillRoutes = require('./routes/electricityBill'); // ← NEW
 
-// MQTT Subscriber (if you still need it)
+// MQTT Subscriber
 const startMqttSubscriber = require("./mqttSubscriber");
 
 const app = express();
 
-const OFFLINE_THRESHOLD_MS = 30 * 1000; // 2 minutes
+const OFFLINE_THRESHOLD_MS = 30 * 1000;
 
 const allowedOrigins = [process.env.CLIENT_URL, 'http://localhost:3000'];
 
-
 if (!process.env.JWT_SECRET) {
   console.error('FATAL: JWT_SECRET is not defined. Set JWT_SECRET in environment variables and restart the server.');
-  // Optionally exit so you don't run in a broken state:
-  // process.exit(1);
 }
 
 // ─── MIDDLEWARE ────────────────────────────────────────────────────────────────
@@ -53,22 +51,19 @@ app.use(
 
 const client_URLs = process.env.CLIENT_URL;
 
-// CORS: allow your frontend origins
-
 app.use(
   cors({
     origin: function (origin, cb) {
-      if (!origin) return cb(null, true); // allow server-to-server or curl
+      if (!origin) return cb(null, true);
       return cb(null, ALLOWED_ORIGINS.includes(origin));
     },
     methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: false, // set true only if sending cookies; then also send ACA-Credentials
+    credentials: false,
     maxAge: 86400,
   })
 );
 
-// Ensure all preflights are handled
 app.options("*", cors({
   origin: ALLOWED_ORIGINS,
   methods: ["GET","HEAD","PUT","PATCH","POST","DELETE","OPTIONS"],
@@ -76,36 +71,28 @@ app.options("*", cors({
   credentials: false,
 }));
 
-
-
-// Serve static assets (e.g. your SVG/clipart for SessionStart page):
 app.use(express.static("public"));
 app.use('/api/coupons', couponsRouter);
 app.use('/api/partner', partnerRoutes);
-// ─── DATABASE ────────────────────────────────────────────────────────────────
+
+// ─── DATABASE ─────────────────────────────────────────────────────────────────
 mongoose
-  .connect(process.env.MONGO_URI)  // ✅ Modern, no options needed (Node 20+)
+  .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB Connected"))
   .catch(err => console.error("❌ MongoDB Connection Error:", err.message));
 
-
-// ─── ROUTES ────────────────────────────────────────────────────────────────────
-// Authentication
+// ─── ROUTES ───────────────────────────────────────────────────────────────────
 app.get('/ping', (req, res) => res.send('pong'));
 
 app.use("/api/auth", authRoutes);
 app.use('/auth', authRoutes);
-// Devices (location, charger type, rate)
 app.use("/api/devices", deviceRoutes);
-
-// Sessions (start, stop, by-transaction, by-sessionId, etc.)
 app.use("/api/sessions", sessionRoutes);
-
 app.use('/api/users', userRoutes);
-
 app.use('/api/analytics', analyticsRoutes);
-app.use('/api/receipts', receiptsRoutes);  
-// Legacy GET endpoint (optional; can remove if you use `/api/sessions/by-transaction`)
+app.use('/api/receipts', receiptsRoutes);
+app.use('/api/eb', electricityBillRoutes);   // ← NEW: EB management
+
 app.get("/api/getDevice", async (req, res) => {
   try {
     const { transactionId } = req.query;
@@ -124,11 +111,9 @@ app.get("/api/getDevice", async (req, res) => {
 });
 
 app.use("/api/payment", require("./routes/payment"));
-app.use('/api/receipts', require('./routes/receipts'));
 app.use("/api/operator", operatorRoutes);
 
-
-
+// ─── OFFLINE SWEEP ────────────────────────────────────────────────────────────
 setInterval(async () => {
   console.log("🔍 Running offline sweep…");
   const cutoff = new Date(Date.now() - OFFLINE_THRESHOLD_MS);
@@ -137,16 +122,12 @@ setInterval(async () => {
     { status: "Offline" }
   );
   console.log(`🛑 Offline sweep modified ${result.modifiedCount} devices`);
-}, 10 * 1000);  // every 10 seconds
+}, 10 * 1000);
 
-
-
-
-// Start your MQTT subscriber after HTTP is running
+// Start MQTT subscriber
 startMqttSubscriber();
 
-
-// ─── START SERVER ──────────────────────────────────────────────────────────────
+// ─── START SERVER ─────────────────────────────────────────────────────────────
 const port = process.env.PORT || 5000;
 app.listen(port, () => {
   console.log(`🚀 Server running on port ${port}`);
