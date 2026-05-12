@@ -55,7 +55,62 @@ const isValidMonth = (m) => /^\d{4}-(0[1-9]|1[0-2])$/.test(m);
 // ============================================================
 //  ADMIN ROUTES
 // ============================================================
+// ─────────────────────────────────────────────────────────────────────────────
+//  GET /api/eb/admin/projects
+//  Returns distinct projects that have at least one device with
+//  commercial.electricityBearer === "VJRA". Used to populate the project
+//  dropdown in the admin EB upload form.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get(
+  '/admin/projects',
+  auth,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      const devices = await Device.find({
+        'commercial.electricityBearer': 'VJRA',
+        project: { $exists: true, $ne: null, $ne: '' }
+      })
+        .select('project ownerId device_id')
+        .populate('ownerId', 'name email')
+        .lean();
 
+      if (!devices.length) return res.json({ projects: [] });
+
+      // Group devices by project
+      const map = {};
+      devices.forEach((d) => {
+        const proj = d.project.trim();
+        if (!map[proj]) {
+          map[proj] = {
+            project: proj,
+            deviceCount: 0,
+            owners: new Set(),
+          };
+        }
+        map[proj].deviceCount += 1;
+        // collect unique owner names
+        const ownerArr = Array.isArray(d.ownerId) ? d.ownerId : [d.ownerId];
+        ownerArr.forEach((o) => {
+          if (o && o.name) map[proj].owners.add(o.name);
+        });
+      });
+
+      const projects = Object.values(map).map((p) => ({
+        project: p.project,
+        deviceCount: p.deviceCount,
+        ownerNames: [...p.owners],
+      }));
+
+      projects.sort((a, b) => a.project.localeCompare(b.project));
+
+      return res.json({ projects });
+    } catch (err) {
+      console.error('[EB admin/projects]', err);
+      return res.status(500).json({ error: 'Server error while fetching projects.' });
+    }
+  }
+);
 // ─────────────────────────────────────────────────────────────────────────────
 //  POST /api/eb/admin/upload
 //  Create a new EB or update an existing one for the same project+month.
