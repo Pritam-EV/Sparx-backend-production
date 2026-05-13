@@ -149,13 +149,29 @@ try {
 } catch (e) {
   extraCharges = [];
 }
+// Manually compute totals (pre-save hook won't run on findOneAndUpdate)
+const amt = (line) => (line?.amount || 0);
+const totalOwnerPayable = Number((
+  amt(charges.wheelingCharges) +
+  amt(charges.demandCharges) +
+  amt(charges.fac) +
+  amt(charges.fixedCharges) +
+  amt(charges.electricityDuty) +
+  amt(charges.meterRent) +
+  amt(charges.powerFactorAdjustment) +
+  amt(charges.delayedPaymentCharges) +
+  amt(charges.regulatoryCharges) +
+  amt(charges.otherCharges)
+).toFixed(2));
 
+const totalEBAmount = Number((totalOwnerPayable + amt(charges.energyCharges)).toFixed(2));
 const update = {
   charges,
-  extraCharges,   // ← store the array separately
+  extraCharges,
+  totalOwnerPayable,
+  totalEBAmount,       // ← now actually saved
   lastUpdatedBy: req.user.userId
 };
-
 
       // Attach PDF path only if a file was uploaded
       if (req.ebUpload) {
