@@ -77,7 +77,12 @@ const ElectricityBillSchema = new mongoose.Schema(
       regulatoryCharges:      { ...ChargeLineSchema.obj },   // MERC/regulatory surcharges
       otherCharges:           { ...ChargeLineSchema.obj },   // Catch-all for unlisted line items
     },
-
+extraCharges: [
+  {
+    label:  { type: String, trim: true },
+    amount: { type: Number, default: 0 }
+  }
+],
     // ── COMPUTED TOTALS (set by pre-save hook, do not set manually) ────────
     // Sum of all owner-bearing charge amounts
     totalOwnerPayable: { type: Number, default: 0, min: 0 },

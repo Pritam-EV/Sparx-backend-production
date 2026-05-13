@@ -45,7 +45,7 @@ const parseCharges = (body) => {
     powerFactorAdjustment: { amount: num(body.powerFactorAdjustment), remarks: body.powerFactorAdjustmentRemarks || '' },
     delayedPaymentCharges: { amount: num(body.delayedPaymentCharges), remarks: body.delayedPaymentChargesRemarks || '' },
     regulatoryCharges:     { amount: num(body.regulatoryCharges),     remarks: body.regulatoryChargesRemarks     || '' },
-    otherCharges:          { amount: num(body.otherCharges),          remarks: body.otherChargesRemarks          || '' },
+    otherCharges: { amount: 0, remarks: '' },  // legacy field, kept for schema compat
   };
 };
 
@@ -134,11 +134,28 @@ router.post(
 
       const charges = parseCharges(req.body);
 
-      // Build update payload
-      const update = {
-        charges,
-        lastUpdatedBy: req.user.userId
-      };
+      // Parse the dynamic otherCharges array from frontend
+let extraCharges = [];
+try {
+  const raw = body.otherCharges;  // could be a JSON string or undefined
+  if (raw) {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (Array.isArray(parsed)) {
+      extraCharges = parsed
+        .filter(o => o.label && o.label.trim() && o.amount !== '')
+        .map(o => ({ label: o.label.trim(), amount: Number(o.amount) || 0 }));
+    }
+  }
+} catch (e) {
+  extraCharges = [];
+}
+
+const update = {
+  charges,
+  extraCharges,   // ← store the array separately
+  lastUpdatedBy: req.user.userId
+};
+
 
       // Attach PDF path only if a file was uploaded
       if (req.ebUpload) {
