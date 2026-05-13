@@ -335,15 +335,29 @@ router.get(
       if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
         return res.status(400).json({ error: 'Invalid EB id.' });
       }
+
       const eb = await ElectricityBill.findById(req.params.id)
-        .populate('uploadedBy',    'name email')
+        .populate('uploadedBy', 'name email')
         .populate('lastUpdatedBy', 'name email')
         .populate('ownerPayment.verifiedBy', 'name email')
         .populate('msebPaidBy', 'name email')
         .lean();
 
       if (!eb) return res.status(404).json({ error: 'EB record not found.' });
-      return res.json({ eb });
+
+      return res.json({
+        eb: {
+          ...eb,
+          paymentStatusLabel:
+            eb.status === 'payment_submitted'
+              ? 'Submitted by owner'
+              : eb.status === 'payment_verified'
+              ? 'Verified by admin'
+              : eb.status === 'eb_paid_to_mseb'
+              ? 'Paid to MSEB'
+              : 'Pending owner payment',
+        }
+      });
     } catch (err) {
       console.error('[EB get detail]', err);
       return res.status(500).json({ error: 'Server error.' });
@@ -386,7 +400,10 @@ router.patch(
 
       await eb.save();
 
-      return res.json({ message: 'Payment verified successfully.', eb });
+      return res.json({
+  message: 'Payment verified successfully.',
+  eb
+});
     } catch (err) {
       console.error('[EB verify-payment]', err);
       return res.status(500).json({ error: 'Server error.' });
