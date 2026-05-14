@@ -334,63 +334,70 @@ if (payment.status === "PENDING") {
 // Returns all payments for the logged-in user, newest first
 // GET /api/payment/my-transactions
 // GET /api/payment/my-transactions
+// GET /api/payment/my-transactions
 router.get("/my-transactions", authMiddleware, async (req, res) => {
   try {
     const userId = req.user.userId;
     const Receipt = require("../models/Receipt");
+    const WalletTransaction = require("../models/WalletTransaction");
 
-    // 1. Fetch all payments
+    // 1. Payment records (gateway + wallet-pay charging)
     const payments = await Payment.find({ userId })
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .select(
-        "orderId sessionId deviceId amountPaid currency status paymentMethod paymentGroup cfPaymentId bankReference failureReason paidAt createdAt"
-      )
+      .sort({ createdAt: -1 }).limit(100)
+      .select("orderId sessionId deviceId amountPaid currency status paymentMethod paymentGroup cfPaymentId bankReference failureReason paidAt createdAt gateway type")
       .lean();
 
-    const orderIds = payments.map((p) => p.orderId).filter(Boolean);
+    const orderIds = payments.map(p => p.orderId).filter(Boolean);
 
-    // 2. Fetch matching receipts that have a refund
-    const receipts = await Receipt.find(
-      {
-        transactionId: { $in: orderIds },
-        userId,
-        "refund.status": { $exists: true, $ne: null },
-      },
-      {
-        transactionId: 1,
-        receiptId: 1,
-        amountPaid: 1,
-        "refund.status": 1,
-        "refund.refundId": 1,
-        "refund.failureReason": 1,
-        "refund.processedAt": 1,
-        "refund.amount": 1,
-        createdAt: 1,
-      }
-    ).lean();
+    // 2. Refund entries from Receipt model (unchanged)
+    const receipts = await Receipt.find({
+      transactionId: { $in: orderIds }, userId,
+      "refund.status": { $exists: true, $ne: null },
+    }, { transactionId:1, receiptId:1, amountPaid:1, "refund.status":1, "refund.refundId":1, "refund.failureReason":1, "refund.processedAt":1, "refund.amount":1, createdAt:1 }).lean();
 
-    // 3. Build refund entries as separate transaction-like objects
-    const refundEntries = receipts
-      .filter((r) => r.refund)
-      .map((r) => ({
-        _id: `refund_${r._id}`,
-        orderId: r.transactionId,         // original payment orderId
-        receiptId: r.receiptId,
-        amountPaid: r.refund.amount ?? r.amountPaid ?? 0,
-        status: "REFUND",
-        refundId: r.refund.refundId || null,
-        refundStatus: r.refund.status,
-        refundFailureReason: r.refund.failureReason || null,
-        paidAt: r.refund.processedAt || r.createdAt,
-        createdAt: r.refund.processedAt || r.createdAt,
-        isRefundEntry: true,              // flag so FE knows this is a refund row
-      }));
+    const refundEntries = receipts.filter(r => r.refund).map(r => ({
+      _id: `refund_${r._id}`,
+      orderId: r.transactionId,
+      amountPaid: r.refund.amount ?? r.amountPaid ?? 0,
+      status: "REFUND",
+      refundId: r.refund.refundId || null,
+      refundStatus: r.refund.status,
+      refundFailureReason: r.refund.failureReason || null,
+      paidAt: r.refund.processedAt || r.createdAt,
+      createdAt: r.refund.processedAt || r.createdAt,
+      isRefundEntry: true,
+    }));
 
-    // 4. Merge payments + refund entries, sort by date
-    const allTransactions = [...payments, ...refundEntries].sort(
-      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
-    );
+    // 3. ✨ NEW: Wallet topups & wallet refunds
+    //    Skip type="charging" — those are already Payment records with gateway:"wallet"
+    const walletTxns = await WalletTransaction.find({
+      userId,
+      type: { $ne: "charging" },
+    })
+      .sort({ createdAt: -1 }).limit(100)
+      .select("type amount description orderId idempotencyKey createdAt status")
+      .lean();
+
+    const walletEntries = walletTxns.map(w => ({
+      _id: `wallet_${w._id}`,
+      orderId: w.orderId || w.idempotencyKey || `wallet_${w._id}`,
+      amountPaid: w.amount,
+      status: w.type === "topup" ? "TOPUP" : "WALLET_REFUND",
+      walletTxnType: w.type,
+      description: w.description || "",
+      paidAt: w.createdAt,
+      createdAt: w.createdAt,
+      isWalletEntry: true,
+    }));
+
+    // 4. Tag payments with source, merge all, sort
+    const taggedPayments = payments.map(p => ({
+      ...p,
+      txnSource: p.gateway === "wallet" ? "wallet_pay" : "gateway",
+    }));
+
+    const allTransactions = [...taggedPayments, ...refundEntries, ...walletEntries]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     return res.status(200).json({ success: true, transactions: allTransactions });
   } catch (err) {
