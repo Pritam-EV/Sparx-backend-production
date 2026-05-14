@@ -342,10 +342,14 @@ router.get("/my-transactions", authMiddleware, async (req, res) => {
     const WalletTransaction = require("../models/WalletTransaction");
 
     // 1. Payment records (gateway + wallet-pay charging)
-    const payments = await Payment.find({ userId })
-      .sort({ createdAt: -1 }).limit(100)
-      .select("orderId sessionId deviceId amountPaid currency status paymentMethod paymentGroup cfPaymentId bankReference failureReason paidAt createdAt gateway type")
-      .lean();
+// 1. Payment records — exclude wallet_topup (those come via WalletTransaction below)
+const payments = await Payment.find({ 
+  userId,
+  type: { $ne: "wallet_topup" }   // ← ADD THIS LINE ONLY
+})
+  .sort({ createdAt: -1 }).limit(100)
+  .select("orderId sessionId deviceId amountPaid currency status paymentMethod paymentGroup cfPaymentId bankReference failureReason paidAt createdAt gateway type")
+  .lean();
 
     const orderIds = payments.map(p => p.orderId).filter(Boolean);
 

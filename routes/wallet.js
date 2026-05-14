@@ -206,7 +206,7 @@ router.get("/topup-status", authMiddleware, async (req, res) => {
           amount: payment.amountPaid,
           type: "topup",
           orderId,
-          description: "Wallet topup via Cashfree (status-check)",
+          description: "Wallet topup via Cashfree",
           idempotencyKey: `topup_${orderId}`,
           ip: req.ip,
         });
