@@ -165,13 +165,75 @@ router.post("/topup/verify", authMiddleware, async (req, res) => {
 });
 
 // ── GET /api/wallet/topup-status?orderId= ─── (used by WalletTopupSuccess polling)
+// GET /api/wallet/topup-status?orderId=
+// Self-healing: if PENDING in DB, checks Cashfree and credits wallet
 router.get("/topup-status", authMiddleware, async (req, res) => {
   try {
     const { orderId } = req.query;
+    if (!orderId) return res.json({ status: "PENDING" });
+
     const payment = await Payment.findOne({ orderId }).lean();
     if (!payment) return res.json({ status: "PENDING" });
-    res.json({ status: payment.status, amount: payment.amountPaid });
+
+    // Already done — return immediately
+    if (payment.status === "SUCCESS") {
+      return res.json({ status: "SUCCESS", amount: payment.amountPaid });
+    }
+    if (payment.status === "FAILED") {
+      return res.json({ status: "FAILED" });
+    }
+
+    // Still PENDING in DB — go ask Cashfree directly
+    const CASHFREE_BASE_URL = process.env.CASHFREE_ENV === "PROD"
+      ? "https://api.cashfree.com"
+      : "https://sandbox.cashfree.com";
+
+    const cfResp = await axios.get(`${CASHFREE_BASE_URL}/pg/orders/${orderId}`, {
+      headers: {
+        "x-client-id": process.env.CASHFREE_APP_ID,
+        "x-client-secret": process.env.CASHFREE_SECRET_KEY,
+        "x-api-version": "2023-08-01",
+      },
+    });
+
+    const orderStatus = cfResp.data?.order_status;
+
+    if (orderStatus === "PAID") {
+      // Credit wallet (idempotent — safe to call even if webhook fires later)
+      try {
+        await creditWallet({
+          userId: payment.userId.toString(),
+          amount: payment.amountPaid,
+          type: "topup",
+          orderId,
+          description: "Wallet topup via Cashfree (status-check)",
+          idempotencyKey: `topup_${orderId}`,
+          ip: req.ip,
+        });
+      } catch (e) {
+        // Already credited via webhook — idempotency key prevents double credit
+        console.log("creditWallet skipped (already done):", e.message);
+      }
+
+      // Mark payment SUCCESS
+      await Payment.updateOne(
+        { orderId, status: { $ne: "SUCCESS" } },
+        { $set: { status: "SUCCESS", paidAt: new Date() } }
+      );
+
+      return res.json({ status: "SUCCESS", amount: payment.amountPaid });
+    }
+
+    if (orderStatus === "FAILED" || orderStatus === "CANCELLED" || orderStatus === "TERMINATED") {
+      await Payment.updateOne({ orderId }, { $set: { status: "FAILED" } });
+      return res.json({ status: "FAILED" });
+    }
+
+    // Genuinely still pending
+    return res.json({ status: "PENDING" });
+
   } catch (err) {
+    console.error("topup-status error:", err.message);
     res.status(500).json({ status: "PENDING" });
   }
 });
