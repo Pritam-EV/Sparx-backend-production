@@ -24,7 +24,7 @@ const receiptsRoutes     = require('./routes/receipts');
 const operatorRoutes     = require("./routes/operator");
 const partnerRoutes      = require('./routes/partner');
 const electricityBillRoutes = require('./routes/electricityBill'); // ← NEW
-
+const walletRoutes = require("./routes/wallet");
 // MQTT Subscriber
 const startMqttSubscriber = require("./mqttSubscriber");
 
@@ -92,7 +92,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/receipts', receiptsRoutes);
 app.use('/api/eb', electricityBillRoutes);   // ← NEW: EB management
-
+app.use("/api/wallet", walletRoutes);
 app.get("/api/getDevice", async (req, res) => {
   try {
     const { transactionId } = req.query;

@@ -35,6 +35,11 @@ const sessionSchema = new mongoose.Schema({
   status:         { type: String,  enum: ["active","completed","faulty"], default: "active" },
   endTrigger:     { type: String,  default: null },
   endTime:        { type: Date,    default: null },
+  paymentGateway: {
+  type: String,
+  enum: ["cashfree", "wallet", "free"],
+  default: "cashfree",
+},
   // ─── ETA fields ───────────────────────────────────────────────────────────
 // Continuously refined estimated session end time based on actual charge rate
 estimatedEndTime:   { type: Date,   default: null },

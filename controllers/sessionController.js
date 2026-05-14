@@ -6,6 +6,8 @@ const Coupon = require('../models/Coupon');
 const CouponReservation = require('../models/CouponReservation');
 const Receipt = require('../models/Receipt');
 const crypto = require("crypto");
+const { creditWallet } = require("../services/walletService");
+const Payment = require("../models/Payment");
 function rand(len = 8) {
   return crypto.randomBytes(Math.ceil(len / 2)).toString("hex").slice(0, len).toUpperCase();
 }
@@ -241,11 +243,12 @@ if (couponCode) {
         amountSelected,
         discountApplied, 
         status: "active",
-        ratePerKwh
+        ratePerKwh,
+        paymentGateway: req.body.paymentGateway || "cashfree",
       });
     await newSession.save();
 
-    const Payment = require("../models/Payment");
+
 
 await Payment.updateOne(
   { orderId: transactionId },
@@ -542,19 +545,55 @@ receipt = new Receipt({
   ownerPayout,
   
   // Refund lifecycle
+  // Refund lifecycle
   refund: {
     status: refundStatus,
     refundId: refundAmount > 0 ? `REF${rand(8)}` : undefined,
-    initiatedAt: refundAmount > 0 ? new Date() : undefined
+    initiatedAt: refundAmount > 0 ? new Date() : undefined,
+    // wallet refund gets processed below immediately after receipt.save()
   }
 });
 
-await receipt.save();
+    await receipt.save();
 
+    // ── Wallet Refund: if session was paid via wallet, credit refund instantly ──
+    if (refundAmount > 0) {
+      try {
+        const paymentRecord = await Payment.findOne({ orderId: session.transactionId }).lean();
 
+        if (paymentRecord?.gateway === "wallet") {
+          // Instant wallet refund
+          await creditWallet({
+            userId: session.userId.toString(),
+            amount: refundAmount,
+            type: "refund",
+            sessionId: session.sessionId,
+            orderId: session.transactionId,
+            description: `Refund for unused charging — session ${session.sessionId}`,
+            idempotencyKey: `refund_${session.sessionId}`,
+          });
 
+          // Update receipt refund status to wallet_refunded
+          await Receipt.updateOne(
+            { sessionId: session.sessionId },
+            {
+              $set: {
+                "refund.status": "wallet_refunded",
+                "refund.processedAt": new Date(),
+              },
+            }
+          );
 
-  }
+          console.log(`✅ Wallet refund of ₹${refundAmount} processed for session ${session.sessionId}`);
+        }
+        // For cashfree/free payments, the existing Cashfree refund flow handles it separately
+      } catch (refundErr) {
+        // Log but don't fail session completion — refund can be retried
+        console.error(`❌ Wallet refund failed for session ${session.sessionId}:`, refundErr.message);
+      }
+    }
+
+  }  // end of if (!receipt)
 
   // Only for manual stop (optional)
   if (sendStopMqtt) {

@@ -145,6 +145,27 @@ await Payment.updateOne(
   }
 );
 
+  // NEW: if this is a wallet topup order, credit wallet
+  if (orderId.startsWith("wlt_") && !orderId.startsWith("wlt_pay_")) {
+    const { creditWallet } = require("../services/walletService");
+    const payment = await Payment.findOne({ orderId });
+    if (payment && payment.status !== "WALLET_CREDITED") {
+      try {
+        await creditWallet({
+          userId: payment.userId.toString(),
+          amount: payment.amountPaid,
+          type: "topup",
+          orderId,
+          description: "Wallet topup via Cashfree webhook",
+          idempotencyKey: `topup_${orderId}`,
+        });
+        await Payment.updateOne({ orderId }, { $set: { status: "SUCCESS" } });
+      } catch (e) {
+        console.error("Webhook wallet credit failed:", e.message);
+      }
+    }
+  }
+
 }
 
 if (event.type === "PAYMENT_FAILED") {

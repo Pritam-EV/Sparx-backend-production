@@ -42,13 +42,18 @@ const PaymentSchema = new mongoose.Schema(
       default: "PENDING",
       index: true,
     },
-
+    type: {
+  type: String,
+  enum: ["charging", "wallet_topup"],
+  default: "charging",
+  },
     paymentMethod: {
-      type: String, // upi / card / netbanking / free
+      type: String, // upi / card / netbanking / free / wallet / wallet_topup
     },
 
     gateway: {
-      type: String, // cashfree / free
+      type: String,
+      enum: ["cashfree", "wallet", "free"],   // ← add "wallet"
       default: "cashfree",
     },
 
