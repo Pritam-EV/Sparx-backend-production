@@ -354,33 +354,42 @@ const payments = await Payment.find({
     const orderIds = payments.map(p => p.orderId).filter(Boolean);
 
     // 2. Refund entries from Receipt model (unchanged)
-    const receipts = await Receipt.find({
-      transactionId: { $in: orderIds }, userId,
-      "refund.status": { $exists: true, $ne: null },
-    }, { transactionId:1, receiptId:1, amountPaid:1, "refund.status":1, "refund.refundId":1, "refund.failureReason":1, "refund.processedAt":1, "refund.amount":1, createdAt:1 }).lean();
+// 2. Refund entries from Receipt — ONLY for cashfree-paid sessions (bank refunds)
+//    wallet session refunds are already in WalletTransaction below
+const receipts = await Receipt.find({
+  transactionId: { $in: orderIds },
+  userId,
+  "refund.status": { $in: ["initiated", "processed", "failed"] }, // ← excludes "wallet_refunded" and "not_applicable"
+}, {
+  transactionId:1, receiptId:1, amountPaid:1, refundAmount:1,
+  "refund.status":1, "refund.refundId":1, "refund.failureReason":1,
+  "refund.processedAt":1, createdAt:1
+}).lean();
 
-    const refundEntries = receipts.filter(r => r.refund).map(r => ({
-      _id: `refund_${r._id}`,
-      orderId: r.transactionId,
-      amountPaid: r.refund.amount ?? r.amountPaid ?? 0,
-      status: "REFUND",
-      refundId: r.refund.refundId || null,
-      refundStatus: r.refund.status,
-      refundFailureReason: r.refund.failureReason || null,
-      paidAt: r.refund.processedAt || r.createdAt,
-      createdAt: r.refund.processedAt || r.createdAt,
-      isRefundEntry: true,
-    }));
+const refundEntries = receipts.map(r => ({
+  _id: `refund_${r._id}`,
+  orderId: r.transactionId,
+  amountPaid: r.refundAmount ?? r.amountPaid ?? 0,  // use refundAmount not full amountPaid
+  status: "REFUND",
+  refundId: r.refund?.refundId || null,
+  refundStatus: r.refund?.status,
+  refundFailureReason: r.refund?.failureReason || null,
+  paidAt: r.refund?.processedAt || r.createdAt,
+  createdAt: r.refund?.processedAt || r.createdAt,
+  isRefundEntry: true,
+}));
 
     // 3. ✨ NEW: Wallet topups & wallet refunds
     //    Skip type="charging" — those are already Payment records with gateway:"wallet"
-    const walletTxns = await WalletTransaction.find({
-      userId,
-      type: { $ne: "charging" },
-    })
-      .sort({ createdAt: -1 }).limit(100)
-      .select("type amount description orderId idempotencyKey createdAt status")
-      .lean();
+// 3. Wallet entries: topup + refund only
+// "debit" type is already shown via Payment records with gateway:"wallet"
+const walletTxns = await WalletTransaction.find({
+  userId,
+  type: { $in: ["topup", "refund", "admin_credit"] },  // explicit whitelist, not $ne
+})
+  .sort({ createdAt: -1 }).limit(100)
+  .select("type amount description orderId sessionId idempotencyKey createdAt")
+  .lean();
 
     const walletEntries = walletTxns.map(w => ({
       _id: `wallet_${w._id}`,

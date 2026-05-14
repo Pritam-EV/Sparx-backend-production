@@ -65,17 +65,18 @@ const receiptSchema = new mongoose.Schema({
   ownerPayout: { type: Number, default: 0 },             // Amount owner receives
   
   // ============== REFUND LIFECYCLE ==============
-  refund: {
-    status: {
-      type: String,
-      enum: ["not_applicable", "initiated", "processed", "failed"],
-      default: "not_applicable"
-    },
-    refundId: String,
-    initiatedAt: Date,
-    processedAt: Date,
-    failureReason: String
+refund: {
+  status: {
+    type: String,
+    // ADD "wallet_refunded" to enum
+    enum: ["not_applicable", "initiated", "processed", "failed", "wallet_refunded"],
+    default: "not_applicable"
   },
+  refundId: String,
+  initiatedAt: Date,
+  processedAt: Date,
+  failureReason: String
+},
   
   // ============== USER FEEDBACK ==============
   rating: { type: Number, min: 1, max: 5 },
