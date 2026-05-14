@@ -165,7 +165,7 @@ router.post("/topup/verify", authMiddleware, async (req, res) => {
 });
 
 // ── GET /api/wallet/topup-status?orderId= ─── (used by WalletTopupSuccess polling)
-router.get("/topup-status", verifyToken, async (req, res) => {
+router.get("/topup-status", authMiddleware, async (req, res) => {
   try {
     const { orderId } = req.query;
     const payment = await Payment.findOne({ orderId }).lean();
