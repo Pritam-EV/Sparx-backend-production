@@ -451,7 +451,7 @@ exports.getReportPdf = async (req, res) => {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="Sparx_Report_${mon}_${proj.replace(/\s+/g, '_')}.pdf"`
+      `attachment; filename="VIZ_Report_${mon}_${proj.replace(/\s+/g, '_')}.pdf"`
     );
     doc.pipe(res);
 
@@ -463,7 +463,7 @@ exports.getReportPdf = async (req, res) => {
     // Header bar
     doc.rect(0, 0, doc.page.width, 70).fill('#04BFBF');
     doc.fillColor('#ffffff')
-       .font(BOLD).fontSize(20).text('Sparx EV — Monthly Report', 50, 20)
+       .font(BOLD).fontSize(20).text('VIZ EV — Monthly Report', 50, 20)
        .font(REG).fontSize(10)
        .text(`${mon}  |  Project: ${proj}  |  Owner: ${ownerName}`, 50, 48);
     doc.fillColor('#000000').moveDown(3);

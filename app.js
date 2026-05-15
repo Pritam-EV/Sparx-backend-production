@@ -25,6 +25,7 @@ const operatorRoutes     = require("./routes/operator");
 const partnerRoutes      = require('./routes/partner');
 const electricityBillRoutes = require('./routes/electricityBill'); // ← NEW
 const walletRoutes = require("./routes/wallet");
+const activityRoutes = require('./routes/activityRoutes');
 // MQTT Subscriber
 const startMqttSubscriber = require("./mqttSubscriber");
 
@@ -112,7 +113,7 @@ app.get("/api/getDevice", async (req, res) => {
 
 app.use("/api/payment", require("./routes/payment"));
 app.use("/api/operator", operatorRoutes);
-
+app.use('/activity', activityRoutes);
 // ─── OFFLINE SWEEP ────────────────────────────────────────────────────────────
 setInterval(async () => {
   console.log("🔍 Running offline sweep…");

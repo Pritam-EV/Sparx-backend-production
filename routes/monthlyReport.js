@@ -213,7 +213,7 @@ export default function OwnerReports() {
       const eb = report.ebData || {};
       const rd = report.reportData || {};
       const rows = [
-        ["Sparx EV — Monthly Report"],
+        ["VIZ EV — Monthly Report"],
         [`Period: ${monthLabel(month, year)}`],
         [`Owner: ${report.ownerName || ""}`],
         [`Project: ${report.projectName || ""}`],
@@ -253,7 +253,7 @@ export default function OwnerReports() {
       ];
       const csv  = rows.map((r) => r.join(",")).join("\n");
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-      downloadBlob(blob, `Sparx_Report_${toMonthStr(month, year)}_${project}.csv`);
+      downloadBlob(blob, `VIZ_Report_${toMonthStr(month, year)}_${project}.csv`);
       toast("CSV downloaded!");
     } catch { toast("Download failed."); }
     finally { setDlExcel(false); }
@@ -268,7 +268,7 @@ export default function OwnerReports() {
         `${BASE}/api/reports/owner/pdf?project=${encodeURIComponent(project)}&month=${mon}`
       );
       const blob = await res.blob();
-      downloadBlob(blob, `Sparx_Report_${mon}_${project}.pdf`);
+      downloadBlob(blob, `VIZ_Report_${mon}_${project}.pdf`);
       toast("Report PDF downloaded!");
     } catch { toast("PDF download failed."); }
     finally { setDlPdf(false); }

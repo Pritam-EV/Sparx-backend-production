@@ -81,7 +81,7 @@ app.use((req, res, next) => {
 
 // Quick health / debug endpoints (always available)
 app.get("/ping", (req, res) => res.json({ ok: true, env: process.env.NODE_ENV || "unknown" }));
-app.get("/", (req, res) => res.send("Sparx API — functions container alive"));
+app.get("/", (req, res) => res.send("VIZ API — functions container alive"));
 
 // Example of a safe endpoint that requires DB — it waits for DB connect if needed
 app.get("/api/health/db", async (req, res) => {
