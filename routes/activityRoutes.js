@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const UserActivity = require('../models/UserActivity');
-const { authMiddleware  } = require('../middleware/authMiddleware'); // your existing middleware
+const authMiddleware = require('../middleware/authMiddleware');
 
 // POST /activity/track
 router.post('/track', authMiddleware , async (req, res) => {
