@@ -87,16 +87,23 @@ router.get('/dropoffs', authMiddleware, async (req, res) => {
 
 // ─── GET /api/activity/users ──────────────────────────────────────────────────
 // Per-user summary with name, mobile, last seen, total pages, total time
+// ─── GET /api/activity/users ──────────────────────────────────────────────────
 router.get('/users', authMiddleware, async (req, res) => {
   try {
+    const Device = require('../models/device');
+
+    // Step 1 — aggregate user activity as before, but also grab last location
     const stats = await UserActivity.aggregate([
+      { $sort: { date: -1 } },
       { $group: {
-          _id:         '$userId',
-          lastSeen:    { $max: '$lastSeen' },
-          totalPages:  { $sum: '$totalPages' },
-          activeDays:  { $sum: 1 },
-          totalTimeSec:{ $sum: { $sum: '$pages.timeSpentSec' } },
-          lastPage:    { $last: { $arrayElemAt: ['$pages', -1] } }
+          _id:          '$userId',
+          lastSeen:     { $max: '$lastSeen' },
+          totalPages:   { $sum: '$totalPages' },
+          activeDays:   { $sum: 1 },
+          totalTimeSec: { $sum: { $sum: '$pages.timeSpentSec' } },
+          lastPage:     { $last: { $arrayElemAt: ['$pages', -1] } },
+          // Get last page entry that has a location
+          allPages:     { $push: '$pages' },
       }},
       { $lookup: {
           from: 'users', localField: '_id',
@@ -105,7 +112,7 @@ router.get('/users', authMiddleware, async (req, res) => {
       { $unwind: '$user' },
       { $project: {
           _id: 1, lastSeen: 1, totalPages: 1, activeDays: 1,
-          totalTimeSec: 1, lastPage: 1,
+          totalTimeSec: 1, lastPage: 1, allPages: 1,
           name:   '$user.name',
           mobile: '$user.mobile',
           email:  '$user.email',
@@ -114,7 +121,56 @@ router.get('/users', authMiddleware, async (req, res) => {
       { $sort: { lastSeen: -1 } },
       { $limit: 200 }
     ]);
-    return res.json(stats);
+
+    // Step 2 — extract last known location per user from their pages
+    const R = 6371000;
+    const toRad = (d) => d * Math.PI / 180;
+    const distanceM = (lat1, lng1, lat2, lng2) => {
+      const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+      const a = Math.sin(dLat/2)**2 +
+                Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    };
+
+    // Step 3 — load all chargers once
+    const chargers = await Device.find(
+      { lat: { $exists: true }, lng: { $exists: true } },
+      { device_id:1, location:1, lat:1, lng:1, area:1, city:1, status:1 }
+    ).lean();
+
+    // Step 4 — for each user find last location + nearest charger
+    const result = stats.map(u => {
+      // flatten all pages arrays, find last one with a valid location
+      const allPagesFlat = (u.allPages || []).flat();
+      const pagesWithLoc = allPagesFlat.filter(p => p?.location?.lat);
+      const lastLoc = pagesWithLoc.length
+        ? pagesWithLoc[pagesWithLoc.length - 1].location
+        : null;
+
+      let nearestCharger = null;
+      if (lastLoc && chargers.length) {
+        let minDist = Infinity;
+        chargers.forEach(c => {
+          const d = distanceM(lastLoc.lat, lastLoc.lng, c.lat, c.lng);
+          if (d < minDist) {
+            minDist = d;
+            nearestCharger = {
+              deviceId:  c.device_id,
+              location:  c.location,
+              area:      c.area,
+              city:      c.city,
+              status:    c.status,
+              distanceM: Math.round(d),
+            };
+          }
+        });
+      }
+
+      const { allPages, ...rest } = u; // strip raw pages from response
+      return { ...rest, lastLocation: lastLoc, nearestCharger };
+    });
+
+    return res.json(result);
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
