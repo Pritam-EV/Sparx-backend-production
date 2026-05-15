@@ -8,7 +8,7 @@ const authMiddleware = require('../middleware/authMiddleware');
 // FE calls this on every page change. Uses upsert — one doc per user per day.
 router.post('/track', authMiddleware, async (req, res) => {
   try {
-    const { page, timeSpentSec = 0 } = req.body;
+    const { page, timeSpentSec = 0, location } = req.body;
     if (!page) return res.status(400).json({ error: 'page required' });
 
     const today = new Date().toISOString().slice(0, 10); // "2026-05-16"
@@ -16,7 +16,14 @@ router.post('/track', authMiddleware, async (req, res) => {
     await UserActivity.findOneAndUpdate(
       { userId: req.user.userId, date: today },
       {
-        $push:  { pages: { page: page.slice(0, 200), visitedAt: new Date(), timeSpentSec } },
+        $push: {
+  pages: {
+    page: page.slice(0, 200),
+    visitedAt: new Date(),
+    timeSpentSec,
+    ...(location?.lat ? { location } : {}),  // only add if FE sent coords
+  }
+},
         $set:   { lastSeen: new Date() },
         $inc:   { totalPages: 1 },
       },
