@@ -113,7 +113,7 @@ app.get("/api/getDevice", async (req, res) => {
 
 app.use("/api/payment", require("./routes/payment"));
 app.use("/api/operator", operatorRoutes);
-app.use('/activity', activityRoutes);
+app.use('/api/activity', activityRoutes);
 // ─── OFFLINE SWEEP ────────────────────────────────────────────────────────────
 setInterval(async () => {
   console.log("🔍 Running offline sweep…");

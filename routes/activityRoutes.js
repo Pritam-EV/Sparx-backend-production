@@ -1,14 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const UserActivity = require('../models/UserActivity');
-const { verifyToken } = require('../middleware/authMiddleware'); // your existing middleware
+const { authMiddleware  } = require('../middleware/authMiddleware'); // your existing middleware
 
 // POST /activity/track
-router.post('/track', verifyToken, async (req, res) => {
+router.post('/track', authMiddleware , async (req, res) => {
   try {
     const { page, timestamp } = req.body;
     await UserActivity.create({
-      userId: req.user._id,
+      userId: req.user.userId,
       page,
       visitedAt: timestamp || new Date(),
     });
@@ -19,7 +19,7 @@ router.post('/track', verifyToken, async (req, res) => {
 });
 
 // GET /activity/summary — for admin analytics
-router.get('/summary', verifyToken, async (req, res) => {
+router.get('/summary', authMiddleware , async (req, res) => {
   const summary = await UserActivity.aggregate([
     { $group: { _id: '$page', visits: { $sum: 1 }, lastSeen: { $max: '$visitedAt' } } },
     { $sort: { visits: -1 } }
@@ -28,7 +28,7 @@ router.get('/summary', verifyToken, async (req, res) => {
 });
 
 // GET /activity/user/:userId — per-user history
-router.get('/user/:userId', verifyToken, async (req, res) => {
+router.get('/user/:userId', authMiddleware , async (req, res) => {
   const logs = await UserActivity.find({ userId: req.params.userId })
     .sort({ visitedAt: -1 }).limit(100);
   res.json(logs);
