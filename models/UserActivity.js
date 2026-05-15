@@ -1,15 +1,24 @@
 // models/UserActivity.js
 const mongoose = require('mongoose');
 
+const PageVisitSchema = new mongoose.Schema({
+  page:        { type: String, required: true },
+  visitedAt:   { type: Date, default: Date.now },
+  timeSpentSec:{ type: Number, default: 0 },  // FE sends this on next page change
+}, { _id: false });
+
 const UserActivitySchema = new mongoose.Schema({
-  userId:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  page:      { type: String, required: true },       // e.g. "/charging-options/abc123"
-  visitedAt: { type: Date, default: Date.now },
-  sessionId: { type: String },                       // optional: group page views in one session
-  metadata:  { type: Object }                        // optional: device, screen size, etc.
+  userId:      { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  date:        { type: String, required: true },  // "2026-05-16" — one doc per user per day
+  pages:       [PageVisitSchema],                 // array of visits that day
+  lastSeen:    { type: Date, default: Date.now }, // updated on every track call
+  totalPages:  { type: Number, default: 0 },      // quick count without array.length
 }, { timestamps: false });
 
-// TTL index — auto-delete logs older than 90 days (saves storage)
-UserActivitySchema.index({ visitedAt: 1 }, { expireAfterSeconds: 7776000 });
+// One document per user per day — compound unique index
+UserActivitySchema.index({ userId: 1, date: 1 }, { unique: true });
+
+// TTL — auto-delete after 90 days
+UserActivitySchema.index({ lastSeen: 1 }, { expireAfterSeconds: 7776000 });
 
 module.exports = mongoose.model('UserActivity', UserActivitySchema);
