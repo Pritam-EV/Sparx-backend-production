@@ -2,9 +2,14 @@
 const mongoose = require('mongoose');
 
 const PageVisitSchema = new mongoose.Schema({
-  page:        { type: String, required: true },
-  visitedAt:   { type: Date, default: Date.now },
-  timeSpentSec:{ type: Number, default: 0 },  // FE sends this on next page change
+  page:         { type: String, required: true },
+  visitedAt:    { type: Date, default: Date.now },
+  timeSpentSec: { type: Number, default: 0 },
+  location: {                              // ← ADD THIS BLOCK
+    lat:      Number,
+    lng:      Number,
+    accuracy: Number,                      // metres — filter out low-accuracy pings
+  },
 }, { _id: false });
 
 const UserActivitySchema = new mongoose.Schema({

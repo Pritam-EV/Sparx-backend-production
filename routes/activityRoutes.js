@@ -121,4 +121,71 @@ router.get('/user/:userId', authMiddleware, async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
+// GET /api/activity/location-heatmap
+// Returns aggregated user location pings near each charger
+router.get('/location-heatmap', authMiddleware, async (req, res) => {
+  try {
+    // Step 1 — get all location pings from last 30 days
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const pings = await UserActivity.aggregate([
+      { $match: { lastSeen: { $gte: thirtyDaysAgo } } },
+      { $unwind: '$pages' },
+      { $match: {
+          'pages.location.lat': { $exists: true },
+          'pages.location.accuracy': { $lt: 100 }  // only accurate pings (< 100m)
+      }},
+      { $group: {
+          _id: '$userId',
+          lat:        { $last: '$pages.location.lat' },
+          lng:        { $last: '$pages.location.lng' },
+          totalPings: { $sum: 1 },
+          lastSeen:   { $max: '$pages.visitedAt' },
+      }},
+      { $limit: 2000 }
+    ]);
+
+    // Step 2 — get all chargers with location
+    const Device = require('../models/device');
+    const chargers = await Device.find(
+      { lat: { $exists: true }, lng: { $exists: true } },
+      { device_id:1, location:1, lat:1, lng:1, area:1, city:1, status:1 }
+    ).lean();
+
+    // Step 3 — for each charger, count how many users were within 500m
+    const R = 6371000; // Earth radius in metres
+    const toRad = (d) => d * Math.PI / 180;
+    const distanceM = (lat1, lng1, lat2, lng2) => {
+      const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+      const a = Math.sin(dLat/2)**2 +
+                Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    };
+
+    const chargerStats = chargers.map((c) => {
+      const nearby = pings.filter(p =>
+        distanceM(p.lat, p.lng, c.lat, c.lng) <= 500  // within 500m
+      );
+      return {
+        chargerId:    c._id,
+        deviceId:     c.device_id,
+        location:     c.location,
+        area:         c.area,
+        city:         c.city,
+        lat:          c.lat,
+        lng:          c.lng,
+        status:       c.status,
+        nearbyUsers:  nearby.length,    // users who opened app within 500m
+        lastUserSeen: nearby.reduce((m, p) =>
+          p.lastSeen > m ? p.lastSeen : m, new Date(0))
+      };
+    });
+
+    return res.json({
+      pings:         pings.map(p => ({ lat: p.lat, lng: p.lng })), // for heatmap render
+      chargerStats:  chargerStats.sort((a, b) => b.nearbyUsers - a.nearbyUsers),
+    });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 module.exports = router;
