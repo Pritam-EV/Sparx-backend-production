@@ -31,6 +31,34 @@ router.get("/balance", authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/wallet/admin/balance/:userId  — admin fetches any user's balance
+// Requires admin role
+router.get("/admin/balance/:userId", authMiddleware, async (req, res) => {
+  try {
+    // Guard: only admins can call this
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const user = await User.findById(req.params.userId)
+      .select("walletBalance walletKycLevel walletFrozen walletMonthlyLoaded")
+      .lean();
+
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    return res.json({
+      balance:        user.walletBalance        ?? 0,
+      kycLevel:       user.walletKycLevel,
+      frozen:         user.walletFrozen,
+      monthlyLoaded:  user.walletMonthlyLoaded,
+    });
+  } catch (err) {
+    console.error("Admin wallet balance error:", err.message);
+    return res.status(500).json({ message: "Server error" });
+  }
+});
+
+
 // GET /api/wallet/transactions  — paginated wallet history
 router.get("/transactions", authMiddleware, async (req, res) => {
   try {
