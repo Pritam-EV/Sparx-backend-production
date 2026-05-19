@@ -196,6 +196,38 @@ router.get(
   }
 );
 
+// GET /api/devices/admin/live-devices/filter-options
+// Returns distinct project/area/status values from devices that have recent telemetry
+router.get(
+  "/admin/live-devices/filter-options",
+  authMiddleware,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      const telemetryDocs = await DeviceTelemetry.aggregate([
+        { $match: { timestamp: { $gte: since } } },
+        { $group: { _id: "$deviceId" } },
+      ]);
+      const deviceIds = telemetryDocs.map(d => d._id);
+
+      const [projects, areas, statuses] = await Promise.all([
+        Device.distinct('project', { device_id: { $in: deviceIds }, project: { $ne: null, $ne: '' } }),
+        Device.distinct('area',    { device_id: { $in: deviceIds }, area:    { $ne: null, $ne: '' } }),
+        Device.distinct('status',  { device_id: { $in: deviceIds }, status:  { $ne: null, $ne: '' } }),
+      ]);
+
+      res.json({ projects, areas, statuses });
+    } catch (err) {
+      console.error("Filter options error:", err);
+      res.status(500).json({ error: "Failed to fetch filter options" });
+    }
+  }
+);
+
+// GET /api/devices/admin/live-devices
+// Query params: project, area, status
 router.get(
   "/admin/live-devices",
   authMiddleware,
@@ -203,13 +235,28 @@ router.get(
   async (req, res) => {
     try {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const { project, area, status } = req.query;
 
-      const devices = await DeviceTelemetry.aggregate([
+      // Step 1: get all deviceIds that have telemetry in last 24h
+      const telemetryDocs = await DeviceTelemetry.aggregate([
         { $match: { timestamp: { $gte: since } } },
         { $group: { _id: "$deviceId" } },
       ]);
+      const deviceIdsWithTelemetry = telemetryDocs.map(d => d._id);
 
-      res.json(devices.map(d => d._id));
+      // Step 2: build Device query — scope to those IDs + optional filters
+      const deviceQuery = { device_id: { $in: deviceIdsWithTelemetry } };
+      if (project) deviceQuery.project = project;
+      if (area) deviceQuery.area = area;
+      if (status) deviceQuery.status = status;
+
+      const devices = await Device.find(
+        deviceQuery,
+        'device_id status area project city state location lastSeen'
+      ).lean();
+
+      // Step 3: return enriched device objects
+      res.json(devices);
 
     } catch (err) {
       console.error("Live devices error:", err);
