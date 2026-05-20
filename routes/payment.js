@@ -119,10 +119,12 @@ router.post("/webhook", async (req, res) => {
       return res.status(400).send("Invalid webhook");
     }
 
-    const expectedSignature = crypto
-      .createHmac("sha256", process.env.CASHFREE_SECRET_KEY)
-      .update(req.rawBody)
-      .digest("base64");
+const timestamp = req.headers["x-webhook-timestamp"];
+
+const expectedSignature = crypto
+  .createHmac("sha256", process.env.CASHFREE_SECRET_KEY)
+  .update(timestamp + req.rawBody)   // ← this is the fix
+  .digest("base64");
 
     if (signature !== expectedSignature) {
       console.error("❌ Invalid Cashfree webhook signature");
