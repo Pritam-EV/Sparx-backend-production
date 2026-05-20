@@ -527,6 +527,37 @@ async function completeSessionInternal({
     });
     await receipt.save();
 
+    // ── After receipt is saved, handle Cashfree refund tracking ──────────
+if (refundAmount > 0 && !isWalletPay) {
+  const cfIdempotencyKey = `refund_${session.sessionId}`;
+  const existingRefund = await Refund.findOne({ idempotencyKey: cfIdempotencyKey });
+
+  if (!existingRefund) {
+    try {
+      await Refund.create({
+        userId:          session.userId,
+        orderId:         session.transactionId,
+        sessionId:       session.sessionId,
+        refundId:        `REF${rand(8)}`,
+        refundAmount,
+        refundType:      "PARTIAL",
+        destination:     "bank",          // ← Cashfree paid = refund back to bank
+        status:          "INITIATED",     // ← not yet sent to Cashfree
+        refundNote:      `Auto-refund for unused energy — session ${session.sessionId}`,
+        initiatedBy:     "system",
+        initiatedAt:     new Date(),
+        idempotencyKey:  cfIdempotencyKey,
+        amountPaid:      Number(session.amountPaid || 0),
+        amountUtilized,
+        gateway:         "cashfree",
+      });
+      console.log(`📋 Cashfree refund doc INITIATED — ₹${refundAmount} for session ${session.sessionId}`);
+    } catch (e) {
+      console.error(`❌ Cashfree refund doc creation failed:`, e.message);
+    }
+  }
+}
+
     // ── Wallet refund: only if wallet-paid AND refund > 0 ─────────────
 // ── Wallet refund: only if wallet-paid AND refund > 0 ─────────────
 if (refundAmount > 0 && isWalletPay) {
