@@ -584,55 +584,59 @@ router.patch("/admin/refund/:receiptId", auth, authorizeRoles("admin"), async (r
 router.get("/admin/export", auth, authorizeRoles("admin"), async (req, res) => {
   try {
     const { period, state, city, area } = req.query;
-const dayjs = require("dayjs");
-const now = dayjs();
-let startDate = now.startOf("day"), endDate = now.endOf("day");
+    const dayjs = require("dayjs");
+    const now = dayjs();
+    let startDate = now.startOf("day"), endDate = now.endOf("day");
 
-switch (period) {
-  case "week":        startDate = now.startOf("week"); endDate = now.endOf("week"); break;
-  case "month":       startDate = now.startOf("month"); endDate = now.endOf("month"); break;
-  case "last_month":  startDate = now.subtract(1,"month").startOf("month"); endDate = now.subtract(1,"month").endOf("month"); break;
-  case "quarter":     startDate = now.startOf("quarter"); endDate = now.endOf("quarter"); break;
-  case "year":        startDate = now.startOf("year"); endDate = now.endOf("year"); break;
-}
+    switch (period) {
+      case "week":       startDate = now.startOf("week");  endDate = now.endOf("week");  break;
+      case "month":      startDate = now.startOf("month"); endDate = now.endOf("month"); break;
+      case "last_month": startDate = now.subtract(1,"month").startOf("month"); endDate = now.subtract(1,"month").endOf("month"); break;
+      case "quarter":    startDate = now.startOf("quarter"); endDate = now.endOf("quarter"); break;
+      case "year":       startDate = now.startOf("year");  endDate = now.endOf("year");  break;
+    }
 
-const exportMatch = {
-  createdAt: { $gte: startDate.toDate(), $lte: endDate.toDate() }
-};
-if (state) exportMatch.deviceState = state;
-if (city)  exportMatch.deviceCity  = city;
-if (area)  exportMatch.deviceArea  = area;
+    const exportMatch = {
+      createdAt: { $gte: startDate.toDate(), $lte: endDate.toDate() }
+    };
+    if (state) exportMatch.deviceState = state;
+    if (city)  exportMatch.deviceCity  = city;
+    if (area)  exportMatch.deviceArea  = area;
 
-const receipts = await Receipt.find(exportMatch).lean();
+    const receipts = await Receipt.find(exportMatch).lean();
 
-const rows = receipts.map(r => [
-  r.receiptId, r.createdAt, r.userName, r.deviceId,
-  r.deviceState, r.deviceCity, r.deviceArea,   // ← added
-  r.energyConsumed, r.totalAmount, r.gstAmount,
-  r.vjraMarginAmount, r.ownerPayout, r.refundAmount
-]);
+    // ✅ Only ONE rows declaration — with all location columns
+    const csvHeader = [
+      "Receipt ID", "Date", "User", "Device ID",
+      "State", "City", "Area",
+      "Energy (kWh)", "Total Amount", "GST",
+      "Platform Margin", "Owner Payout", "Refund"
+    ];
 
     const rows = receipts.map(r => [
       r.receiptId,
-      r.createdAt,
-      r.userName,
-      r.deviceId,
-      r.deviceCity,
-      r.energyConsumed,
-      r.totalAmount,
-      r.gstAmount,
-      r.vjraMarginAmount,
-      r.ownerPayout,
-      r.refundAmount
+      r.createdAt ? new Date(r.createdAt).toISOString() : "",
+      r.userName   || "",
+      r.deviceId   || "",
+      r.deviceState || "",
+      r.deviceCity  || "",
+      r.deviceArea  || "",
+      r.energyConsumed    ?? 0,
+      r.totalAmount       ?? 0,
+      r.gstAmount         ?? 0,
+      r.vjraMarginAmount  ?? 0,
+      r.ownerPayout       ?? 0,
+      r.refundAmount      ?? 0
     ]);
 
     const csv = [csvHeader, ...rows].map(e => e.join(",")).join("\n");
 
     res.header("Content-Type", "text/csv");
-    res.attachment("financial_report.csv");
+    res.attachment(`receipts_${period || "today"}.csv`);
     res.send(csv);
 
   } catch (err) {
+    console.error("Export error:", err);
     res.status(500).json({ error: "Export failed" });
   }
 });
