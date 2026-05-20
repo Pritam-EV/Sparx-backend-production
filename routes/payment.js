@@ -120,7 +120,7 @@ router.post("/webhook", async (req, res) => {
     }
 
     const expectedSignature = crypto
-      .createHmac("sha256", process.env.CASHFREE_WEBHOOK_SECRET)
+      .createHmac("sha256", process.env.CASHFREE_SECRET_KEY)
       .update(req.rawBody)
       .digest("base64");
 
