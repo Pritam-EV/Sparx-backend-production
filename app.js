@@ -26,13 +26,13 @@ const partnerRoutes      = require('./routes/partner');
 const electricityBillRoutes = require('./routes/electricityBill'); // ← NEW
 const walletRoutes = require("./routes/wallet");
 const activityRoutes = require('./routes/activityRoutes');
+const adminTransactionsRoutes = require('./routes/adminTransactions');
 // MQTT Subscriber
 const startMqttSubscriber = require("./mqttSubscriber");
 
 const app = express();
 
 const OFFLINE_THRESHOLD_MS = 30 * 1000;
-const adminTransactionsRoutes = require('./routes/adminTransactions');
 const allowedOrigins = [process.env.CLIENT_URL, 'http://localhost:3000'];
 
 if (!process.env.JWT_SECRET) {
