@@ -34,6 +34,29 @@ const RefundSchema = new mongoose.Schema({
     index: true,
   },
 
+  // ADD these fields to the Refund schema if not already there:
+
+idempotencyKey: {
+  type: String,
+  unique: true,
+  sparse: true,   // sparse = only enforces uniqueness when field exists
+  index: true,
+},
+
+// Analytics metadata fields (optional but very useful for future reports):
+amountPaid: {
+  type: Number,
+  default: 0,
+},
+amountUtilized: {
+  type: Number,
+  default: 0,
+},
+gateway: {
+  type: String,   // "wallet" | "cashfree"
+  default: "wallet",
+},
+
   // ── Bank refund details (only populated for destination: "bank") ─────────────
   refundNote:         { type: String },   // reason for refund
   arnNumber:          { type: String },   // bank ARN/UTR — proof money reached bank

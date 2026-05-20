@@ -8,6 +8,7 @@ const Receipt = require('../models/Receipt');
 const crypto = require("crypto");
 const { creditWallet } = require("../services/walletService");
 const Payment = require("../models/Payment");
+const Refund = require('../models/Refund');
 function rand(len = 8) {
   return crypto.randomBytes(Math.ceil(len / 2)).toString("hex").slice(0, len).toUpperCase();
 }
@@ -527,26 +528,68 @@ async function completeSessionInternal({
     await receipt.save();
 
     // ── Wallet refund: only if wallet-paid AND refund > 0 ─────────────
-    if (refundAmount > 0 && isWalletPay) {
-      try {
-        await creditWallet({
-          userId: session.userId.toString(),
-          amount: refundAmount,
-          type: "refund",
-          sessionId: session.sessionId,
-          orderId: session.transactionId,
-          description: `Refund for unused charging — session ${session.sessionId}`,
-          idempotencyKey: `refund_${session.sessionId}`,  // ← wallet service deduplicates this
-        });
-        await Receipt.updateOne(
-          { sessionId: session.sessionId },
-          { $set: { "refund.processedAt": new Date() } }
-        );
-        console.log(`✅ Wallet refund ₹${refundAmount} for session ${session.sessionId}`);
-      } catch (refundErr) {
-        console.error(`❌ Wallet refund failed for ${session.sessionId}:`, refundErr.message);
-      }
+// ── Wallet refund: only if wallet-paid AND refund > 0 ─────────────
+if (refundAmount > 0 && isWalletPay) {
+  const refundIdempotencyKey = `refund_${session.sessionId}`;
+
+  // Check if a Refund doc already exists (idempotency guard)
+  const existingRefund = await Refund.findOne({ idempotencyKey: refundIdempotencyKey });
+
+  if (!existingRefund) {
+    // 1. Credit the wallet
+    try {
+      await creditWallet({
+        userId:         session.userId.toString(),
+        amount:         refundAmount,
+        type:           "refund",
+        sessionId:      session.sessionId,
+        orderId:        session.transactionId,
+        description:    `Refund for unused charging — session ${session.sessionId}`,
+        idempotencyKey: refundIdempotencyKey,
+      });
+    } catch (refundErr) {
+      console.error(`❌ Wallet creditWallet failed for ${session.sessionId}:`, refundErr.message);
+      // Don't return — still attempt to record the Refund doc below
     }
+
+    // 2. Create the canonical Refund document (source of truth for admin panel)
+    try {
+      await Refund.create({
+        userId:          session.userId,
+        orderId:         session.transactionId,
+        sessionId:       session.sessionId,
+        refundId:        receipt.refund?.refundId || `REF${rand(8)}`,
+        refundAmount,
+        refundType:      "PARTIAL",           // always partial — unused portion of pre-paid amount
+        destination:     "wallet",
+        status:          "SUCCESS",
+        refundNote:      `Refund for unused charging — session ${session.sessionId}`,
+        initiatedBy:     "system",
+        initiatedAt:     new Date(),
+        processedAt:     new Date(),
+        idempotencyKey:  refundIdempotencyKey,
+        // analytics metadata
+        amountPaid:      Number(session.amountPaid || 0),
+        amountUtilized,
+        gateway:         "wallet",
+      });
+      console.log(`✅ Refund doc created — ₹${refundAmount} → wallet, session ${session.sessionId}`);
+    } catch (refDocErr) {
+      // Log but don't crash — wallet was already credited
+      console.error(`❌ Refund doc creation failed for ${session.sessionId}:`, refDocErr.message);
+    }
+
+    // 3. Stamp the receipt
+    await Receipt.updateOne(
+      { sessionId: session.sessionId },
+      { $set: { "refund.processedAt": new Date() } }
+    );
+
+    console.log(`✅ Wallet refund ₹${refundAmount} complete for session ${session.sessionId}`);
+  } else {
+    console.log(`⚠️ Refund already processed for session ${session.sessionId} — skipping`);
+  }
+}
   }
 
   if (sendStopMqtt) {
