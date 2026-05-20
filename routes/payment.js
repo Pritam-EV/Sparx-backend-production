@@ -627,4 +627,104 @@ router.get("/refund/:refundId", authMiddleware, adminOnly, async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/payment/process-initiated-refund
+// Admin processes an INITIATED bank refund → calls Cashfree and marks PENDING
+// Body: { refundDocId }
+// ─────────────────────────────────────────────────────────────────────────────
+router.post("/process-initiated-refund", authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { refundDocId } = req.body;
+    if (!refundDocId) {
+      return res.status(400).json({ success: false, message: "refundDocId is required" });
+    }
+
+    // Find the INITIATED refund doc
+    const refundDoc = await Refund.findOne({
+      _id: refundDocId,
+      status: "INITIATED",
+      destination: "bank",
+    });
+    if (!refundDoc) {
+      return res.status(404).json({
+        success: false,
+        message: "Refund not found or already processed",
+      });
+    }
+
+    // Verify original payment exists and was successful
+    const payment = await Payment.findOne({
+      orderId: refundDoc.orderId,
+      status: "SUCCESS",
+    });
+    if (!payment) {
+      return res.status(404).json({
+        success: false,
+        message: "Original successful payment not found for this order",
+      });
+    }
+
+    // Call Cashfree Refund API
+    const cfPayload = {
+      refund_amount: refundDoc.refundAmount,
+      refund_id:     refundDoc.refundId,
+      refund_note:   refundDoc.refundNote || `Refund for session ${refundDoc.sessionId}`,
+    };
+
+    let cfData;
+    try {
+      const cfRes = await axios.post(
+        `${CASHFREE_BASE_URL}/pg/orders/${refundDoc.orderId}/refunds`,
+        cfPayload,
+        {
+          headers: {
+            "Content-Type":    "application/json",
+            "x-client-id":     process.env.CASHFREE_APP_ID,
+            "x-client-secret": process.env.CASHFREE_SECRET_KEY,
+            "x-api-version":   "2023-08-01",
+          },
+        }
+      );
+      cfData = cfRes.data;
+    } catch (cfErr) {
+      const msg = cfErr?.response?.data?.message || cfErr.message;
+      console.error("❌ Cashfree refund API error:", msg);
+
+      // Mark refund as FAILED in DB
+      await Refund.findByIdAndUpdate(refundDocId, {
+        $set: {
+          status:            "FAILED",
+          statusDescription: msg,
+          rawResponse:       cfErr?.response?.data || {},
+        },
+      });
+
+      return res.status(502).json({ success: false, message: `Cashfree error: ${msg}` });
+    }
+
+    // Update Refund doc → PENDING with cfRefundId
+    const updated = await Refund.findByIdAndUpdate(
+      refundDocId,
+      {
+        $set: {
+          status:            "PENDING",
+          cfRefundId:        cfData.cf_refund_id || null,
+          statusDescription: cfData.status_description || "Sent to Cashfree, awaiting bank",
+          initiatedBy:       "admin",
+          rawResponse:       cfData,
+        },
+      },
+      { new: true }
+    );
+
+    console.log(`✅ Refund INITIATED→PENDING: ${refundDoc.refundId} | cf_refund_id: ${cfData.cf_refund_id}`);
+    return res.json({ success: true, refund: updated });
+
+  } catch (err) {
+    console.error("❌ process-initiated-refund error:", err.message);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+
 module.exports = router;
