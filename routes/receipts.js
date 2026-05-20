@@ -381,19 +381,32 @@ return res.json({
   }
 });
 
+// GET /api/receipts/admin/filters
+// Returns distinct state/city/area values from Receipt collection
+router.get("/admin/filters", auth, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const [states, cities, areas] = await Promise.all([
+      Receipt.distinct("deviceState").then(r => r.filter(Boolean).sort()),
+      Receipt.distinct("deviceCity").then(r => r.filter(Boolean).sort()),
+      Receipt.distinct("deviceArea").then(r => r.filter(Boolean).sort()),
+    ]);
+    res.json({ states, cities, areas });
+  } catch (err) {
+    console.error("Filters fetch error:", err);
+    res.status(500).json({ error: "Could not fetch filters" });
+  }
+});
+
+
+
 // GET /api/receipts/admin/financial
 router.get("/admin/financial", auth, authorizeRoles("admin"), async (req, res) => {
   try {
-    const {
-      from,
-      to,
-      ownerId,
-      deviceId,
-      city,
-      refundStatus,
-      page = 1,
-      limit = 50
-    } = req.query;
+const {
+  from, to, ownerId, deviceId,
+  state, city, area,            // ← added state + area
+  refundStatus, page = 1, limit = 50
+} = req.query;
 
     const pageNum = parseInt(page);
     const lim = parseInt(limit);
@@ -450,7 +463,9 @@ match.createdAt = {
 
     if (ownerId) match.ownerId = ownerId;
     if (deviceId) match.deviceId = deviceId;
-    if (city) match.deviceCity = city;
+    if (state) match.deviceState = state;   // ← new
+if (city)  match.deviceCity  = city;
+if (area)  match.deviceArea  = area;    // ← new
     if (refundStatus) match["refund.status"] = refundStatus;
 
     const pipeline = [
@@ -568,21 +583,34 @@ router.patch("/admin/refund/:receiptId", auth, authorizeRoles("admin"), async (r
 
 router.get("/admin/export", auth, authorizeRoles("admin"), async (req, res) => {
   try {
-    const receipts = await Receipt.find({}).lean();
+    const { period, state, city, area } = req.query;
+const dayjs = require("dayjs");
+const now = dayjs();
+let startDate = now.startOf("day"), endDate = now.endOf("day");
 
-    const csvHeader = [
-      "Receipt ID",
-      "Date",
-      "User",
-      "Device",
-      "City",
-      "Energy",
-      "Gross",
-      "GST",
-      "Margin",
-      "Owner Payout",
-      "Refund"
-    ];
+switch (period) {
+  case "week":        startDate = now.startOf("week"); endDate = now.endOf("week"); break;
+  case "month":       startDate = now.startOf("month"); endDate = now.endOf("month"); break;
+  case "last_month":  startDate = now.subtract(1,"month").startOf("month"); endDate = now.subtract(1,"month").endOf("month"); break;
+  case "quarter":     startDate = now.startOf("quarter"); endDate = now.endOf("quarter"); break;
+  case "year":        startDate = now.startOf("year"); endDate = now.endOf("year"); break;
+}
+
+const exportMatch = {
+  createdAt: { $gte: startDate.toDate(), $lte: endDate.toDate() }
+};
+if (state) exportMatch.deviceState = state;
+if (city)  exportMatch.deviceCity  = city;
+if (area)  exportMatch.deviceArea  = area;
+
+const receipts = await Receipt.find(exportMatch).lean();
+
+const rows = receipts.map(r => [
+  r.receiptId, r.createdAt, r.userName, r.deviceId,
+  r.deviceState, r.deviceCity, r.deviceArea,   // ← added
+  r.energyConsumed, r.totalAmount, r.gstAmount,
+  r.vjraMarginAmount, r.ownerPayout, r.refundAmount
+]);
 
     const rows = receipts.map(r => [
       r.receiptId,
