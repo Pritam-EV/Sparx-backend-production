@@ -197,7 +197,7 @@ const expectedSignature = crypto
     // Cashfree fires this for every refund status change:
     // PENDING → SUCCESS (money sent to bank, arnNumber available)
     // PENDING → CANCELLED / ONHOLD
-    if (event.type === "REFUND_STATUS_WEBHOOOK") {
+    if (event.type === "REFUND_STATUS_WEBHOOK") {
       const r           = event.data.refund;
       const cfRefundId  = r.cf_refund_id;
       const newStatus   = r.refund_status; // "PENDING" | "SUCCESS" | "CANCELLED" | "ONHOLD"
