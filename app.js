@@ -40,15 +40,13 @@ if (!process.env.JWT_SECRET) {
 }
 
 // ─── MIDDLEWARE ────────────────────────────────────────────────────────────────
-app.use(express.json());
+// ✅ CORRECT — single express.json() with rawBody capture
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf.toString("utf8");
+  },
+}));
 app.use(express.urlencoded({ extended: true }));
-app.use(
-  express.json({
-    verify: (req, res, buf) => {
-      req.rawBody = buf.toString("utf8");
-    },
-  })
-);
 
 const client_URLs = process.env.CLIENT_URL;
 
