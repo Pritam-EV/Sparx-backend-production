@@ -383,14 +383,18 @@ return res.json({
 
 // GET /api/receipts/admin/filters
 // Returns distinct state/city/area values from Receipt collection
+// GET /api/receipts/admin/filters
 router.get("/admin/filters", auth, authorizeRoles("admin"), async (req, res) => {
   try {
-    const [states, cities, areas] = await Promise.all([
-      Receipt.distinct("deviceState").then(r => r.filter(Boolean).sort()),
-      Receipt.distinct("deviceCity").then(r => r.filter(Boolean).sort()),
-      Receipt.distinct("deviceArea").then(r => r.filter(Boolean).sort()),
-    ]);
-    res.json({ states, cities, areas });
+    // Get all distinct deviceIds from receipts, then look up their projects
+    const deviceIds = await Receipt.distinct("deviceId");
+    const devices   = await Device.find(
+      { device_id: { $in: deviceIds }, project: { $exists: true, $ne: "" } },
+      { project: 1 }
+    ).lean();
+
+    const projects = [...new Set(devices.map(d => d.project).filter(Boolean))].sort();
+    res.json({ projects });
   } catch (err) {
     console.error("Filters fetch error:", err);
     res.status(500).json({ error: "Could not fetch filters" });
@@ -400,95 +404,86 @@ router.get("/admin/filters", auth, authorizeRoles("admin"), async (req, res) => 
 
 
 // GET /api/receipts/admin/financial
+// GET /api/receipts/admin/financial
 router.get("/admin/financial", auth, authorizeRoles("admin"), async (req, res) => {
   try {
-const {
-  from, to, ownerId, deviceId,
-  state, city, area,            // ← added state + area
-  refundStatus, page = 1, limit = 50
-} = req.query;
+    const {
+      period = "today",
+      project,          // ← new
+      refundStatus,
+      ownerId,
+      deviceId,
+      page  = 1,
+      limit = 50
+    } = req.query;
 
-    const pageNum = parseInt(page);
-    const lim = parseInt(limit);
-    const skip = (pageNum - 1) * lim;
-const dayjs = require("dayjs");
+    const dayjs  = require("dayjs");
+    const now    = dayjs();
+    let startDate, endDate;
 
-const now = dayjs();
-let startDate, endDate;
+    switch (period) {
+      case "week":       startDate = now.startOf("week");                          endDate = now.endOf("week");        break;
+      case "month":      startDate = now.startOf("month");                         endDate = now.endOf("month");       break;
+      case "last_month": startDate = now.subtract(1,"month").startOf("month");     endDate = now.subtract(1,"month").endOf("month"); break;
+      case "quarter":    startDate = now.startOf("quarter");                       endDate = now.endOf("quarter");     break;
+      case "year":       startDate = now.startOf("year");                          endDate = now.endOf("year");        break;
+      default:           startDate = now.startOf("day");                           endDate = now.endOf("day");
+    }
 
-switch (req.query.period) {
-  case "today":
-    startDate = now.startOf("day");
-    endDate = now.endOf("day");
-    break;
+    const pageNum = parseInt(page)  || 1;
+    const lim     = parseInt(limit) || 50;
+    const skip    = (pageNum - 1) * lim;
 
-  case "week":
-    startDate = now.startOf("week");
-    endDate = now.endOf("week");
-    break;
+    // ── If project filter, resolve to deviceIds first ──────────────────────
+    let projectDeviceIds = null;
+    if (project) {
+      const projectDevices = await Device.find(
+        { project },
+        { device_id: 1 }
+      ).lean();
+      projectDeviceIds = projectDevices.map(d => d.device_id);
+      // If no devices belong to this project, return empty immediately
+      if (!projectDeviceIds.length) {
+        return res.json({
+          summary: {}, receipts: [], total: 0, page: pageNum,
+          range: {
+            start: startDate.toDate(), end: endDate.toDate(),
+            label: `${startDate.format("DD MMM YYYY")} - ${endDate.format("DD MMM YYYY")}`
+          }
+        });
+      }
+    }
 
-  case "month":
-    startDate = now.startOf("month");
-    endDate = now.endOf("month");
-    break;
+    // ── Build match ────────────────────────────────────────────────────────
+    const match = {
+      createdAt: { $gte: startDate.toDate(), $lte: endDate.toDate() }
+    };
+    if (projectDeviceIds) match.deviceId = { $in: projectDeviceIds };
+    if (ownerId)          match.ownerId  = ownerId;
+    if (deviceId)         match.deviceId = deviceId;
+    if (refundStatus)     match["refund.status"] = refundStatus;
 
-  case "last_month":
-    startDate = now.subtract(1, "month").startOf("month");
-    endDate = now.subtract(1, "month").endOf("month");
-    break;
-
-  case "quarter":
-    startDate = now.startOf("quarter");
-    endDate = now.endOf("quarter");
-    break;
-
-  case "year":
-    startDate = now.startOf("year");
-    endDate = now.endOf("year");
-    break;
-
-  default:
-    startDate = now.startOf("day");
-    endDate = now.endOf("day");
-}
-
-    const match = {};
-
-// Apply period filter (highest priority)
-match.createdAt = {
-  $gte: startDate.toDate(),
-  $lte: endDate.toDate()
-};
-
-
-    if (ownerId) match.ownerId = ownerId;
-    if (deviceId) match.deviceId = deviceId;
-    if (state) match.deviceState = state;   // ← new
-if (city)  match.deviceCity  = city;
-if (area)  match.deviceArea  = area;    // ← new
-    if (refundStatus) match["refund.status"] = refundStatus;
-
+    // ── Aggregate ──────────────────────────────────────────────────────────
     const pipeline = [
       { $match: match },
       {
         $facet: {
-          summary: [
-            {
-              $group: {
-                _id: null,
-                totalReceipts: { $sum: 1 },
-                totalRevenue: { $sum: { $ifNull: ["$amountPaid", 0] } },
-                totalPGCharges: { $sum: "$paymentCharges" },
-                totalRefund: { $sum: { $ifNull: ["$refundAmount", 0] } },
-                taxableRevenue: { $sum: { $ifNull: ["$taxableAmount", 0] } },
-                gstCollected: { $sum: { $ifNull: ["$gstAmount", 0] } },
-                totalEnergy: { $sum: { $ifNull: ["$energyConsumed", 0] } },
-                totalMargin: { $sum: { $ifNull: ["$vjraMarginAmount", 0] } },
-                totalOwnerPayout: { $sum: { $ifNull: ["$ownerPayout", 0] } },
-                totalElectricity: { $sum: { $ifNull: ["$electricityCost", 0] } },
-              }
+          summary: [{
+            $group: {
+              _id: null,
+              totalReceipts:    { $sum: 1 },
+              totalRevenue:     { $sum: { $ifNull: ["$amountPaid",        0] } },
+              totalPGCharges:   { $sum: { $ifNull: ["$paymentCharges",    0] } },
+              totalRefund:      { $sum: { $ifNull: ["$refundAmount",      0] } },
+              totalDiscount:    { $sum: { $ifNull: ["$discountApplied",   0] } },
+              taxableRevenue:   { $sum: { $ifNull: ["$taxableAmount",     0] } },
+              gstCollected:     { $sum: { $ifNull: ["$gstAmount",         0] } },
+              totalEnergy:      { $sum: { $ifNull: ["$energyConsumed",    0] } },
+              totalMargin:      { $sum: { $ifNull: ["$vjraMarginAmount",  0] } },
+              totalOwnerPayout: { $sum: { $ifNull: ["$ownerPayout",       0] } },
+              totalElectricity: { $sum: { $ifNull: ["$electricityCost",   0] } },
             }
-          ],
+          }],
           receipts: [
             { $sort: { createdAt: -1 } },
             { $skip: skip },
@@ -500,51 +495,38 @@ if (area)  match.deviceArea  = area;    // ← new
     ];
 
     const result = await Receipt.aggregate(pipeline);
-    const data = result[0];
+    const data   = result[0];
     const receiptList = data.receipts || [];
 
-// 🔥 STEP 2.1: Collect userIds
-const userIds = [
-  ...new Set(
-    receiptList
-      .map(r => r.userId)
-      .filter(Boolean)
-      .map(id => id.toString())
-  )
-];
+    // ── Enrich with userName ───────────────────────────────────────────────
+    const userIds = [...new Set(receiptList.map(r => r.userId).filter(Boolean).map(id => id.toString()))];
+    const users   = await User.find({ _id: { $in: userIds } }, { name: 1 }).lean();
+    const usersMap = {};
+    users.forEach(u => { usersMap[u._id.toString()] = u; });
 
-// 🔥 STEP 2.2: Fetch users
-const users = await User.find(
-  { _id: { $in: userIds } },
-  { name: 1 }
-).lean();
+    // ── Enrich with projectName from device ────────────────────────────────
+    const dIds      = [...new Set(receiptList.map(r => r.deviceId).filter(Boolean))];
+    const devices   = await Device.find({ device_id: { $in: dIds } }, { device_id: 1, project: 1 }).lean();
+    const deviceMap = {};
+    devices.forEach(d => { deviceMap[d.device_id] = d; });
 
-// 🔥 STEP 2.3: Build map
-const usersMap = {};
-users.forEach(u => {
-  usersMap[u._id.toString()] = u;
-});
+    const enrichedReceipts = receiptList.map(r => ({
+      ...r,
+      userName:    usersMap[r.userId?.toString()]?.name || "-",
+      projectName: deviceMap[r.deviceId]?.project       || "-",
+    }));
 
-const enrichedReceipts = receiptList.map(r => {
-  const user = usersMap[r.userId?.toString()] || null;
-
-  return {
-    ...r,
-    userName: user?.name || "-"
-  };
-});
-console.log(enrichedReceipts[0]);
-res.json({
-  summary: data.summary[0] || {},
-  receipts: enrichedReceipts,
-  total: data.count[0]?.total || 0,
-  page: pageNum,
-  range: {
-    start: startDate.toDate(),
-    end: endDate.toDate(),
-    label: `${startDate.format("DD MMM YYYY, hh:mm A")} - ${endDate.format("DD MMM YYYY, hh:mm A")}`
-  }
-});
+    res.json({
+      summary:  data.summary[0] || {},
+      receipts: enrichedReceipts,
+      total:    data.count[0]?.total || 0,
+      page:     pageNum,
+      range: {
+        start: startDate.toDate(),
+        end:   endDate.toDate(),
+        label: `${startDate.format("DD MMM YYYY, hh:mm A")} - ${endDate.format("DD MMM YYYY, hh:mm A")}`
+      }
+    });
 
   } catch (err) {
     console.error(err);
@@ -581,58 +563,70 @@ router.patch("/admin/refund/:receiptId", auth, authorizeRoles("admin"), async (r
   }
 });
 
+// GET /api/receipts/admin/export
 router.get("/admin/export", auth, authorizeRoles("admin"), async (req, res) => {
   try {
-    const { period, state, city, area } = req.query;
+    const { period = "today", project } = req.query;
     const dayjs = require("dayjs");
-    const now = dayjs();
+    const now   = dayjs();
     let startDate = now.startOf("day"), endDate = now.endOf("day");
 
     switch (period) {
-      case "week":       startDate = now.startOf("week");  endDate = now.endOf("week");  break;
-      case "month":      startDate = now.startOf("month"); endDate = now.endOf("month"); break;
+      case "week":       startDate = now.startOf("week");                      endDate = now.endOf("week");        break;
+      case "month":      startDate = now.startOf("month");                     endDate = now.endOf("month");       break;
       case "last_month": startDate = now.subtract(1,"month").startOf("month"); endDate = now.subtract(1,"month").endOf("month"); break;
-      case "quarter":    startDate = now.startOf("quarter"); endDate = now.endOf("quarter"); break;
-      case "year":       startDate = now.startOf("year");  endDate = now.endOf("year");  break;
+      case "quarter":    startDate = now.startOf("quarter");                   endDate = now.endOf("quarter");     break;
+      case "year":       startDate = now.startOf("year");                      endDate = now.endOf("year");        break;
     }
 
     const exportMatch = {
       createdAt: { $gte: startDate.toDate(), $lte: endDate.toDate() }
     };
-    if (state) exportMatch.deviceState = state;
-    if (city)  exportMatch.deviceCity  = city;
-    if (area)  exportMatch.deviceArea  = area;
+
+    // ── Project filter ─────────────────────────────────────────────────────
+    if (project) {
+      const projectDevices = await Device.find({ project }, { device_id: 1 }).lean();
+      const ids = projectDevices.map(d => d.device_id);
+      if (!ids.length) {
+        res.header("Content-Type", "text/csv");
+        res.attachment(`receipts_${period}.csv`);
+        return res.send("No receipts found for this project");
+      }
+      exportMatch.deviceId = { $in: ids };
+    }
 
     const receipts = await Receipt.find(exportMatch).lean();
 
-    // ✅ Only ONE rows declaration — with all location columns
+    // ── Enrich projectName ─────────────────────────────────────────────────
+    const dIds      = [...new Set(receipts.map(r => r.deviceId).filter(Boolean))];
+    const devices   = await Device.find({ device_id: { $in: dIds } }, { device_id: 1, project: 1 }).lean();
+    const deviceMap = {};
+    devices.forEach(d => { deviceMap[d.device_id] = d; });
+
     const csvHeader = [
-      "Receipt ID", "Date", "User", "Device ID",
-      "State", "City", "Area",
-      "Energy (kWh)", "Total Amount", "GST",
-      "Platform Margin", "Owner Payout", "Refund"
+      "Receipt ID", "Date", "User", "Device ID", "Project",
+      "Energy (kWh)", "Amount Paid", "GST",
+      "Platform Margin", "Owner Payout", "Refund Amount"
     ];
 
     const rows = receipts.map(r => [
-      r.receiptId,
-      r.createdAt ? new Date(r.createdAt).toISOString() : "",
-      r.userName   || "",
-      r.deviceId   || "",
-      r.deviceState || "",
-      r.deviceCity  || "",
-      r.deviceArea  || "",
-      r.energyConsumed    ?? 0,
-      r.totalAmount       ?? 0,
-      r.gstAmount         ?? 0,
-      r.vjraMarginAmount  ?? 0,
-      r.ownerPayout       ?? 0,
-      r.refundAmount      ?? 0
+      r.receiptId                                          || "",
+      r.createdAt ? new Date(r.createdAt).toISOString()   : "",
+      r.userName                                           || "",
+      r.deviceId                                           || "",
+      deviceMap[r.deviceId]?.project                       || "",
+      r.energyConsumed   ?? 0,
+      r.amountPaid       ?? 0,
+      r.gstAmount        ?? 0,
+      r.vjraMarginAmount ?? 0,
+      r.ownerPayout      ?? 0,
+      r.refundAmount     ?? 0,
     ]);
 
-    const csv = [csvHeader, ...rows].map(e => e.join(",")).join("\n");
+    const csv = [csvHeader, ...rows].map(row => row.join(",")).join("\n");
 
     res.header("Content-Type", "text/csv");
-    res.attachment(`receipts_${period || "today"}.csv`);
+    res.attachment(`receipts_${project ? project + "_" : ""}${period}.csv`);
     res.send(csv);
 
   } catch (err) {
