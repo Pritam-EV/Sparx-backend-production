@@ -32,7 +32,7 @@ const startMqttSubscriber = require("./mqttSubscriber");
 const app = express();
 
 const OFFLINE_THRESHOLD_MS = 30 * 1000;
-
+const adminTransactionsRoutes = require('./routes/adminTransactions');
 const allowedOrigins = [process.env.CLIENT_URL, 'http://localhost:3000'];
 
 if (!process.env.JWT_SECRET) {
@@ -91,6 +91,7 @@ app.use("/api/devices", deviceRoutes);
 app.use("/api/sessions", sessionRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/admin/transactions', adminTransactionsRoutes);
 app.use('/api/receipts', receiptsRoutes);
 app.use('/api/eb', electricityBillRoutes);   // ← NEW: EB management
 app.use("/api/wallet", walletRoutes);
