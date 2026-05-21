@@ -153,4 +153,30 @@ exports.signup = async (req, res) => {
   }
 };
 
+exports.updateProfile = async (req, res) => {
+  try {
+    const { name, email, mobile, vehicleType, vehicleModel, vehicleNumber, gstin } = req.body;
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
+    if (email && !/^\S+@\S+\.\S+$/.test(email))
+      return res.status(400).json({ message: "Invalid email address" });
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    if (name) user.name = name.trim();
+    if (email) user.email = email.trim().toLowerCase();
+    if (mobile) user.mobile = mobile.trim();
+    if (vehicleType !== undefined) user.vehicleType = vehicleType;
+    if (vehicleModel !== undefined) user.vehicleModel = vehicleModel;
+    if (vehicleNumber) user.vehicleNumber = vehicleNumber.replace(/[\s\-]/g, "").toUpperCase();
+    if (gstin !== undefined) user.gstin = gstin ? gstin.toUpperCase() : "";
+
+    await user.save();
+    return res.json({ message: "Profile updated", user });
+  } catch (error) {
+    console.error("updateProfile Error:", error);
+    return res.status(500).json({ message: "Failed to update profile" });
+  }
+};

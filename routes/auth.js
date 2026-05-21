@@ -130,37 +130,45 @@ const token = jwt.sign(
 // Update profile
 // Update profile
 router.put("/updateProfile", authMiddleware, async (req, res) => {
-  const { name, email, vehicleType, vehicleNumber } = req.body;
-  const userId = req.user.userId; // from authMiddleware
+  const { name, email, vehicleType, vehicleModel, vehicleNumber, gstin } = req.body;
+  const userId = req.user.userId;
 
   try {
-    // 1) basic validation
-    if (!name && !email && !vehicleType && typeof vehicleNumber === "undefined") {
+    // 1) Nothing to update guard
+    if (
+      typeof name === "undefined" &&
+      typeof email === "undefined" &&
+      typeof vehicleType === "undefined" &&
+      typeof vehicleModel === "undefined" &&
+      typeof vehicleNumber === "undefined" &&
+      typeof gstin === "undefined"
+    ) {
       return res.status(400).json({ message: "Nothing to update" });
     }
 
-    // 2) If email provided, ensure uniqueness
+    // 2) Email uniqueness check
     if (email) {
       const emailNormalized = email.toString().trim().toLowerCase();
       const existing = await User.findOne({ email: emailNormalized });
       if (existing && existing._id.toString() !== userId) {
-        return res.status(400).json({ message: "Email already exists" });
+        return res.status(400).json({ message: "Email already in use" });
       }
     }
 
-    // 3) Build the update object — intentionally DO NOT change mobile here
+    // 3) Build update — never touch mobile
     const update = {};
-    if (typeof name !== "undefined") update.name = name;
+    if (typeof name !== "undefined") update.name = name.trim();
     if (typeof email !== "undefined") update.email = email.toString().trim().toLowerCase();
     if (typeof vehicleType !== "undefined") update.vehicleType = vehicleType;
-    if (typeof vehicleNumber !== "undefined") update.vehicleNumber = vehicleNumber;
+    if (typeof vehicleModel !== "undefined") update.vehicleModel = vehicleModel;
+    if (typeof vehicleNumber !== "undefined")
+      update.vehicleNumber = vehicleNumber.replace(/[\s\-]/g, "").toUpperCase();
+    if (typeof gstin !== "undefined")
+      update.gstin = gstin ? gstin.toString().toUpperCase().trim() : "";
 
-    // 4) Perform update and return user (omit sensitive fields)
+    // 4) Update and return
     const updatedUser = await User.findByIdAndUpdate(userId, update, { new: true }).select("-password -__v");
-
-    if (!updatedUser) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    if (!updatedUser) return res.status(404).json({ message: "User not found" });
 
     return res.json({ user: updatedUser });
   } catch (err) {
@@ -168,7 +176,6 @@ router.put("/updateProfile", authMiddleware, async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 });
-
 
 
 
