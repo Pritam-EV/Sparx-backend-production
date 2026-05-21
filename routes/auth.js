@@ -8,7 +8,7 @@ const { sendPhoneCode, verifyPhoneCode, signup } = require("../controllers/authC
 const admin = require('firebase-admin');
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-
+//123//
 // routes/auth.js
 router.post("/phone/send-code", sendPhoneCode);
 router.post("/phone/verify-code", verifyPhoneCode);
@@ -51,7 +51,7 @@ router.post("/google", async (req, res) => {
           role: user.role,   // ✅ Add this
         },
         process.env.JWT_SECRET,
-        { expiresIn: "30d" }
+        { expiresIn: "60d" }
       );
 
 
