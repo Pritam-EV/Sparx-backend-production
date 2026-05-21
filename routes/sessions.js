@@ -25,12 +25,14 @@ const {
 // Example: Only admins can see all sessions in the system
 // routes/sessions.js
 // GET /api/sessions/all?status=&deviceId=&search=&from=&to=&page=1&limit=100
+// GET /api/sessions/all?status=&deviceId=&search=&project=&from=&to=&page=1&limit=500
 router.get("/all", authMiddleware, async (req, res) => {
   try {
     const {
       status,
       deviceId,
       search,
+      project,        // ← NEW
       from,
       to,
       page = 1,
@@ -49,8 +51,32 @@ router.get("/all", authMiddleware, async (req, res) => {
       q.deviceId = { $in: ids.length ? ids : ["__none__"] };
     }
 
+    /* ================= PROJECT FILTER (NEW) ================= */
+    if (project) {
+      const projectDevices = await Device.find(
+        { project },
+        "device_id"
+      ).lean();
+      const projectDeviceIds = projectDevices.map((d) => d.device_id);
+
+      if (!projectDeviceIds.length) {
+        // No devices in this project → return empty immediately
+        return res.json({ total: 0, page: 1, limit: parseInt(limit), sessions: [] });
+      }
+
+      // If owner restriction already set, intersect; otherwise set directly
+      if (q.deviceId?.$in) {
+        const intersect = projectDeviceIds.filter((id) =>
+          q.deviceId.$in.includes(id)
+        );
+        q.deviceId = { $in: intersect.length ? intersect : ["__none__"] };
+      } else {
+        q.deviceId = { $in: projectDeviceIds };
+      }
+    }
+
     if (status) q.status = status;
-    if (deviceId) q.deviceId = deviceId;
+    if (deviceId) q.deviceId = deviceId; // explicit deviceId overrides project filter
 
     if (from || to) {
       q.startTime = {};
@@ -71,7 +97,6 @@ router.get("/all", authMiddleware, async (req, res) => {
     const skip = (pageNum - 1) * lim;
 
     /* ================= QUERY ================= */
-
     const sessions = await Session.find(q)
       .select(
         "sessionId deviceId transactionId userId startTime endTime status " +
@@ -85,19 +110,15 @@ router.get("/all", authMiddleware, async (req, res) => {
       .lean();
 
     /* ================= FETCH DEVICES + OWNERS ================= */
-
     const deviceIds = sessions.map((s) => s.deviceId);
     const devices = await Device.find({ device_id: { $in: deviceIds } })
       .populate("ownerId", "name email mobile")
       .lean();
 
     const deviceMap = {};
-    devices.forEach((d) => {
-      deviceMap[d.device_id] = d;
-    });
+    devices.forEach((d) => { deviceMap[d.device_id] = d; });
 
     /* ================= SHAPE RESPONSE ================= */
-
     const shaped = sessions.map((s) => {
       const lastTele =
         Array.isArray(s.telemetry) && s.telemetry.length
@@ -128,10 +149,8 @@ router.get("/all", authMiddleware, async (req, res) => {
         latestVoltage: lastTele?.voltage ?? null,
         latestCurrent: lastTele?.current ?? null,
 
-        lastUpdate:
-          s.lastUpdate ?? s.updatedAt ?? s.endTime ?? s.startTime,
+        lastUpdate: s.lastUpdate ?? s.updatedAt ?? s.endTime ?? s.startTime,
 
-        /* ---------- USER ---------- */
         user: s.userId
           ? {
               _id: s.userId._id,
@@ -141,11 +160,11 @@ router.get("/all", authMiddleware, async (req, res) => {
             }
           : null,
 
-        /* ---------- DEVICE + OWNER ---------- */
         device: device
           ? {
               _id: device._id,
               device_id: device.device_id,
+              project: device.project ?? null,   // ← expose project in response too
               owner: device.ownerId
                 ? {
                     _id: device.ownerId._id,
@@ -161,19 +180,29 @@ router.get("/all", authMiddleware, async (req, res) => {
 
     const total = await Session.countDocuments(q);
 
-    res.json({
-      total,
-      page: pageNum,
-      limit: lim,
-      sessions: shaped,
-    });
+    res.json({ total, page: pageNum, limit: lim, sessions: shaped });
   } catch (error) {
     console.error("Error fetching sessions:", error);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-
+// GET /api/sessions/admin/filters
+// Returns distinct projects from devices that have had any session
+router.get("/admin/filters", authMiddleware, async (req, res) => {
+  try {
+    const deviceIds = await Session.distinct("deviceId");
+    const devices = await Device.find(
+      { device_id: { $in: deviceIds }, project: { $exists: true, $ne: "" } },
+      { project: 1 }
+    ).lean();
+    const projects = [...new Set(devices.map((d) => d.project).filter(Boolean))].sort();
+    res.json({ projects });
+  } catch (err) {
+    console.error("Session filters fetch error:", err);
+    res.status(500).json({ error: "Could not fetch filters" });
+  }
+});
 
 
 
