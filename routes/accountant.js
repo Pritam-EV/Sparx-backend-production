@@ -98,10 +98,24 @@ router.get("/summary", caMiddleware, async (req, res) => {
       ]),
 
       // Card 2: Actual wallet consumption (debits) this FY
-      WalletTransaction.aggregate([
-        { $match: { type: "debit", createdAt: { $gte: fyFrom, $lte: fyTo } } },
-        { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } }
-      ]),
+        // Card 2: Net wallet consumption = debits - wallet refunds this FY
+        WalletTransaction.aggregate([
+        {
+            $match: {
+            type: { $in: ["debit", "refund"] },
+            createdAt: { $gte: fyFrom, $lte: fyTo }
+            }
+        },
+        {
+            $group: {
+            _id: null,
+            totalDebits:  { $sum: { $cond: [{ $eq: ["$type", "debit"]   }, "$amount", 0] } },
+            totalRefunds: { $sum: { $cond: [{ $eq: ["$type", "refund"]  }, "$amount", 0] } },
+            debitCount:   { $sum: { $cond: [{ $eq: ["$type", "debit"]   }, 1, 0] } },
+            refundCount:  { $sum: { $cond: [{ $eq: ["$type", "refund"]  }, 1, 0] } },
+            }
+        }
+        ]),
 
       // Card 3: Live aggregate wallet balance across ALL users
       User.aggregate([
@@ -128,11 +142,16 @@ router.get("/summary", caMiddleware, async (req, res) => {
       },
 
       // Card 2
-      totalConsumption: {
-        amount: r2(debitAgg[0]?.total || 0),
-        count:  debitAgg[0]?.count  || 0,
+        // Card 2 — was: debitAgg[0]?.total
+        totalConsumption: {
+        amount: r2((debitAgg[0]?.totalDebits || 0) - (debitAgg[0]?.totalRefunds || 0)),
+        count:  debitAgg[0]?.debitCount || 0,
         label:  fyLabel,
-      },
+        // bonus fields for transparency — visible in browser console/network tab
+        grossDebits:  r2(debitAgg[0]?.totalDebits  || 0),
+        walletRefunds: r2(debitAgg[0]?.totalRefunds || 0),
+        refundCount:  debitAgg[0]?.refundCount || 0,
+        },
 
       // Card 3
       liveWalletBalance: {
