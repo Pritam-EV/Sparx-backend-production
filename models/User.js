@@ -15,6 +15,8 @@ const userSchema = new mongoose.Schema({
     required: true,
   },
   vehicleType: String,
+  vehicleModel: { type: String, trim: true, default: "" },
+gstin: { type: String, trim: true, uppercase: true, default: "" },
   role: {
     type: String,
     enum: ["customer", "owner", "admin", "accountant"],
