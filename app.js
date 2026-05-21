@@ -32,6 +32,8 @@ const startMqttSubscriber = require("./mqttSubscriber");
 
 const app = express();
 
+const accountantRoutes = require("./routes/accountant");
+
 const OFFLINE_THRESHOLD_MS = 30 * 1000;
 const allowedOrigins = [process.env.CLIENT_URL, 'http://localhost:3000'];
 
@@ -113,6 +115,8 @@ app.get("/api/getDevice", async (req, res) => {
 app.use("/api/payment", require("./routes/payment"));
 app.use("/api/operator", operatorRoutes);
 app.use('/api/activity', activityRoutes);
+app.use("/api/accountant", accountantRoutes);
+
 // ─── OFFLINE SWEEP ────────────────────────────────────────────────────────────
 setInterval(async () => {
   console.log("🔍 Running offline sweep…");
