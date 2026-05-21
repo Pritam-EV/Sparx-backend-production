@@ -19,6 +19,7 @@ const receiptSchema = new mongoose.Schema({
   userName: String,
   userEmail: String,
   userMobile: String,
+  userGstin: { type: String, default: "" },
 
   // DEVICE SNAPSHOT
   deviceCity: String,
@@ -26,6 +27,12 @@ const receiptSchema = new mongoose.Schema({
   deviceArea: String,
   deviceLocation: String,
 
+    // ============== PAYMENT MODE ==============
+  paymentGateway: {                            // ← NEW: snapshotted from Session
+    type: String,
+    enum: ["cashfree", "wallet", "free"],
+    default: "cashfree",
+  },
     
   // ============== ENERGY METRICS ==============
   energyConsumed: { type: Number, required: true },      // Actual kWh used
