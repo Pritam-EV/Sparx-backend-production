@@ -228,7 +228,6 @@ router.get("/invoices", caMiddleware, async (req, res) => {
         invoiceNo:     r.receiptId,           // receipt ID as invoice no.
         date:          r.createdAt,
         customerName:  r.userName || "—",     // from receipt snapshot directly
-         customerMobile: r.userMobile  || "—",
         customerGstin: r.userGstin || "",     // empty = B2C
         placeOfSupply: pos || "—",
         deviceId:      r.deviceId,
@@ -322,7 +321,6 @@ router.get("/wallet-topups", caMiddleware, async (req, res) => {
         _id:           t._id,
         date:          t.createdAt,
         userName:      t.userId?.name    || "—",
-        userMobile:    t.userId?.mobile  || "—",
         userEmail:     t.userId?.email   || "—",
         amount:        r2(t.amount),
         balanceBefore: r2(t.balanceBefore),
@@ -348,7 +346,7 @@ router.get("/wallet-debits", caMiddleware, async (req, res) => {
 
     const [transactions, total] = await Promise.all([
       WalletTransaction.find({ type: "debit", createdAt: { $gte: from, $lte: to } })
-        .populate("userId", "name mobile email")
+        .populate("userId", "name")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -364,7 +362,6 @@ router.get("/wallet-debits", caMiddleware, async (req, res) => {
         _id:           t._id,
         date:          t.createdAt,
         userName:      t.userId?.name    || "—",
-        userMobile:    t.userId?.mobile  || "—",
         amount:        r2(t.amount),
         balanceBefore: r2(t.balanceBefore),
         balanceAfter:  r2(t.balanceAfter),
@@ -388,9 +385,9 @@ router.get("/export", caMiddleware, async (req, res) => {
     const [receipts, topups, debits] = await Promise.all([
       Receipt.find({ createdAt: { $gte: from, $lte: to } }).sort({ createdAt: 1 }).lean(),
       WalletTransaction.find({ type: "topup", createdAt: { $gte: from, $lte: to } })
-        .populate("userId", "name mobile email").sort({ createdAt: 1 }).lean(),
+        .populate("userId", "name  ").sort({ createdAt: 1 }).lean(),
       WalletTransaction.find({ type: "debit", createdAt: { $gte: from, $lte: to } })
-        .populate("userId", "name mobile email").sort({ createdAt: 1 }).lean(),
+        .populate("userId", "name ").sort({ createdAt: 1 }).lean(),
     ]);
 
     const wb = new ExcelJS.Workbook();
@@ -419,7 +416,6 @@ router.get("/export", caMiddleware, async (req, res) => {
       { header: "Invoice No.",       key: "invoiceNo",      width: 22 },
       { header: "Date",              key: "date",           width: 20 },
       { header: "Customer Name",     key: "customerName",   width: 24 },
-      { header: "Mobile",            key: "mobile",         width: 14 },
       { header: "GSTIN",             key: "gstin",          width: 20 },
       { header: "Place of Supply",   key: "placeOfSupply",  width: 18 },
       { header: "Supply Type",       key: "supplyType",     width: 14 },
