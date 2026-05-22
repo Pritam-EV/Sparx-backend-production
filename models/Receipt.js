@@ -26,7 +26,7 @@ const receiptSchema = new mongoose.Schema({
   deviceState: String,
   deviceArea: String,
   deviceLocation: String,
-
+placeOfSupply: { type: String, default: "" },
     // ============== PAYMENT MODE ==============
   paymentGateway: {                            // ← NEW: snapshotted from Session
     type: String,

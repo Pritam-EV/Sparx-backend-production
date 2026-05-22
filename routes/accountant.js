@@ -174,6 +174,15 @@ router.get("/summary", caMiddleware, async (req, res) => {
 
 // ─── ROUTE 2: Invoice Register (Receipts table for CA) ────────────────────────
 // GET /api/accountant/invoices?period=fy&page=1&limit=50&search=
+// ─── ROUTE 2: Invoice Register ─────────────────────────────────────────────
+// Changes vs old version:
+//  1. userName now sourced from Receipt.userName directly (already snapshotted)
+//  2. customerMobile removed from response
+//  3. placeOfSupply uses r.placeOfSupply (new field) falling back to r.deviceState
+//  4. CGST/SGST/IGST bifurcation: intra = CGST+SGST, inter = IGST only
+//  5. supplyType derived from placeOfSupply vs REGISTERED_STATE
+//  6. invoiceNo = receiptId (as specified)
+
 router.get("/invoices", caMiddleware, async (req, res) => {
   try {
     const { from, to, label } = buildDateRange(req.query);
@@ -181,7 +190,6 @@ router.get("/invoices", caMiddleware, async (req, res) => {
     const limit = Math.min(100, parseInt(req.query.limit) || 50);
     const skip  = (page - 1) * limit;
 
-    // Build match filter
     const match = { createdAt: { $gte: from, $lte: to } };
 
     if (req.query.search) {
@@ -189,16 +197,15 @@ router.get("/invoices", caMiddleware, async (req, res) => {
       match.$or = [
         { receiptId:  re },
         { userName:   re },
-        { userMobile: re },
         { userGstin:  re },
         { deviceId:   re },
         { deviceCity: re },
+        { placeOfSupply: re },
       ];
     }
 
-    const registeredState = (process.env.REGISTERED_STATE || "Maharashtra").toLowerCase();
+    const registeredState = (process.env.REGISTERED_STATE || "Maharashtra").toLowerCase().trim();
 
-    // Sort
     const sortField = req.query.sortBy  || "createdAt";
     const sortDir   = req.query.sortDir === "asc" ? 1 : -1;
 
@@ -211,44 +218,48 @@ router.get("/invoices", caMiddleware, async (req, res) => {
       Receipt.countDocuments(match),
     ]);
 
-    // Map to CA-facing invoice objects
     const data = receipts.map(r => {
-      const isIntra = (r.deviceState || "").toLowerCase() === registeredState;
+      // placeOfSupply: use new field, fall back to deviceState for old receipts
+      const pos     = (r.placeOfSupply || r.deviceState || "").trim();
+      const isIntra = pos.toLowerCase() === registeredState;
       const gst     = r2(r.gstAmount || 0);
 
       return {
-        invoiceNo:      r.receiptId,
-        date:           r.createdAt,
-        customerName:   r.userName      || "—",
-        customerMobile: r.userMobile    || "—",
-        customerGstin:  r.userGstin     || "",        // empty = B2C
-        placeOfSupply:  r.deviceState   || "—",
-        deviceId:       r.deviceId,
-        deviceCity:     r.deviceCity    || "—",
-        paymentMode:    r.paymentGateway || "cashfree", // ← directly from Receipt now
-        energykWh:      r2(r.energyConsumed),
-        ratePerKwh:     r2(r.userRatePerKwh),
-        taxableAmount:  r2(r.taxableAmount),
-        cgst:           isIntra ? r2(gst / 2) : 0,
-        sgst:           isIntra ? r2(gst / 2) : 0,
-        igst:           isIntra ? 0 : gst,
-        totalGst:       gst,
-        discount:       r2(r.discountApplied),
-        totalAmount:    r2(r.totalAmount),
-        amountPaid:     r2(r.amountPaid),
-        refundAmount:   r2(r.refundAmount || 0),
-        supplyType:     isIntra ? "Intra-State" : "Inter-State",
-        invoiceType:    r.userGstin ? "B2B" : "B2C",
+        invoiceNo:     r.receiptId,           // receipt ID as invoice no.
+        date:          r.createdAt,
+        customerName:  r.userName || "—",     // from receipt snapshot directly
+        customerGstin: r.userGstin || "",     // empty = B2C
+        placeOfSupply: pos || "—",
+        deviceId:      r.deviceId,
+        deviceCity:    r.deviceCity || "—",
+        paymentMode:   r.paymentGateway || "cashfree",
+        taxableAmount: r2(r.taxableAmount),
+        cgst:  isIntra ? r2(gst / 2) : 0,    // 9% only if intra-state
+        sgst:  isIntra ? r2(gst / 2) : 0,    // 9% only if intra-state
+        igst:  isIntra ? 0 : gst,             // 18% only if inter-state
+        totalGst:      gst,
+        discount:      r2(r.discountApplied),
+        totalAmount:   r2(r.totalAmount),
+        supplyType:    isIntra ? "Intra-State" : "Inter-State",
+        invoiceType:   r.userGstin ? "B2B" : "B2C",
       };
     });
 
-    // Period-level totals for footer row
+    // Period totals (split cgst/sgst/igst correctly in aggregate too)
     const totalsAgg = await Receipt.aggregate([
       { $match: match },
       {
+        $addFields: {
+          _pos: { $toLower: { $trim: { input: { $ifNull: ["$placeOfSupply", { $ifNull: ["$deviceState", ""] }] } } } }
+        }
+      },
+      {
         $group: {
-          _id: null,
+          _id:           null,
           taxableAmount: { $sum: "$taxableAmount" },
+          totalCgst:     { $sum: { $cond: [{ $eq: ["$_pos", registeredState] }, { $divide: [{ $ifNull: ["$gstAmount", 0] }, 2] }, 0] } },
+          totalSgst:     { $sum: { $cond: [{ $eq: ["$_pos", registeredState] }, { $divide: [{ $ifNull: ["$gstAmount", 0] }, 2] }, 0] } },
+          totalIgst:     { $sum: { $cond: [{ $ne: ["$_pos", registeredState] }, { $ifNull: ["$gstAmount", 0] }, 0] } },
           gstAmount:     { $sum: "$gstAmount" },
           totalAmount:   { $sum: "$totalAmount" },
           discounts:     { $sum: "$discountApplied" },
@@ -265,6 +276,9 @@ router.get("/invoices", caMiddleware, async (req, res) => {
       totalPages: Math.ceil(total / limit),
       periodTotals: {
         taxableAmount: r2(totals.taxableAmount),
+        cgst:          r2(totals.totalCgst),
+        sgst:          r2(totals.totalSgst),
+        igst:          r2(totals.totalIgst),
         gstAmount:     r2(totals.gstAmount),
         totalAmount:   r2(totals.totalAmount),
         discounts:     r2(totals.discounts),
