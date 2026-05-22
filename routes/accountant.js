@@ -228,6 +228,7 @@ router.get("/invoices", caMiddleware, async (req, res) => {
         invoiceNo:     r.receiptId,           // receipt ID as invoice no.
         date:          r.createdAt,
         customerName:  r.userName || "—",     // from receipt snapshot directly
+         customerMobile: r.userMobile  || "—",
         customerGstin: r.userGstin || "",     // empty = B2C
         placeOfSupply: pos || "—",
         deviceId:      r.deviceId,
@@ -450,7 +451,7 @@ router.get("/export", caMiddleware, async (req, res) => {
         customerName: r.userName      || "",
         mobile:       r.userMobile    || "",
         gstin:        r.userGstin     || "",
-        placeOfSupply:r.deviceState   || "",
+        placeOfSupply: r.placeOfSupply || r.deviceState || "",
         supplyType:   isIntra ? "Intra-State" : "Inter-State",
         invoiceType:  r.userGstin ? "B2B" : "B2C",
         paymentMode:  (r.paymentGateway || "cashfree").toUpperCase(),
@@ -563,11 +564,10 @@ router.get("/export", caMiddleware, async (req, res) => {
     hRow.eachCell(cell => Object.assign(cell, s4));
     hRow.height = 20;
 
-    const b2cIntra = receipts.filter(r => !r.userGstin && (r.deviceState||"").toLowerCase()===registeredState);
-    const b2cInter = receipts.filter(r => !r.userGstin && (r.deviceState||"").toLowerCase()!==registeredState);
-    const b2bIntra = receipts.filter(r =>  r.userGstin && (r.deviceState||"").toLowerCase()===registeredState);
-    const b2bInter = receipts.filter(r =>  r.userGstin && (r.deviceState||"").toLowerCase()!==registeredState);
-
+    const b2cIntra = receipts.filter(r => !r.userGstin && (r.placeOfSupply||r.deviceState||"").toLowerCase()===registeredState);
+    const b2cInter = receipts.filter(r => !r.userGstin && (r.placeOfSupply||r.deviceState||"").toLowerCase()===registeredState);
+    const b2bIntra = receipts.filter(r =>  r.userGstin && (r.placeOfSupply||r.deviceState||"").toLowerCase()===registeredState);
+    const b2bInter = receipts.filter(r =>  r.userGstin && (r.placeOfSupply||r.deviceState||"").toLowerCase()===registeredState);
     const sT  = arr => r2(arr.reduce((s,r)=>s+(r.taxableAmount||0),0));
     const sG  = arr => r2(arr.reduce((s,r)=>s+(r.gstAmount||0),0));
 

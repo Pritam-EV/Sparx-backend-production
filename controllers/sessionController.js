@@ -5,6 +5,7 @@ const mqttClient = require('../mqttClient');
 const Coupon = require('../models/Coupon');
 const CouponReservation = require('../models/CouponReservation');
 const Receipt = require('../models/Receipt');
+const User = require('../models/User');
 const crypto = require("crypto");
 const { creditWallet } = require("../services/walletService");
 const Payment = require("../models/Payment");
@@ -487,6 +488,9 @@ async function completeSessionInternal({
     const paymentRecord = await Payment.findOne({ orderId: session.transactionId }).lean();
     const isWalletPay = paymentRecord?.gateway === "wallet";
 
+    // ── Snapshot user and device metadata for receipt ─────────────────────
+const userDoc = await User.findById(session.userId).select('name email mobile gstin').lean();
+
     // For wallet sessions: refund goes to wallet immediately → status = "wallet_refunded"
     // For cashfree sessions: refund is initiated via Cashfree → status = "initiated"
     let refundStatus = "not_applicable";
@@ -500,6 +504,28 @@ async function completeSessionInternal({
       deviceId: session.deviceId,
       sessionId: session.sessionId,
       transactionId: session.transactionId,
+
+
+  // ── USER SNAPSHOT (NEW) ──────────────────────────
+  userName:     userDoc?.name   || "",
+  userEmail:    userDoc?.email  || "",
+  userMobile:   userDoc?.mobile || "",
+  userGstin:    userDoc?.gstin  || "",
+
+  // ── OWNER SNAPSHOT (NEW) ─────────────────────────
+  ownerId:      device?.ownerId?.[0] || null,
+
+  // ── DEVICE SNAPSHOT (NEW) ────────────────────────
+  deviceCity:     device?.city     || "",
+  deviceState:    device?.state    || "",
+  deviceArea:     device?.area     || "",
+  deviceLocation: device?.location || "",
+  placeOfSupply:  device?.state    || "",   // ← KEY FIELD for GST bifurcation
+
+  // ── PAYMENT GATEWAY (NEW) ────────────────────────
+  paymentGateway: isWalletPay ? "wallet" : (session.paymentGateway || "cashfree"),
+
+
       energyConsumed: energy,
       energySelected: session.energySelected,
       amountSelected: session.amountSelected,
