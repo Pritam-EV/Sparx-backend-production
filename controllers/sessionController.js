@@ -22,6 +22,70 @@ async function logCommand(sessionId, { type, topic, payload, mqtt = {} }) {
   );
 }
 
+function getFinancialYearSegment(date = new Date()) {
+  const year = date.getFullYear();
+  const month = date.getMonth() + 1; // 1-12
+
+  // FY starts in April
+  let startYear, endYear;
+  if (month >= 4) {
+    startYear = year;
+    endYear = year + 1;
+  } else {
+    startYear = year - 1;
+    endYear = year;
+  }
+
+  // 2026-27 → "202627"
+  const start = String(startYear);
+  const end = String(endYear).slice(-2);
+  return `${start}${end}`;
+}
+
+async function generateReceiptId({ isFreeViz, now = new Date() }) {
+  const month = String(now.getMonth() + 1).padStart(2, '0'); // "05"
+
+  if (isFreeViz) {
+    // VIZTEST-05-001 style
+    const prefix = `VIZTEST-${month}-`;
+
+    const last = await Receipt
+      .findOne({ receiptId: { $regex: `^${prefix}` } })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    let nextSeries = 1;
+    if (last?.receiptId) {
+      const parts = last.receiptId.split('-');
+      const lastNum = parts[2] || '';
+      const parsed = parseInt(lastNum, 10);
+      if (!Number.isNaN(parsed)) nextSeries = parsed + 1;
+    }
+
+    const series = String(nextSeries).padStart(3, '0'); // 001, 002...
+    return `${prefix}${series}`;
+  }
+
+  // Main GST series: VIZ-202627-05-0001
+  const fySegment = getFinancialYearSegment(now); // "202627"
+  const prefix = `VIZ-${fySegment}-${month}-`;
+
+  const last = await Receipt
+    .findOne({ receiptId: { $regex: `^${prefix}` } })
+    .sort({ createdAt: -1 })
+    .lean();
+
+  let nextSeries = 1;
+  if (last?.receiptId) {
+    const parts = last.receiptId.split('-');
+    const lastNum = parts[3] || '';
+    const parsed = parseInt(lastNum, 10);
+    if (!Number.isNaN(parsed)) nextSeries = parsed + 1;
+  }
+
+  const series = String(nextSeries).padStart(4, '0'); // 0001, 0002...
+  return `${prefix}${series}`;
+}
 
 // ✅ GET /api/sessions/active
 // controllers/sessionController.js
@@ -497,9 +561,22 @@ const userDoc = await User.findById(session.userId).select('name email mobile gs
     if (refundAmount > 0) {
       refundStatus = isWalletPay ? "wallet_refunded" : "initiated";
     }
+// Determine if this is FREEVIZ (test) receipt
+// You don’t currently store couponCode on Session, so use amountPaid === 0 AND wallet/free payment gateway
+const isZeroAmount = Number(session.amountPaid || 0) === 0;
+
+// If you prefer strictly coupon-based:
+// const isFreeViz = (paymentRecord?.couponCode === 'FREEVIZ'); // requires you to store couponCode in Payment
+
+const isFreeViz = isZeroAmount; // for now: any zero-paid session → VIZTEST series
+
+const receiptId = await generateReceiptId({
+  isFreeViz,
+  now: new Date(),
+});
 
     receipt = new Receipt({
-      receiptId: `VIZ${rand(10)}`,
+      receiptId,
       userId: session.userId,
       deviceId: session.deviceId,
       sessionId: session.sessionId,
