@@ -101,7 +101,7 @@ router.get("/all", authMiddleware, async (req, res) => {
       .select(
         "sessionId deviceId transactionId userId startTime endTime status " +
         "energyConsumed energySelected amountPaid amountUsed discountApplied " +
-        "ratePerKwh endTrigger lastUpdate updatedAt telemetry"+
+        "ratePerKwh endTrigger lastUpdate updatedAt telemetry"+ 
         "latestVoltage latestCurrent latestPower"
       )
       .populate("userId", "name email mobile")
@@ -239,7 +239,7 @@ router.post("/resume", authMiddleware, resumeSession);
 router.post("/stop", authMiddleware, endSession);
 
 // 6. Payment success webhook
-router.post("/payment-success", async (req, res) => {
+router.post("/payment-success",authMiddleware, async (req, res) => {
   const { transactionId, deviceId, sessionId, startTime, amountPaid, energySelected } = req.body;
   const userId = req.user.userId;                // ← capture userId
   try {
