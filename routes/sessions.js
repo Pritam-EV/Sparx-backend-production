@@ -101,7 +101,7 @@ router.get("/all", authMiddleware, async (req, res) => {
       .select(
         "sessionId deviceId transactionId userId startTime endTime status " +
         "energyConsumed energySelected amountPaid amountUsed discountApplied " +
-        "ratePerKwh endTrigger lastUpdate updatedAt telemetry"+ 
+        "ratePerKwh endTrigger lastUpdate updatedAt telemetry " +        // ← space added
         "latestVoltage latestCurrent latestPower"
       )
       .populate("userId", "name email mobile")
