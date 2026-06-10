@@ -101,7 +101,8 @@ router.get("/all", authMiddleware, async (req, res) => {
       .select(
         "sessionId deviceId transactionId userId startTime endTime status " +
         "energyConsumed energySelected amountPaid amountUsed discountApplied " +
-        "ratePerKwh endTrigger lastUpdate updatedAt telemetry"
+        "ratePerKwh endTrigger lastUpdate updatedAt telemetry"+
+        "latestVoltage latestCurrent latestPower"
       )
       .populate("userId", "name email mobile")
       .sort({ startTime: -1 })
@@ -146,10 +147,10 @@ router.get("/all", authMiddleware, async (req, res) => {
         discountApplied: s.discountApplied ?? 0,
         ratePerKwh: s.ratePerKwh ?? 0,
 
-        latestVoltage: lastTele?.voltage ?? null,
-        latestCurrent: lastTele?.current ?? null,
+        latestVoltage: lastTele?.voltage ?? s.latestVoltage ?? null,
+        latestCurrent: lastTele?.current ?? s.latestCurrent ?? null,
 
-        lastUpdate: s.lastUpdate ?? s.updatedAt ?? s.endTime ?? s.startTime,
+        lastUpdate: s.lastUpdate ?? lastTele?.timestamp ?? s.updatedAt ?? s.endTime ?? s.startTime,
 
         user: s.userId
           ? {
