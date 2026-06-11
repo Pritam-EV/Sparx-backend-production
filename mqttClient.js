@@ -43,5 +43,6 @@ client.on('error', (err) => {
   console.error('❌ MQTT error:', err.message || err);
 });
 
+
 // Export this shared client for use across backend modules
 module.exports = client;

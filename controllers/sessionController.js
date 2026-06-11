@@ -1126,6 +1126,7 @@ const getOwnerAnalytics = async (req, res) => {
 module.exports = {
   startSession,
   endSession,
+  completeSessionInternal,
   pauseSession, 
   resumeSession,
   getSessionById,
