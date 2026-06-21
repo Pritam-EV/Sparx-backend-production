@@ -50,6 +50,15 @@ lastEstimationPct:  { type: Number, default: 0 },
   latestCurrent: { type: Number, default: 0 },
   latestPower:   { type: Number, default: 0 },
   lastUpdate:    { type: Date },
+  // ─── Grace-period tracking fields ────────────────────────────────────────────
+// Timestamp of the last telemetry packet received for this session.
+// Used by cron to confirm device has truly been idle before killing session.
+lastTelemetryAt:  { type: Date, default: null },
+
+// Timestamp when device first reported Available/Offline while session was active.
+// Grace period: only kill if this has been set for >= GRACE_MS continuously.
+deviceAvailableSince: { type: Date, default: null },
+// ─────────────────────────────────────────────────────────────────────────────
 }, {
   timestamps: true
 });
