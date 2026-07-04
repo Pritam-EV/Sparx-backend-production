@@ -132,7 +132,7 @@ const parseAndUploadEB = [
         sizeBytes: req.file.size
       };
 
-      console.log(`[uploadEB] ✅ Uploaded to Firebase Storage: ${storagePath}`);
+      // console.log(`[uploadEB] ✅ Uploaded to Firebase Storage: ${storagePath}`);
       next();
     } catch (err) {
       console.error('[uploadEB] ❌ Firebase upload failed:', err.message);

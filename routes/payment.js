@@ -75,7 +75,7 @@ router.post("/order", authMiddleware, async (req, res) => {
       },
     });
 
-    console.log("🌍 Cashfree BASE:", CASHFREE_BASE_URL, "🔑 Cashfree ENV:", process.env.CASHFREE_ENV);
+    // console.log("🌍 Cashfree BASE:", CASHFREE_BASE_URL, "🔑 Cashfree ENV:", process.env.CASHFREE_ENV);
 
     await Payment.create({
       orderId,
@@ -88,11 +88,11 @@ router.post("/order", authMiddleware, async (req, res) => {
       rawResponse: response.data,
     });
 
-    console.log("✅ Cashfree order created:", {
-      orderId,
-      cfOrderId:        response.data.order_id,
-      paymentSessionId: response.data.payment_session_id,
-    });
+    // console.log("✅ Cashfree order created:", {
+    //   orderId,
+    //   cfOrderId:        response.data.order_id,
+    //   paymentSessionId: response.data.payment_session_id,
+    // });
 
     return res.status(200).json({
       success:          true,
@@ -138,7 +138,7 @@ const expectedSignature = crypto
       const orderId = event.data.order.order_id;
       const payment = event.data.payment;
 
-      console.log("✅ Cashfree payment success:", orderId);
+      // console.log("✅ Cashfree payment success:", orderId);
 
       await Payment.updateOne(
         { orderId, status: { $ne: "SUCCESS" } },
@@ -179,7 +179,7 @@ const expectedSignature = crypto
     // ── PAYMENT_FAILED (existing logic — unchanged) ───────────────────────────
     if (event.type === "PAYMENT_FAILED") {
       const orderId = event.data.order.order_id;
-      console.log("❌ Cashfree payment failed:", orderId);
+      // console.log("❌ Cashfree payment failed:", orderId);
 
       await Payment.updateOne(
         { orderId },
@@ -228,7 +228,7 @@ const expectedSignature = crypto
       );
 
       if (updated) {
-        console.log(`🔄 Refund ${cfRefundId} → ${newStatus}${newStatus === "SUCCESS" ? ` | ARN: ${r.refund_arn}` : ""}`);
+        // console.log(`🔄 Refund ${cfRefundId} → ${newStatus}${newStatus === "SUCCESS" ? ` | ARN: ${r.refund_arn}` : ""}`);
       } else {
         // cfRefundId not found — could be the very first webhook before we stored it
         // Try matching by refundId in case cf_refund_id wasn't set at creation time
@@ -264,7 +264,7 @@ router.get("/verify", async (req, res) => {
       return res.json({ success: true, status: "successful", gateway: "free" });
     }
 
-    console.log("🔍 Verifying payment for:", orderId);
+    // console.log("🔍 Verifying payment for:", orderId);
 
     const payment = await Payment.findOne({ orderId });
 
@@ -297,7 +297,7 @@ router.get("/verify", async (req, res) => {
     }
 
     if (payment.status === "PENDING") {
-      console.log("⏳ Payment pending in DB, checking Cashfree...");
+      // console.log("⏳ Payment pending in DB, checking Cashfree...");
       const response = await axios.get(`${CASHFREE_BASE_URL}/pg/orders/${orderId}`, {
         headers: {
           "x-client-id":     process.env.CASHFREE_APP_ID,
@@ -307,7 +307,7 @@ router.get("/verify", async (req, res) => {
       });
 
       const orderStatus = response.data?.order_status;
-      console.log("🔍 Cashfree order status:", orderStatus);
+      // console.log("🔍 Cashfree order status:", orderStatus);
 
       if (orderStatus === "PAID") {
         await Payment.updateOne(
@@ -489,7 +489,7 @@ router.post("/refund", authMiddleware, adminOnly, async (req, res) => {
         processedAt:  new Date(),
       });
 
-      console.log(`✅ Wallet refund SUCCESS: ${refundId} | ₹${amount} → userId: ${payment.userId}`);
+      // console.log(`✅ Wallet refund SUCCESS: ${refundId} | ₹${amount} → userId: ${payment.userId}`);
       return res.json({ success: true, refund: refundDoc });
     }
 
@@ -524,7 +524,7 @@ router.post("/refund", authMiddleware, adminOnly, async (req, res) => {
     }
 
     // cfData.cf_refund_id, cfData.refund_status (usually "PENDING" at this point)
-    console.log(`✅ Cashfree refund initiated: ${refundId} | cf_refund_id: ${cfData.cf_refund_id} | status: ${cfData.refund_status}`);
+    // console.log(`✅ Cashfree refund initiated: ${refundId} | cf_refund_id: ${cfData.cf_refund_id} | status: ${cfData.refund_status}`);
 
     // Create a WalletTransaction ledger entry so the wallet ledger has a record
     // (balance is NOT touched — this is bank-bound, not wallet)
@@ -719,7 +719,7 @@ router.post("/process-initiated-refund", authMiddleware, adminOnly, async (req, 
       { new: true }
     );
 
-    console.log(`✅ Refund INITIATED→PENDING: ${refundDoc.refundId} | cf_refund_id: ${cfData.cf_refund_id}`);
+    // console.log(`✅ Refund INITIATED→PENDING: ${refundDoc.refundId} | cf_refund_id: ${cfData.cf_refund_id}`);
     return res.json({ success: true, refund: updated });
 
   } catch (err) {

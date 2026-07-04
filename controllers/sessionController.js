@@ -92,7 +92,7 @@ async function generateReceiptId({ isFreeViz, now = new Date() }) {
 const getActiveSession = async (req, res) => {
   try {
     const userId = req.user.userId;
-    console.log(`Fetching active session for user ${userId}`);
+    // console.log(`Fetching active session for user ${userId}`);
 
     // 1) Find active session for this user
     const session = await Session.findOne({ userId, status: 'active' }).lean();
@@ -139,7 +139,7 @@ const getActiveSession = async (req, res) => {
       status: device ? device.status : "Unknown"
     };
 
-    console.log('[DEBUG] getActiveSession responseData:', responseData);
+    // console.log('[DEBUG] getActiveSession responseData:', responseData);
     return res.json(responseData);
 
   } catch (error) {
@@ -347,7 +347,7 @@ await Payment.updateOne(
       };
 
 
-    console.log("📡 Publishing START to device:", topic, payload);
+    // console.log("📡 Publishing START to device:", topic, payload);
     // log the intent
     await logCommand(newSession._id, {
       type: "start",
@@ -363,7 +363,7 @@ mqttClient.publish(
     if (err) {
       console.error("❌ MQTT publish failed:", err);
     } else {
-      console.log(`✅ MQTT start command sent to ${deviceId}`);
+      // console.log(`✅ MQTT start command sent to ${deviceId}`);
     }
   }
 );
@@ -417,7 +417,7 @@ const pauseSession = async (req, res) => {
           { _id: session._id },
           { $set: { lastUpdate: new Date() } }
         );
-        console.log(`✅ MQTT pause sent to ${deviceId || session.deviceId}`);
+        // console.log(`✅ MQTT pause sent to ${deviceId || session.deviceId}`);
         res.json({ message: "Session paused" });
       });
 
@@ -460,7 +460,7 @@ const resumeSession = async (req, res) => {
             { _id: session._id },
             { $set: { lastUpdate: new Date() } }
           );
-          console.log(`✅ MQTT resume sent to ${deviceId || session.deviceId}`);
+          // console.log(`✅ MQTT resume sent to ${deviceId || session.deviceId}`);
           res.json({ message: "Session resumed" });
         });
 
@@ -654,7 +654,7 @@ if (refundAmount > 0 && !isWalletPay) {
         amountUtilized,
         gateway:         "cashfree",
       });
-      console.log(`📋 Cashfree refund doc INITIATED — ₹${refundAmount} for session ${session.sessionId}`);
+      // console.log(`📋 Cashfree refund doc INITIATED — ₹${refundAmount} for session ${session.sessionId}`);
     } catch (e) {
       console.error(`❌ Cashfree refund doc creation failed:`, e.message);
     }
@@ -707,7 +707,7 @@ if (refundAmount > 0 && isWalletPay) {
         amountUtilized,
         gateway:         "wallet",
       });
-      console.log(`✅ Refund doc created — ₹${refundAmount} → wallet, session ${session.sessionId}`);
+      // console.log(`✅ Refund doc created — ₹${refundAmount} → wallet, session ${session.sessionId}`);
     } catch (refDocErr) {
       // Log but don't crash — wallet was already credited
       console.error(`❌ Refund doc creation failed for ${session.sessionId}:`, refDocErr.message);
@@ -719,9 +719,9 @@ if (refundAmount > 0 && isWalletPay) {
       { $set: { "refund.processedAt": new Date() } }
     );
 
-    console.log(`✅ Wallet refund ₹${refundAmount} complete for session ${session.sessionId}`);
+    // console.log(`✅ Wallet refund ₹${refundAmount} complete for session ${session.sessionId}`);
   } else {
-    console.log(`⚠️ Refund already processed for session ${session.sessionId} — skipping`);
+    // console.log(`⚠️ Refund already processed for session ${session.sessionId} — skipping`);
   }
 }
   }
@@ -742,7 +742,7 @@ if (refundAmount > 0 && isWalletPay) {
 
 // ✅ POST /api/sessions/stop
 const endSession = async (req, res) => {
-  console.log("Stop request received:", req.body);
+  // console.log("Stop request received:", req.body);
   try {
     const { sessionId, endTime, endTrigger, currentEnergy, deltaEnergy, amountUsed, deviceId } = req.body;
     if (!sessionId || !endTime || !endTrigger) {

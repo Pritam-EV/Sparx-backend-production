@@ -35,14 +35,14 @@ const availableNoSessionTicks = new Map();
 function startMqttSubscriber() {
 
   mqttClient.on('connect', () => {
-    console.log('✅ Backend connected to MQTT broker');
+    // console.log('✅ Backend connected to MQTT broker');
 
     const topics = ['viz/+/Telemetry', 'device/+/session/end', 'viz/+/sessionend'];
     mqttClient.subscribe(topics, { qos: 1 }, (err) => {
       if (err) {
         console.error('MQTT subscribe failed:', err);
       } else {
-        console.log('✅ Subscribed to:', topics);
+        // console.log('✅ Subscribed to:', topics);
       }
     });
   });
@@ -50,7 +50,7 @@ function startMqttSubscriber() {
 
   mqttClient.on('message', async (topic, buf) => {
     const payload = buf.toString();
-    console.log(`[MQTT RX] topic=${topic} payload=${payload}`);
+    // console.log(`[MQTT RX] topic=${topic} payload=${payload}`);
 
     const parts = topic.split('/');
 
@@ -84,7 +84,7 @@ function startMqttSubscriber() {
         return;
       }
 
-      console.log('[MQTT] session/end received:', { deviceId, sessionId, endTrigger, energy_kWh, topic });
+      // console.log('[MQTT] session/end received:', { deviceId, sessionId, endTrigger, energy_kWh, topic });
 
       try {
         await completeSessionInternal({
@@ -95,7 +95,7 @@ function startMqttSubscriber() {
           deviceIdOverride: deviceId,
           sendStopMqtt:     false,
         });
-        console.log('[MQTT] ✅ Session auto-completed via session/end event:', sessionId);
+        // console.log('[MQTT] ✅ Session auto-completed via session/end event:', sessionId);
       } catch (err) {
         console.error('[MQTT] ❌ Failed auto-completing session:', err);
       }
@@ -116,9 +116,9 @@ function startMqttSubscriber() {
     let msg;
     try {
       msg = JSON.parse(payload);
-      console.log('[MQTT RX] Parsed Telemetry payload:', msg);
+      // console.log('[MQTT RX] Parsed Telemetry payload:', msg);
     } catch (e) {
-      console.error('❌ Invalid JSON on Telemetry:', e, payload);
+      // console.error('❌ Invalid JSON on Telemetry:', e, payload);
       return;
     }
 
@@ -130,7 +130,7 @@ function startMqttSubscriber() {
     // Duplicate filter — skip if exact same message seen within 30s
     const msgKey = topic + JSON.stringify(msg);
     if (processedMessages.has(msgKey)) {
-      console.log(`⏩ Skipped duplicate message on ${topic}`);
+      // console.log(`⏩ Skipped duplicate message on ${topic}`);
       return;
     }
     processedMessages.add(msgKey);
@@ -169,11 +169,11 @@ function startMqttSubscriber() {
         }
       );
 
-      console.log(
-        '[MQTT DEBUG] Device update', deviceId,
-        'matched=',  devResult?.matchedCount  ?? devResult?.n,
-        'modified=', devResult?.modifiedCount ?? devResult?.nModified
-      );
+      // console.log(
+      //   '[MQTT DEBUG] Device update', deviceId,
+      //   'matched=',  devResult?.matchedCount  ?? devResult?.n,
+      //   'modified=', devResult?.modifiedCount ?? devResult?.nModified
+      // );
 
 
       // ── 2) Store 1-minute telemetry history ──────────────────────────────
@@ -196,7 +196,7 @@ function startMqttSubscriber() {
             power:     p,
             timestamp: roundedTime,
           });
-          console.log(`[MQTT] 📊 Telemetry stored for ${deviceId} @ ${roundedTime.toISOString()}`);
+          // console.log(`[MQTT] 📊 Telemetry stored for ${deviceId} @ ${roundedTime.toISOString()}`);
         }
       } catch (telemetryErr) {
         console.error('❌ Telemetry history save failed:', telemetryErr);
@@ -232,11 +232,11 @@ function startMqttSubscriber() {
           }
         );
 
-        console.log(
-          '[MQTT DEBUG] Session update', sessionId,
-          'matched=',  sessResult?.matchedCount  ?? sessResult?.n,
-          'modified=', sessResult?.modifiedCount ?? sessResult?.nModified
-        );
+        // console.log(
+        //   '[MQTT DEBUG] Session update', sessionId,
+        //   'matched=',  sessResult?.matchedCount  ?? sessResult?.n,
+        //   'modified=', sessResult?.modifiedCount ?? sessResult?.nModified
+        // );
 
         // ── ETA ESTIMATION ENGINE ────────────────────────────────────────
         // Recalculates estimatedEndTime only when a 5% milestone is crossed,
@@ -284,12 +284,12 @@ function startMqttSubscriber() {
                     }
                   );
 
-                  console.log(
-                    `[ETA] Session ${sessionId} | ` +
-                    `Progress: ${currentPct.toFixed(1)}% | ` +
-                    `Rate: ${(rateKwhPerMs * 3_600_000).toFixed(3)} kWh/h | ` +
-                    `ETA: ${safeETA.toISOString()}`
-                  );
+                  // console.log(
+                  //   `[ETA] Session ${sessionId} | ` +
+                  //   `Progress: ${currentPct.toFixed(1)}% | ` +
+                  //   `Rate: ${(rateKwhPerMs * 3_600_000).toFixed(3)} kWh/h | ` +
+                  //   `ETA: ${safeETA.toISOString()}`
+                  // );
                 }
               }
             }
@@ -344,9 +344,9 @@ if (relayOn && !sessionId) {
   const count  = prev + 1;
   availableNoSessionTicks.set(devKey, count);
 
-  console.log(
-    `[MQTT GRACE] Device ${devKey} Available+noSession tick ${count}/${AUTO_END_CONSECUTIVE_TICKS_REQUIRED}`
-  );
+  // console.log(
+  //   `[MQTT GRACE] Device ${devKey} Available+noSession tick ${count}/${AUTO_END_CONSECUTIVE_TICKS_REQUIRED}`
+  // );
 
   if (count >= AUTO_END_CONSECUTIVE_TICKS_REQUIRED) {
     availableNoSessionTicks.delete(devKey); // reset counter
@@ -357,10 +357,10 @@ if (relayOn && !sessionId) {
     }).lean();
 
     if (orphanSession) {
-      console.log(
-        `[MQTT AUTO-END] ${count} consecutive Available+noSession ticks — ` +
-        `ending orphan session ${orphanSession.sessionId}`
-      );
+      // console.log(
+      //   `[MQTT AUTO-END] ${count} consecutive Available+noSession ticks — ` +
+      //   `ending orphan session ${orphanSession.sessionId}`
+      // );
 
       await completeSessionInternal({
         sessionId:        orphanSession.sessionId,
@@ -468,10 +468,10 @@ async function cleanupOrphanSessions() {
 
       if (!telemetryIsStale) {
         // Session is still getting telemetry — not a true orphan yet
-        console.log(
-          `[CRON ORPHAN] Session ${sess.sessionId}: device=${device.status} ` +
-          `but telemetry is fresh (${lastActivity.toISOString()}) — skipping`
-        );
+        // console.log(
+        //   `[CRON ORPHAN] Session ${sess.sessionId}: device=${device.status} ` +
+        //   `but telemetry is fresh (${lastActivity.toISOString()}) — skipping`
+        // );
         continue;
       }
 
@@ -483,29 +483,29 @@ async function cleanupOrphanSessions() {
           { sessionId: sess.sessionId },
           { $set: { deviceAvailableSince: now } }
         );
-        console.log(
-          `[CRON ORPHAN] Session ${sess.sessionId}: device=${device.status}, ` +
-          `telemetry stale — starting grace period clock`
-        );
+        // console.log(
+        //   `[CRON ORPHAN] Session ${sess.sessionId}: device=${device.status}, ` +
+        //   `telemetry stale — starting grace period clock`
+        // );
         continue; // check again next run (3 min later)
       }
 
       const graceElapsed = sess.deviceAvailableSince < graceCutoff;
 
       if (!graceElapsed) {
-        console.log(
-          `[CRON ORPHAN] Session ${sess.sessionId}: grace period in progress ` +
-          `(since ${sess.deviceAvailableSince.toISOString()}) — not yet`
-        );
+        // console.log(
+        //   `[CRON ORPHAN] Session ${sess.sessionId}: grace period in progress ` +
+        //   `(since ${sess.deviceAvailableSince.toISOString()}) — not yet`
+        // );
         continue;
       }
 
       // ── All conditions met — safe to kill ────────────────────────────────
-      console.log(
-        `[CRON ORPHAN] ✅ Session ${sess.sessionId} qualifies for cleanup:\n` +
-        `  device=${device.status}, stale telemetry since ${lastActivity.toISOString()},\n` +
-        `  deviceAvailableSince=${sess.deviceAvailableSince.toISOString()}`
-      );
+      // console.log(
+      //   `[CRON ORPHAN] ✅ Session ${sess.sessionId} qualifies for cleanup:\n` +
+      //   `  device=${device.status}, stale telemetry since ${lastActivity.toISOString()},\n` +
+      //   `  deviceAvailableSince=${sess.deviceAvailableSince.toISOString()}`
+      // );
 
       try {
         await completeSessionInternal({
@@ -527,7 +527,7 @@ async function cleanupOrphanSessions() {
 
 // Start cron after 30s delay so DB connection is fully ready on boot
 setTimeout(() => {
-  console.log('[CRON ORPHAN] Orphan session cleanup cron started (every 3 minutes)');
+  // console.log('[CRON ORPHAN] Orphan session cleanup cron started (every 3 minutes)');
   cleanupOrphanSessions();
   setInterval(cleanupOrphanSessions, ORPHAN_CHECK_INTERVAL_MS);
 }, 30_000);

@@ -26,9 +26,9 @@ async function run() {
     process.exit(1);
   }
 
-  console.log("🔌  Connecting to MongoDB…");
+  // console.log("🔌  Connecting to MongoDB…");
   await mongoose.connect(MONGO_URI);
-  console.log("✅  Connected.\n");
+  // console.log("✅  Connected.\n");
 
   // Find all receipts with missing/empty userName
   const receipts = await Receipt.find({
@@ -41,10 +41,10 @@ async function run() {
     .select("_id receiptId userId deviceId userName deviceCity deviceState placeOfSupply")
     .lean();
 
-  console.log(`📋  Found ${receipts.length} receipt(s) needing backfill.\n`);
+  // console.log(`📋  Found ${receipts.length} receipt(s) needing backfill.\n`);
 
   if (receipts.length === 0) {
-    console.log("🎉  Nothing to do — all receipts already have userName.");
+    // console.log("🎉  Nothing to do — all receipts already have userName.");
     await mongoose.disconnect();
     return;
   }
@@ -90,7 +90,7 @@ async function run() {
 
     try {
       await Receipt.updateOne({ _id: r._id }, { $set: setFields });
-      console.log(`  ✅  ${r.receiptId}  →  userName: "${user.name}"`);
+      // console.log(`  ✅  ${r.receiptId}  →  userName: "${user.name}"`);
       updated++;
     } catch (err) {
       console.error(`  ❌  ${r.receiptId}  update failed:`, err.message);
@@ -98,15 +98,15 @@ async function run() {
     }
   }
 
-  console.log(`
-────────────────────────────────────
-  ✅  Updated : ${updated}
-  ⚠️   Skipped : ${skipped}  (no matching user)
-  ❌  Errors  : ${errors}
-────────────────────────────────────`);
+//   console.log(`
+// ────────────────────────────────────
+//   ✅  Updated : ${updated}
+//   ⚠️   Skipped : ${skipped}  (no matching user)
+//   ❌  Errors  : ${errors}
+// ────────────────────────────────────`);
 
   await mongoose.disconnect();
-  console.log("🔌  Disconnected. Done.");
+  // console.log("🔌  Disconnected. Done.");
 }
 
 run().catch(err => {

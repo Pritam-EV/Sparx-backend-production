@@ -2,9 +2,9 @@ const jwt = require("jsonwebtoken");
 
 const authMiddleware = (req, res, next) => {
     const authHeader = req.headers.authorization;
-    console.log("🔑 Received Authorization Header:", authHeader);
-    console.log('Incoming Authorization header:', req.headers.authorization);
-    console.log("AUTH HEADER:", req.headers.authorization);
+    // console.log("🔑 Received Authorization Header:", authHeader);
+    // console.log('Incoming Authorization header:', req.headers.authorization);
+    // console.log("AUTH HEADER:", req.headers.authorization);
 
     if (!authHeader) {
         console.error("⚠️ No Authorization header found");
@@ -12,7 +12,7 @@ const authMiddleware = (req, res, next) => {
     }
 
     const token = authHeader.split(" ")[1]; // Ensure correct extraction
-    console.log("📌 Extracted Token:", token);
+    // console.log("📌 Extracted Token:", token);
 
     jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
         if (err) {
@@ -30,7 +30,7 @@ const authMiddleware = (req, res, next) => {
             return res.status(403).json({ error: "Invalid token: userId not found" });
         }
 
-        console.log("✅ Token Verified! Decoded Data:", decoded);
+        // console.log("✅ Token Verified! Decoded Data:", decoded);
         req.user = { userId: decoded.userId, role: decoded.role }; // ✅ Explicitly set `userId`
         
         next();

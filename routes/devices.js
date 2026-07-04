@@ -270,14 +270,14 @@ router.get(
 router.get('/:deviceId', authMiddleware, authorizeRoles('admin', 'owner', 'customer'), async (req, res) => {
   try {
     const { deviceId } = req.params;
-    console.log("🔐 Authenticated User ID:", req.user.userId);
+    // console.log("🔐 Authenticated User ID:", req.user.userId);
     const device = await Device.findOne({ device_id: deviceId });
 
         if (!device) {
       console.warn("❌ Device not found:", req.params.id);
       return res.status(404).json({ error: "Device not found" });
         }
-      console.log("📦 Device Owner ID:", device.ownerId);
+      // console.log("📦 Device Owner ID:", device.ownerId);
 
       if (device.ownerId && device.ownerId.toString() !== req.user.userId) {
         console.warn("🚫 Forbidden: User does not own the device");

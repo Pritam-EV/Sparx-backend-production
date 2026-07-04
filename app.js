@@ -119,13 +119,13 @@ app.use("/api/accountant", accountantRoutes);
 
 // ─── OFFLINE SWEEP ────────────────────────────────────────────────────────────
 setInterval(async () => {
-  console.log("🔍 Running offline sweep…");
+  // console.log("🔍 Running offline sweep…");
   const cutoff = new Date(Date.now() - OFFLINE_THRESHOLD_MS);
   const result = await Device.updateMany(
     { lastSeen: { $lt: cutoff }, status: { $ne: "Offline" } },
     { status: "Offline" }
   );
-  console.log(`🛑 Offline sweep modified ${result.modifiedCount} devices`);
+  // console.log(`🛑 Offline sweep modified ${result.modifiedCount} devices`);
 }, 10 * 1000);
 
 // Start MQTT subscriber
