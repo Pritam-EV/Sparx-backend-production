@@ -4,20 +4,20 @@
 //
 //  [ADMIN]
 //  POST   /api/eb/admin/upload                    Create / update EB for project+month
-//  GET    /api/eb/admin/list                       List all EB records (paginated)
-//  GET    /api/eb/admin/pending-count              Count of payment_submitted records (badge)
-//  GET    /api/eb/admin/:id                        Single EB detail
-//  PATCH  /api/eb/admin/:id/verify-payment         Confirm owner payment received
-//  PATCH  /api/eb/admin/:id/mark-eb-paid           Mark EB as paid to MSEB
-//  PATCH  /api/eb/admin/:id/void                   Void an incorrect EB record
+//  GET    /api/eb/admin/list                      List all EB records (paginated)
+//  GET    /api/eb/admin/pending-count             Count of payment_submitted records (badge)
+//  GET    /api/eb/admin/:id                       Single EB detail
+//  PATCH  /api/eb/admin/:id/verify-payment        Confirm owner payment received
+//  PATCH  /api/eb/admin/:id/mark-eb-paid          Mark EB as paid to MSEB
+//  PATCH  /api/eb/admin/:id/void                  Void an incorrect EB record
 //
 //  [OWNER]
-//  GET    /api/eb/owner/projects                   List VJRA projects the owner has devices in
-//  GET    /api/eb/owner/:project/:month            Get EB + payment state for owner view
-//  POST   /api/eb/owner/:id/record-payment         Owner submits txnId + amount
+//  GET    /api/eb/owner/projects                  List VJRA projects the owner has devices in
+//  GET    /api/eb/owner/:project/:month           Get EB + payment state for owner view
+//  POST   /api/eb/owner/:id/record-payment        Owner submits txnId + amount
 //
 //  [BOTH]
-//  GET    /api/eb/:id/download-pdf                 Get 1-hour signed Firebase URL for EB PDF
+//  GET    /api/eb/:id/download-pdf                Get 1-hour signed Firebase URL for EB PDF
 // ─────────────────────────────────────────────────────────────────────────────
 const express        = require('express');
 const router         = express.Router();
@@ -27,7 +27,7 @@ const authorizeRoles = require('../middleware/roleMiddleware');
 const { parseAndUploadEB } = require('../middleware/uploadEB');
 const { getSignedUrl, deleteStorageFile } = require('../firebaseAdmin');
 const ElectricityBill = require('../models/ElectricityBill');
-const Device          = require('../models/device');
+const Device         = require('../models/device');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -35,17 +35,23 @@ const Device          = require('../models/device');
 const parseCharges = (body) => {
   const num = (v) => (v !== undefined && v !== '' ? Number(v) : 0);
   return {
-    energyCharges:         { amount: num(body.energyCharges),         remarks: body.energyChargesRemarks         || '' },
-    wheelingCharges:       { amount: num(body.wheelingCharges),       remarks: body.wheelingChargesRemarks       || '' },
-    demandCharges:         { amount: num(body.demandCharges),         remarks: body.demandChargesRemarks         || '' },
-    fac:                   { amount: num(body.fac),                   remarks: body.facRemarks                   || '' },
-    fixedCharges:          { amount: num(body.fixedCharges),          remarks: body.fixedChargesRemarks          || '' },
-    electricityDuty:       { amount: num(body.electricityDuty),       remarks: body.electricityDutyRemarks       || '' },
-    meterRent:             { amount: num(body.meterRent),             remarks: body.meterRentRemarks             || '' },
-    powerFactorAdjustment: { amount: num(body.powerFactorAdjustment), remarks: body.powerFactorAdjustmentRemarks || '' },
-    delayedPaymentCharges: { amount: num(body.delayedPaymentCharges), remarks: body.delayedPaymentChargesRemarks || '' },
-    regulatoryCharges:     { amount: num(body.regulatoryCharges),     remarks: body.regulatoryChargesRemarks     || '' },
-    otherCharges: { amount: 0, remarks: '' },  // legacy field, kept for schema compat
+    energyCharges:           { amount: num(body.energyCharges),           remarks: body.energyChargesRemarks           || '' },
+    todTariffEc:             { amount: num(body.todTariffEc),             remarks: body.todTariffEcRemarks             || '' },
+    wheelingCharges:         { amount: num(body.wheelingCharges),         remarks: body.wheelingChargesRemarks         || '' },
+    demandCharges:           { amount: num(body.demandCharges),           remarks: body.demandChargesRemarks           || '' },
+    fac:                     { amount: num(body.fac),                     remarks: body.facRemarks                     || '' },
+    fixedCharges:            { amount: num(body.fixedCharges),            remarks: body.fixedChargesRemarks            || '' },
+    electricityDuty:         { amount: num(body.electricityDuty),         remarks: body.electricityDutyRemarks         || '' },
+    taxOnSale:               { amount: num(body.taxOnSale),               remarks: body.taxOnSaleRemarks               || '' },
+    chargesForExcessDemand:  { amount: num(body.chargesForExcessDemand),  remarks: body.chargesForExcessDemandRemarks  || '' },
+    pfPenalCharges:          { amount: num(body.pfPenalCharges),          remarks: body.pfPenalChargesRemarks          || '' },
+    debitBillAdjustment:     { amount: num(body.debitBillAdjustment),     remarks: body.debitBillAdjustmentRemarks     || '' },
+    roundingOffCharges:      { amount: num(body.roundingOffCharges),      remarks: body.roundingOffChargesRemarks      || '' },
+    meterRent:               { amount: num(body.meterRent),               remarks: body.meterRentRemarks               || '' },
+    powerFactorAdjustment:   { amount: num(body.powerFactorAdjustment),   remarks: body.powerFactorAdjustmentRemarks   || '' },
+    delayedPaymentCharges:   { amount: num(body.delayedPaymentCharges),   remarks: body.delayedPaymentChargesRemarks   || '' },
+    regulatoryCharges:       { amount: num(body.regulatoryCharges),       remarks: body.regulatoryChargesRemarks       || '' },
+    otherCharges:            { amount: 0, remarks: '' },  // legacy field, kept for schema compat
   };
 };
 
@@ -55,11 +61,9 @@ const isValidMonth = (m) => /^\d{4}-(0[1-9]|1[0-2])$/.test(m);
 // ============================================================
 //  ADMIN ROUTES
 // ============================================================
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  GET /api/eb/admin/projects
-//  Returns distinct projects that have at least one device with
-//  commercial.electricityBearer === "VJRA". Used to populate the project
-//  dropdown in the admin EB upload form.
 // ─────────────────────────────────────────────────────────────────────────────
 router.get(
   '/admin/projects',
@@ -111,6 +115,7 @@ router.get(
     }
   }
 );
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  POST /api/eb/admin/upload
 //  Create a new EB or update an existing one for the same project+month.
@@ -135,43 +140,56 @@ router.post(
       const charges = parseCharges(req.body);
 
       // Parse the dynamic otherCharges array from frontend
-let extraCharges = [];
-try {
-  const raw = body.otherCharges;  // could be a JSON string or undefined
-  if (raw) {
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    if (Array.isArray(parsed)) {
-      extraCharges = parsed
-        .filter(o => o.label && o.label.trim() && o.amount !== '')
-        .map(o => ({ label: o.label.trim(), amount: Number(o.amount) || 0 }));
-    }
-  }
-} catch (e) {
-  extraCharges = [];
-}
-// Manually compute totals (pre-save hook won't run on findOneAndUpdate)
-const amt = (line) => (line?.amount || 0);
-const totalOwnerPayable = Number((
-  amt(charges.wheelingCharges) +
-  amt(charges.demandCharges) +
-  amt(charges.fac) +
-  amt(charges.fixedCharges) +
-  amt(charges.electricityDuty) +
-  amt(charges.meterRent) +
-  amt(charges.powerFactorAdjustment) +
-  amt(charges.delayedPaymentCharges) +
-  amt(charges.regulatoryCharges) +
-  amt(charges.otherCharges)
-).toFixed(2));
+      let extraCharges = [];
+      try {
+        const raw = req.body.otherCharges;  // could be a JSON string or undefined
+        if (raw) {
+          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          if (Array.isArray(parsed)) {
+            extraCharges = parsed
+              .filter(o => o.label && o.label.trim() && o.amount !== '')
+              .map(o => ({ label: o.label.trim(), amount: Number(o.amount) || 0 }));
+          }
+        }
+      } catch (e) {
+        extraCharges = [];
+      }
 
-const totalEBAmount = Number((totalOwnerPayable + amt(charges.energyCharges)).toFixed(2));
-const update = {
-  charges,
-  extraCharges,
-  totalOwnerPayable,
-  totalEBAmount,       // ← now actually saved
-  lastUpdatedBy: req.user.userId
-};
+      // Manually compute totals (pre-save hook won't run on findOneAndUpdate)
+      const amt = (line) => (line?.amount || 0);
+
+      // Owner-bearing includes TOD Tariff EC
+      const totalOwnerPayable = Number((
+        amt(charges.todTariffEc) +
+        amt(charges.wheelingCharges) +
+        amt(charges.demandCharges) +
+        amt(charges.fac) +
+        amt(charges.fixedCharges) +
+        amt(charges.electricityDuty) +
+        amt(charges.taxOnSale) +
+        amt(charges.chargesForExcessDemand) +
+        amt(charges.pfPenalCharges) +
+        amt(charges.debitBillAdjustment) +
+        amt(charges.roundingOffCharges) +
+        amt(charges.meterRent) +
+        amt(charges.powerFactorAdjustment) +
+        amt(charges.delayedPaymentCharges) +
+        amt(charges.regulatoryCharges) +
+        amt(charges.otherCharges)
+      ).toFixed(2));
+
+      // Only energyCharges is VJRA-bearing
+      const totalEBAmount = Number(
+        (totalOwnerPayable + amt(charges.energyCharges)).toFixed(2)
+      );
+
+      const update = {
+        charges,
+        extraCharges,
+        totalOwnerPayable,
+        totalEBAmount,
+        lastUpdatedBy: req.user.userId
+      };
 
       // Attach PDF path only if a file was uploaded
       if (req.ebUpload) {
@@ -251,18 +269,24 @@ router.get(
                   project: 1, month: 1, status: 1,
                   totalEBAmount: 1, totalOwnerPayable: 1,
                   ebPdfPath: 1,
-                  'charges.energyCharges.amount':         1,
-                  'charges.wheelingCharges.amount':       1,
-                  'charges.demandCharges.amount':         1,
-                  'charges.fac.amount':                   1,
-                  'charges.fixedCharges.amount':          1,
-                  'charges.electricityDuty.amount':       1,
-                  'charges.meterRent.amount':             1,
-                  'charges.powerFactorAdjustment.amount': 1,
-                  'charges.delayedPaymentCharges.amount': 1,
-                  'charges.regulatoryCharges.amount':     1,
-                  'charges.otherCharges.amount':          1,
-                  'extraCharges':                          1,
+                  'charges.energyCharges.amount':           1,
+                  'charges.todTariffEc.amount':             1,
+                  'charges.wheelingCharges.amount':         1,
+                  'charges.demandCharges.amount':           1,
+                  'charges.fac.amount':                     1,
+                  'charges.fixedCharges.amount':            1,
+                  'charges.electricityDuty.amount':         1,
+                  'charges.taxOnSale.amount':               1,
+                  'charges.chargesForExcessDemand.amount':  1,
+                  'charges.pfPenalCharges.amount':          1,
+                  'charges.debitBillAdjustment.amount':     1,
+                  'charges.roundingOffCharges.amount':      1,
+                  'charges.meterRent.amount':               1,
+                  'charges.powerFactorAdjustment.amount':   1,
+                  'charges.delayedPaymentCharges.amount':   1,
+                  'charges.regulatoryCharges.amount':       1,
+                  'charges.otherCharges.amount':            1,
+                  'extraCharges':                           1,
                   'ownerPayment.txnId': 1,
                   'ownerPayment.amountPaid': 1,
                   'ownerPayment.submittedAt': 1,
@@ -302,7 +326,6 @@ router.get(
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GET /api/eb/admin/pending-count
-//  Returns count of payment_submitted records — used for admin sidebar badge.
 // ─────────────────────────────────────────────────────────────────────────────
 router.get(
   '/admin/pending-count',
@@ -324,7 +347,6 @@ router.get(
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GET /api/eb/admin/:id
-//  Full detail of a single EB record.
 // ─────────────────────────────────────────────────────────────────────────────
 router.get(
   '/admin/:id',
@@ -367,8 +389,6 @@ router.get(
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  PATCH /api/eb/admin/:id/verify-payment
-//  Admin confirms that the owner’s bank transfer has been received.
-//  Transitions: payment_submitted → payment_verified
 // ─────────────────────────────────────────────────────────────────────────────
 router.patch(
   '/admin/:id/verify-payment',
@@ -393,17 +413,17 @@ router.patch(
         });
       }
 
-      eb.status                        = 'payment_verified';
-      eb.ownerPayment.verifiedAt       = new Date();
-      eb.ownerPayment.verifiedBy       = req.user.userId;
-      eb.lastUpdatedBy                 = req.user.userId;
+      eb.status                    = 'payment_verified';
+      eb.ownerPayment.verifiedAt   = new Date();
+      eb.ownerPayment.verifiedBy   = req.user.userId;
+      eb.lastUpdatedBy             = req.user.userId;
 
       await eb.save();
 
       return res.json({
-  message: 'Payment verified successfully.',
-  eb
-});
+        message: 'Payment verified successfully.',
+        eb
+      });
     } catch (err) {
       console.error('[EB verify-payment]', err);
       return res.status(500).json({ error: 'Server error.' });
@@ -413,9 +433,6 @@ router.patch(
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  PATCH /api/eb/admin/:id/mark-eb-paid
-//  Admin marks that VJRA has paid the EB to MSEB. Final state.
-//  Transitions: payment_verified → eb_paid_to_mseb
-//  (Admin CAN also do this from payment_submitted if owner paid outside the system)
 // ─────────────────────────────────────────────────────────────────────────────
 router.patch(
   '/admin/:id/mark-eb-paid',
@@ -440,9 +457,9 @@ router.patch(
         });
       }
 
-      eb.status        = 'eb_paid_to_mseb';
-      eb.msebPaidAt    = new Date();
-      eb.msebPaidBy    = req.user.userId;
+      eb.status       = 'eb_paid_to_mseb';
+      eb.msebPaidAt   = new Date();
+      eb.msebPaidBy   = req.user.userId;
       eb.lastUpdatedBy = req.user.userId;
 
       await eb.save();
@@ -457,8 +474,6 @@ router.patch(
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  PATCH /api/eb/admin/:id/void
-//  Soft-delete: admin voids an incorrectly created EB.
-//  Voided records are hidden from all list views but preserved for audit.
 // ─────────────────────────────────────────────────────────────────────────────
 router.patch(
   '/admin/:id/void',
@@ -495,6 +510,7 @@ router.patch(
     }
   }
 );
+
 
 // ============================================================
 //  OWNER ROUTES
