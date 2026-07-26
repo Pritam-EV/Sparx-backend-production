@@ -32,6 +32,8 @@ const startMqttSubscriber = require("./mqttSubscriber");
 
 const app = express();
 
+const cashfreeRouter = require("./routes/cashfree");
+
 const accountantRoutes = require("./routes/accountant");
 
 const OFFLINE_THRESHOLD_MS = 30 * 1000;
@@ -40,6 +42,18 @@ const allowedOrigins = [process.env.CLIENT_URL, 'http://localhost:3000'];
 if (!process.env.JWT_SECRET) {
   console.error('FATAL: JWT_SECRET is not defined. Set JWT_SECRET in environment variables and restart the server.');
 }
+
+// ── IMPORTANT: Mount webhook route BEFORE express.json() middleware ──
+// Raw body is required for HMAC signature verification
+app.use(
+  "/api/cashfree/webhook",
+  express.raw({ type: "application/json" }),
+  (req, res, next) => {
+    // Attach raw body string for signature verification
+    req.rawBody = req.body.toString("utf8");
+    next();
+  }
+);
 
 // ─── MIDDLEWARE ────────────────────────────────────────────────────────────────
 // ✅ CORRECT — single express.json() with rawBody capture
