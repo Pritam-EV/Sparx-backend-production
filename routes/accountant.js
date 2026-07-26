@@ -172,6 +172,139 @@ router.get("/summary", caMiddleware, async (req, res) => {
   }
 });
 
+
+// ─── ROUTE 1b: Financial Summary (period-aware, for Overview KPI cards) ────────
+// GET /api/accountant/financial-summary?period=month  (or fy, quarter_fy, today, custom)
+// Returns combined Receipt + WalletTransaction aggregates for the period.
+router.get("/financial-summary", caMiddleware, async (req, res) => {
+  try {
+    const { from, to, label } = buildDateRange(req.query);
+    const registeredState = (process.env.REGISTERED_STATE || "Maharashtra").toLowerCase().trim();
+
+    const [receiptAgg, walletAgg, liveBalanceAgg, liveSessionAgg] = await Promise.all([
+
+      // Receipt aggregates: gross billing, GST, PG charges, owner payable, platform margin, refunds, discounts
+      Receipt.aggregate([
+        { $match: { createdAt: { $gte: from, $lte: to } } },
+        {
+          $addFields: {
+            _pos: { $toLower: { $trim: { input: { $ifNull: ["$placeOfSupply", { $ifNull: ["$deviceState", ""] }] } } } }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            // Gross billing
+            grossBilling:    { $sum: "$totalAmount" },
+            taxableAmount:   { $sum: "$taxableAmount" },
+            totalGst:        { $sum: "$gstAmount" },
+            // GST split
+            totalCgst: { $sum: { $cond: [{ $eq: ["$_pos", registeredState] }, { $divide: [{ $ifNull: ["$gstAmount", 0] }, 2] }, 0] } },
+            totalSgst: { $sum: { $cond: [{ $eq: ["$_pos", registeredState] }, { $divide: [{ $ifNull: ["$gstAmount", 0] }, 2] }, 0] } },
+            totalIgst: { $sum: { $cond: [{ $ne: ["$_pos", registeredState] }, { $ifNull: ["$gstAmount", 0] }, 0] } },
+            // Income & deductions
+            platformIncome:  { $sum: { $ifNull: ["$vjraMarginAmount", 0] } },
+            pgCharges:       { $sum: { $ifNull: ["$paymentCharges",   0] } },
+            ownerPayable:    { $sum: { $ifNull: ["$ownerPayout",       0] } },
+            electricityCost: { $sum: { $ifNull: ["$electricityCost",  0] } },
+            discounts:       { $sum: { $ifNull: ["$discountApplied",  0] } },
+            refunds:         { $sum: { $ifNull: ["$refundAmount",      0] } },
+            // Cashfree vs wallet breakdown
+            cashfreeRevenue: { $sum: { $cond: [{ $eq: ["$paymentGateway", "cashfree"] }, "$totalAmount", 0] } },
+            walletRevenue:   { $sum: { $cond: [{ $eq: ["$paymentGateway", "wallet"]   }, "$totalAmount", 0] } },
+            freeRevenue:     { $sum: { $cond: [{ $eq: ["$paymentGateway", "free"]     }, "$totalAmount", 0] } },
+            invoiceCount:    { $sum: 1 },
+            b2bCount:        { $sum: { $cond: [{ $gt: [{ $strLenCP: { $ifNull: ["$userGstin", ""] } }, 0] }, 1, 0] } },
+          }
+        }
+      ]),
+
+      // Wallet aggregates: topups (advances received), debits (advances utilised), wallet refunds
+      WalletTransaction.aggregate([
+        { $match: { createdAt: { $gte: from, $lte: to } } },
+        {
+          $group: {
+            _id: null,
+            walletTopups:      { $sum: { $cond: [{ $eq: ["$type", "topup"]       }, "$amount", 0] } },
+            walletDebits:      { $sum: { $cond: [{ $eq: ["$type", "debit"]       }, "$amount", 0] } },
+            walletRefunds:     { $sum: { $cond: [{ $eq: ["$type", "refund"]      }, "$amount", 0] } },
+            bankRefunds:       { $sum: { $cond: [{ $eq: ["$type", "refund_bank"] }, "$amount", 0] } },
+            adminCredits:      { $sum: { $cond: [{ $eq: ["$type", "admin_credit"]}, "$amount", 0] } },
+            adminDebits:       { $sum: { $cond: [{ $eq: ["$type", "admin_debit"] }, "$amount", 0] } },
+            topupCount:        { $sum: { $cond: [{ $eq: ["$type", "topup"]       }, 1, 0] } },
+            debitCount:        { $sum: { $cond: [{ $eq: ["$type", "debit"]       }, 1, 0] } },
+            refundCount:       { $sum: { $cond: [{ $in: ["$type", ["refund", "refund_bank"]] }, 1, 0] } },
+          }
+        }
+      ]),
+
+      // Live wallet float (always live regardless of period)
+      User.aggregate([
+        { $match: { walletBalance: { $gt: 0 } } },
+        { $group: { _id: null, totalFloat: { $sum: "$walletBalance" }, userCount: { $sum: 1 } } }
+      ]),
+
+      // Live active wallet sessions
+      Session.aggregate([
+        { $match: { status: "active", paymentGateway: "wallet" } },
+        { $group: { _id: null, totalAmountUsed: { $sum: "$amountUsed" }, sessionCount: { $sum: 1 } } }
+      ]),
+    ]);
+
+    const rec = receiptAgg[0] || {};
+    const wal = walletAgg[0]  || {};
+
+    res.json({
+      period: { from, to, label },
+
+      // ── Billing & Tax ────────────────────────────────────────────────────────
+      grossBilling:    r2(rec.grossBilling),
+      taxableAmount:   r2(rec.taxableAmount),
+      totalGst:        r2(rec.totalGst),
+      cgst:            r2(rec.totalCgst),
+      sgst:            r2(rec.totalSgst),
+      igst:            r2(rec.totalIgst),
+      invoiceCount:    rec.invoiceCount || 0,
+      b2bCount:        rec.b2bCount    || 0,
+
+      // ── Income & Deductions ───────────────────────────────────────────────────
+      platformIncome:  r2(rec.platformIncome),
+      pgCharges:       r2(rec.pgCharges),
+      ownerPayable:    r2(rec.ownerPayable),
+      electricityCost: r2(rec.electricityCost),
+      discounts:       r2(rec.discounts),
+      refundsIssued:   r2(rec.refunds),
+
+      // ── Payment mode split ───────────────────────────────────────────────────
+      cashfreeRevenue: r2(rec.cashfreeRevenue),
+      walletRevenue:   r2(rec.walletRevenue),
+      freeRevenue:     r2(rec.freeRevenue),
+
+      // ── Wallet Ledger (period) ────────────────────────────────────────────────
+      walletTopups:    r2(wal.walletTopups),    // Customer Advances Received
+      walletDebits:    r2(wal.walletDebits),    // Advances Utilised
+      walletRefunds:   r2(wal.walletRefunds),   // Refund to Wallet
+      bankRefunds:     r2(wal.bankRefunds),     // Refund to Bank
+      adminCredits:    r2(wal.adminCredits),
+      adminDebits:     r2(wal.adminDebits),
+      topupCount:      wal.topupCount  || 0,
+      debitCount:      wal.debitCount  || 0,
+      refundCount:     wal.refundCount || 0,
+
+      // ── Live (always real-time) ───────────────────────────────────────────────
+      liveWalletFloat:     r2(liveBalanceAgg[0]?.totalFloat      || 0),
+      liveWalletUsers:     liveBalanceAgg[0]?.userCount           || 0,
+      liveSessionAmount:   r2(liveSessionAgg[0]?.totalAmountUsed || 0),
+      liveActiveSessions:  liveSessionAgg[0]?.sessionCount        || 0,
+    });
+
+  } catch (err) {
+    console.error("CA financial-summary error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
 // ─── ROUTE 2: Invoice Register (Receipts table for CA) ────────────────────────
 // GET /api/accountant/invoices?period=fy&page=1&limit=50&search=
 // ─── ROUTE 2: Invoice Register ─────────────────────────────────────────────
