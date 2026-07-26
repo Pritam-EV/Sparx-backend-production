@@ -693,10 +693,10 @@ router.get("/export", caMiddleware, async (req, res) => {
     hRow.eachCell(cell => Object.assign(cell, s4));
     hRow.height = 20;
 
-    const b2cIntra = receipts.filter(r => !r.userGstin && (r.placeOfSupply||r.deviceState||"").toLowerCase()===registeredState);
-    const b2cInter = receipts.filter(r => !r.userGstin && (r.placeOfSupply||r.deviceState||"").toLowerCase()===registeredState);
-    const b2bIntra = receipts.filter(r =>  r.userGstin && (r.placeOfSupply||r.deviceState||"").toLowerCase()===registeredState);
-    const b2bInter = receipts.filter(r =>  r.userGstin && (r.placeOfSupply||r.deviceState||"").toLowerCase()===registeredState);
+    const b2cIntra = receipts.filter(r => !r.userGstin &&  (r.placeOfSupply||r.deviceState||"").toLowerCase()===registeredState);
+    const b2cInter = receipts.filter(r => !r.userGstin && ((r.placeOfSupply||r.deviceState||"").toLowerCase()!==registeredState));
+    const b2bIntra = receipts.filter(r =>  r.userGstin &&  (r.placeOfSupply||r.deviceState||"").toLowerCase()===registeredState);
+    const b2bInter = receipts.filter(r =>  r.userGstin && ((r.placeOfSupply||r.deviceState||"").toLowerCase()!==registeredState));
     const sT  = arr => r2(arr.reduce((s,r)=>s+(r.taxableAmount||0),0));
     const sG  = arr => r2(arr.reduce((s,r)=>s+(r.gstAmount||0),0));
 
@@ -726,6 +726,122 @@ router.get("/export", caMiddleware, async (req, res) => {
     ws4.columns = [
       {width:34},{width:16},{width:14},{width:14},{width:14},{width:16},{width:18}
     ];
+
+        // ── Sheet 5: Owner Settlement ──────────────────────────────────────────────
+    const ws5 = wb.addWorksheet("Owner Settlement");
+    ws5.columns = [
+      { header: "Owner Name",       key: "ownerName",      width: 26 },
+      { header: "Mobile",           key: "mobile",         width: 16 },
+      { header: "Email",            key: "email",          width: 28 },
+      { header: "No. of Sessions",  key: "sessions",       width: 14 },
+      { header: "Gross Billing (₹)",key: "gross",          width: 18 },
+      { header: "GST (₹)",          key: "gst",            width: 14 },
+      { header: "PG Charges (₹)",   key: "pg",             width: 14 },
+      { header: "EB Cost (₹)",      key: "eb",             width: 14 },
+      { header: "VJRA Margin (₹)",  key: "vjra",           width: 16 },
+      { header: "Owner Payout (₹)", key: "payout",         width: 16 },
+      { header: "Energy (kWh)",     key: "energy",         width: 14 },
+    ];
+    const s5 = headerStyle("FF4A1942");
+    ws5.getRow(1).eachCell(cell => Object.assign(cell, s5));
+    ws5.getRow(1).height = 22;
+
+    // Group receipts by ownerId
+    const ownerMap = {};
+    receipts.forEach(r => {
+      const key = String(r.ownerId || "unknown");
+      if (!ownerMap[key]) {
+        ownerMap[key] = {
+          ownerName: r.ownerName || "Unknown",
+          mobile: r.ownerMobile || "",
+          email: r.ownerEmail || "",
+          sessions: 0, gross: 0, gst: 0, pg: 0, eb: 0, vjra: 0, payout: 0, energy: 0,
+        };
+      }
+      const o = ownerMap[key];
+      o.sessions++;
+      o.gross  += r.totalAmount    || 0;
+      o.gst    += r.gstAmount      || 0;
+      o.pg     += r.paymentCharges || 0;
+      o.eb     += r.electricityCost|| 0;
+      o.vjra   += r.vjraMarginAmount|| 0;
+      o.payout += r.ownerPayout    || 0;
+      o.energy += r.energyConsumed || 0;
+    });
+
+    Object.values(ownerMap).forEach(o => {
+      ws5.addRow({
+        ownerName: o.ownerName,
+        mobile:    o.mobile,
+        email:     o.email,
+        sessions:  o.sessions,
+        gross:     r2(o.gross),
+        gst:       r2(o.gst),
+        pg:        r2(o.pg),
+        eb:        r2(o.eb),
+        vjra:      r2(o.vjra),
+        payout:    r2(o.payout),
+        energy:    r2(o.energy),
+      });
+    });
+    const ownerTotalRow = ws5.addRow({
+      ownerName: `TOTAL (${Object.keys(ownerMap).length} owners)`,
+      sessions:  receipts.length,
+      gross:     r2(Object.values(ownerMap).reduce((s,o) => s+o.gross,  0)),
+      gst:       r2(Object.values(ownerMap).reduce((s,o) => s+o.gst,   0)),
+      pg:        r2(Object.values(ownerMap).reduce((s,o) => s+o.pg,    0)),
+      eb:        r2(Object.values(ownerMap).reduce((s,o) => s+o.eb,    0)),
+      vjra:      r2(Object.values(ownerMap).reduce((s,o) => s+o.vjra,  0)),
+      payout:    r2(Object.values(ownerMap).reduce((s,o) => s+o.payout,0)),
+      energy:    r2(Object.values(ownerMap).reduce((s,o) => s+o.energy,0)),
+    });
+    ownerTotalRow.font = { bold: true };
+    ownerTotalRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE8D5F5" } };
+
+    // ── Sheet 6: Refunds & Adjustments ────────────────────────────────────────
+    const ws6 = wb.addWorksheet("Refunds");
+    ws6.columns = [
+      { header: "Date",            key: "date",        width: 22 },
+      { header: "Invoice No.",     key: "invoiceNo",   width: 22 },
+      { header: "Customer",        key: "customer",    width: 24 },
+      { header: "Session ID",      key: "sessionId",   width: 28 },
+      { header: "Payment Mode",    key: "mode",        width: 14 },
+      { header: "Invoice Amt (₹)", key: "invoiceAmt",  width: 16 },
+      { header: "Refund Amt (₹)",  key: "refundAmt",   width: 14 },
+      { header: "Refund Mode",     key: "refundMode",  width: 14 },
+      { header: "Refund Status",   key: "status",      width: 16 },
+      { header: "Refund ID",       key: "refundId",    width: 24 },
+      { header: "Processed At",    key: "processedAt", width: 22 },
+    ];
+    const s6 = headerStyle("FF7F1D1D");
+    ws6.getRow(1).eachCell(cell => Object.assign(cell, s6));
+    ws6.getRow(1).height = 22;
+
+    const refundReceipts = receipts.filter(r => (r.refundAmount || 0) > 0);
+    refundReceipts.forEach(r => {
+      ws6.addRow({
+        date:        new Date(r.createdAt).toLocaleString("en-IN"),
+        invoiceNo:   r.receiptId,
+        customer:    r.userName || "",
+        sessionId:   r.sessionId,
+        mode:        (r.paymentGateway || "cashfree").toUpperCase(),
+        invoiceAmt:  r2(r.totalAmount),
+        refundAmt:   r2(r.refundAmount),
+        refundMode:  r.refund?.status === "wallet_refunded" ? "WALLET" : "BANK",
+        status:      r.refund?.status  || "—",
+        refundId:    r.refund?.refundId || "",
+        processedAt: r.refund?.processedAt ? new Date(r.refund.processedAt).toLocaleString("en-IN") : "",
+      });
+    });
+    if (refundReceipts.length > 0) {
+      const refTotalRow = ws6.addRow({
+        date: `TOTAL (${refundReceipts.length} refunds)`,
+        invoiceAmt: r2(refundReceipts.reduce((s,r) => s+(r.totalAmount||0), 0)),
+        refundAmt:  r2(refundReceipts.reduce((s,r) => s+(r.refundAmount||0),0)),
+      });
+      refTotalRow.font = { bold: true };
+      refTotalRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFC7CE" } };
+    }
 
     // Stream
     const filename = `Sparx_CA_${label.replace(/\s+/g,"_")}_${Date.now()}.xlsx`;
@@ -767,6 +883,307 @@ router.post("/create-user", authMiddleware, async (req, res) => {
     res.status(201).json({ message: "Accountant created. Login via OTP.", user: { _id: user._id, name: user.name, mobile: user.mobile } });
   } catch (err) {
     console.error("Create accountant error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ─── ROUTE 7: Owner Settlement Register ────────────────────────────────────────
+// GET /api/accountant/owner-settlement?period=month&page=1&limit=50
+// Returns per-owner aggregated payout summary + individual receipt breakdown.
+router.get("/owner-settlement", caMiddleware, async (req, res) => {
+  try {
+    const { from, to, label } = buildDateRange(req.query);
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit = Math.min(100, parseInt(req.query.limit) || 50);
+    const skip  = (page - 1) * limit;
+
+    // Per-owner aggregate summary
+    const ownerAgg = await Receipt.aggregate([
+      { $match: { createdAt: { $gte: from, $lte: to } } },
+      {
+        $group: {
+          _id: "$ownerId",
+          ownerName:       { $first: "$ownerName" },
+          ownerEmail:      { $first: "$ownerEmail" },
+          ownerMobile:     { $first: "$ownerMobile" },
+          invoiceCount:    { $sum: 1 },
+          grossBilling:    { $sum: "$totalAmount" },
+          taxableAmount:   { $sum: "$taxableAmount" },
+          gstAmount:       { $sum: "$gstAmount" },
+          ownerPayout:     { $sum: "$ownerPayout" },
+          vjraMargin:      { $sum: "$vjraMarginAmount" },
+          pgCharges:       { $sum: "$paymentCharges" },
+          electricityCost: { $sum: "$electricityCost" },
+          energyConsumed:  { $sum: "$energyConsumed" },
+          refundsIssued:   { $sum: "$refundAmount" },
+          discounts:       { $sum: "$discountApplied" },
+        }
+      },
+      { $sort: { ownerPayout: -1 } },
+      { $skip: skip },
+      { $limit: limit },
+    ]);
+
+    const totalOwnersAgg = await Receipt.aggregate([
+      { $match: { createdAt: { $gte: from, $lte: to } } },
+      { $group: { _id: "$ownerId" } },
+      { $count: "total" },
+    ]);
+
+    // Period-level totals (for summary bar)
+    const periodAgg = await Receipt.aggregate([
+      { $match: { createdAt: { $gte: from, $lte: to } } },
+      {
+        $group: {
+          _id: null,
+          totalOwnerPayout:  { $sum: "$ownerPayout" },
+          totalVjraMargin:   { $sum: "$vjraMarginAmount" },
+          totalGrossBilling: { $sum: "$totalAmount" },
+          totalPgCharges:    { $sum: "$paymentCharges" },
+          totalElectricity:  { $sum: "$electricityCost" },
+          totalEnergy:       { $sum: "$energyConsumed" },
+          invoiceCount:      { $sum: 1 },
+        }
+      }
+    ]);
+
+    const totals = periodAgg[0] || {};
+    const total  = totalOwnersAgg[0]?.total || 0;
+
+    res.json({
+      period: { from, to, label },
+      page, limit, total,
+      totalPages: Math.ceil(total / limit),
+      periodTotals: {
+        totalOwnerPayout:  r2(totals.totalOwnerPayout),
+        totalVjraMargin:   r2(totals.totalVjraMargin),
+        totalGrossBilling: r2(totals.totalGrossBilling),
+        totalPgCharges:    r2(totals.totalPgCharges),
+        totalElectricity:  r2(totals.totalElectricity),
+        totalEnergyKwh:    r2(totals.totalEnergy),
+        invoiceCount:      totals.invoiceCount || 0,
+      },
+      data: ownerAgg.map(o => ({
+        ownerId:         o._id,
+        ownerName:       o.ownerName  || "Unknown Owner",
+        ownerEmail:      o.ownerEmail || "—",
+        ownerMobile:     o.ownerMobile || "—",
+        invoiceCount:    o.invoiceCount,
+        grossBilling:    r2(o.grossBilling),
+        taxableAmount:   r2(o.taxableAmount),
+        gstAmount:       r2(o.gstAmount),
+        ownerPayout:     r2(o.ownerPayout),
+        vjraMargin:      r2(o.vjraMargin),
+        pgCharges:       r2(o.pgCharges),
+        electricityCost: r2(o.electricityCost),
+        energyKwh:       r2(o.energyConsumed),
+        refundsIssued:   r2(o.refundsIssued),
+        discounts:       r2(o.discounts),
+        // Net cashflow = grossBilling - pgCharges - ownerPayout = vjraMargin
+        vjraNet:         r2((o.vjraMargin || 0) - (o.pgCharges || 0)),
+      })),
+    });
+
+  } catch (err) {
+    console.error("CA owner-settlement error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+// ─── ROUTE 8: Refunds & Adjustments Register ──────────────────────────────────
+// GET /api/accountant/refunds?period=month&page=1&limit=50
+// Returns all refund entries from both Receipt and WalletTransaction.
+router.get("/refunds", caMiddleware, async (req, res) => {
+  try {
+    const { from, to, label } = buildDateRange(req.query);
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit = Math.min(100, parseInt(req.query.limit) || 50);
+    const skip  = (page - 1) * limit;
+
+    // Get receipts that have any refund (refundAmount > 0)
+    const [receiptRefunds, walletRefunds, totalReceipt, totalWallet] = await Promise.all([
+
+      Receipt.find({
+        createdAt: { $gte: from, $lte: to },
+        refundAmount: { $gt: 0 }
+      })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+
+      WalletTransaction.find({
+        createdAt: { $gte: from, $lte: to },
+        type: { $in: ["refund", "refund_bank"] }
+      })
+        .populate("userId", "name mobile email")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+
+      Receipt.countDocuments({ createdAt: { $gte: from, $lte: to }, refundAmount: { $gt: 0 } }),
+      WalletTransaction.countDocuments({ createdAt: { $gte: from, $lte: to }, type: { $in: ["refund", "refund_bank"] } }),
+    ]);
+
+    // Period totals for refunds
+    const [refundTotalsAgg, walletRefundTotalsAgg] = await Promise.all([
+      Receipt.aggregate([
+        { $match: { createdAt: { $gte: from, $lte: to }, refundAmount: { $gt: 0 } } },
+        { $group: {
+            _id: null,
+            totalRefundAmount: { $sum: "$refundAmount" },
+            count: { $sum: 1 },
+            walletRefunded: { $sum: { $cond: [{ $eq: ["$refund.status", "wallet_refunded"] }, "$refundAmount", 0] } },
+            bankRefunded:   { $sum: { $cond: [{ $eq: ["$refund.status", "processed"]       }, "$refundAmount", 0] } },
+          }
+        }
+      ]),
+      WalletTransaction.aggregate([
+        { $match: { createdAt: { $gte: from, $lte: to }, type: { $in: ["refund", "refund_bank"] } } },
+        { $group: {
+            _id: null,
+            totalWalletRefund: { $sum: { $cond: [{ $eq: ["$type", "refund"]      }, "$amount", 0] } },
+            totalBankRefund:   { $sum: { $cond: [{ $eq: ["$type", "refund_bank"] }, "$amount", 0] } },
+            walletCount: { $sum: { $cond: [{ $eq: ["$type", "refund"]      }, 1, 0] } },
+            bankCount:   { $sum: { $cond: [{ $eq: ["$type", "refund_bank"] }, 1, 0] } },
+          }
+        }
+      ]),
+    ]);
+
+    const rt  = refundTotalsAgg[0]  || {};
+    const wrt = walletRefundTotalsAgg[0] || {};
+
+    res.json({
+      period: { from, to, label },
+      periodTotals: {
+        receiptRefunds:   r2(rt.totalRefundAmount),
+        walletRefunds:    r2(wrt.totalWalletRefund),
+        bankRefunds:      r2(wrt.totalBankRefund),
+        totalRefunds:     r2((rt.totalRefundAmount || 0) + (wrt.totalBankRefund || 0)),
+        receiptCount:     rt.count || 0,
+        walletCount:      wrt.walletCount || 0,
+        bankCount:        wrt.bankCount   || 0,
+      },
+      // Receipt-level refunds (source: Receipt.refundAmount)
+      receiptRefunds: {
+        total: totalReceipt,
+        data: receiptRefunds.map(r => ({
+          source:        "receipt",
+          date:          r.createdAt,
+          invoiceNo:     r.receiptId,
+          customerName:  r.userName   || "—",
+          sessionId:     r.sessionId,
+          refundAmount:  r2(r.refundAmount),
+          refundMode:    r.refund?.status === "wallet_refunded" ? "Wallet" : r.refund?.status === "processed" ? "Bank" : r.refund?.status || "—",
+          refundStatus:  r.refund?.status || "—",
+          refundId:      r.refund?.refundId || "—",
+          processedAt:   r.refund?.processedAt || null,
+          reason:        r.refund?.failureReason || "Session under-utilised",
+          originalAmount: r2(r.totalAmount),
+          paymentMode:   r.paymentGateway,
+        })),
+      },
+      // Wallet-level refunds (source: WalletTransaction type=refund/refund_bank)
+      walletRefunds: {
+        total: totalWallet,
+        data: walletRefunds.map(t => ({
+          source:       "wallet",
+          date:         t.createdAt,
+          type:         t.type,
+          customerName: t.userId?.name   || "—",
+          userMobile:   t.userId?.mobile || "—",
+          amount:       r2(t.amount),
+          balanceBefore: r2(t.balanceBefore),
+          balanceAfter:  r2(t.balanceAfter),
+          sessionId:    t.sessionId  || "—",
+          orderId:      t.orderId    || "—",
+          description:  t.description || "—",
+          initiatedBy:  t.initiatedBy,
+        })),
+      },
+    });
+
+  } catch (err) {
+    console.error("CA refunds error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+// ─── ROUTE 9: Cashfree Reconciliation (PG-side vs our records) ────────────────
+// GET /api/accountant/cashfree-recon?period=month
+// Currently derives expected collections from our Receipt + WalletTransaction data.
+// When Cashfree webhook/settlement model is available, actual_settled will come from DB.
+// This stub is ready to be extended with real Cashfree settlement data.
+router.get("/cashfree-recon", caMiddleware, async (req, res) => {
+  try {
+    const { from, to, label } = buildDateRange(req.query);
+
+    const [receiptAgg, topupAgg] = await Promise.all([
+      // Direct Cashfree receipts (paymentGateway=cashfree)
+      Receipt.aggregate([
+        { $match: { createdAt: { $gte: from, $lte: to }, paymentGateway: "cashfree" } },
+        { $group: {
+            _id: null,
+            totalCollected:   { $sum: "$totalAmount" },
+            totalPgCharges:   { $sum: "$paymentCharges" },
+            totalRefunds:     { $sum: "$refundAmount" },
+            count: { $sum: 1 },
+          }
+        }
+      ]),
+      // Wallet topups (also go through Cashfree)
+      WalletTransaction.aggregate([
+        { $match: { type: "topup", createdAt: { $gte: from, $lte: to } } },
+        { $group: {
+            _id: null,
+            totalTopups: { $sum: "$amount" },
+            count: { $sum: 1 },
+          }
+        }
+      ]),
+    ]);
+
+    const ra = receiptAgg[0] || {};
+    const ta = topupAgg[0]   || {};
+
+    const totalCashfreeCollections = r2((ra.totalCollected || 0) + (ta.totalTopups || 0));
+    const totalPgCharges           = r2(ra.totalPgCharges  || 0);
+    const totalRefundsViaCashfree  = r2(ra.totalRefunds    || 0);
+    const expectedSettlement       = r2(totalCashfreeCollections - totalPgCharges - totalRefundsViaCashfree);
+
+    res.json({
+      period: { from, to, label },
+      // Our records
+      ourRecords: {
+        directSessionCollections: r2(ra.totalCollected || 0),
+        sessionCount:             ra.count || 0,
+        walletTopupCollections:   r2(ta.totalTopups || 0),
+        topupCount:               ta.count || 0,
+        totalCashfreeCollections,
+        pgChargesDeducted:        totalPgCharges,
+        refundsDeducted:          totalRefundsViaCashfree,
+        expectedSettlement,       // what Cashfree should settle to our bank
+      },
+      // Actual Cashfree settlement (to be filled from Cashfree webhook/Settlement model)
+      // When you add a CashfreeSettlement model, replace these with actual DB queries
+      cashfreeActual: {
+        available: false,         // flip to true once Settlement model exists
+        settledAmount: null,
+        settlementBatches: [],
+        note: "Connect Cashfree Settlement API or webhook to populate actual data. Expected vs actual variance will show here.",
+      },
+      variance: {
+        amount: null,             // expectedSettlement - cashfreeActual.settledAmount
+        status: "pending_integration",
+      },
+    });
+
+  } catch (err) {
+    console.error("CA cashfree-recon error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
