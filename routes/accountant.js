@@ -180,9 +180,14 @@ router.get("/financial-summary", caMiddleware, async (req, res) => {
   try {
     const { from, to, label } = buildDateRange(req.query);
     const registeredState = (process.env.REGISTERED_STATE || "Maharashtra").toLowerCase().trim();
-
+    const projectId = req.query.projectId || null; // NEW
+    // Build base match for Receipts
+    const receiptMatch = { createdAt: { $gte: from, $lte: to } };
+    if (projectId) {
+      receiptMatch.projectId = new mongoose.Types.ObjectId(projectId); // NEW
+    }
     const [receiptAgg, walletAgg, liveBalanceAgg, liveSessionAgg] = await Promise.all([
-
+      
       // Receipt aggregates: gross billing, GST, PG charges, owner payable, platform margin, refunds, discounts
       Receipt.aggregate([
         { $match: { createdAt: { $gte: from, $lte: to } } },
@@ -335,6 +340,10 @@ router.get("/invoices", caMiddleware, async (req, res) => {
         { deviceCity: re },
         { placeOfSupply: re },
       ];
+    }
+
+    if (req.query.projectId) {
+      match.projectId = new mongoose.Types.ObjectId(req.query.projectId);
     }
 
     const registeredState = (process.env.REGISTERED_STATE || "Maharashtra").toLowerCase().trim();
@@ -1030,7 +1039,7 @@ router.get("/refunds", caMiddleware, async (req, res) => {
     // Period totals for refunds
     const [refundTotalsAgg, walletRefundTotalsAgg] = await Promise.all([
       Receipt.aggregate([
-        { $match: { createdAt: { $gte: from, $lte: to }, refundAmount: { $gt: 0 } } },
+        { $match: receiptMatch },
         { $group: {
             _id: null,
             totalRefundAmount: { $sum: "$refundAmount" },
@@ -1184,6 +1193,21 @@ router.get("/cashfree-recon", caMiddleware, async (req, res) => {
 
   } catch (err) {
     console.error("CA cashfree-recon error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ─── ROUTE: List projects for CA filter dropdown ────────────────────────────
+router.get("/projects", caMiddleware, async (req, res) => {
+  try {
+    // Project model — adjust import at top of file if needed
+    const Project = require("../models/Project");
+    const projects = await Project.find({}, "_id name location")
+      .sort({ name: 1 })
+      .lean();
+    res.json({ projects });
+  } catch (err) {
+    console.error("CA projects list error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
