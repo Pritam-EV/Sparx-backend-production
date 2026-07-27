@@ -1010,6 +1010,25 @@ router.get("/refunds", caMiddleware, async (req, res) => {
     const limit = Math.min(100, parseInt(req.query.limit) || 50);
     const skip  = (page - 1) * limit;
 
+        const receiptMatch = {
+      createdAt: { $gte: from, $lte: to },
+      refundAmount: { $gt: 0 }
+    };
+
+        const refunds = await Receipt.aggregate([
+      { $match: receiptMatch },
+      { $project: {
+          receiptId: 1, createdAt: 1, userName: 1,
+          refundAmount: 1, totalAmount: 1, paymentGateway: 1,
+          "refund.status": 1, "refund.failureReason": 1,
+          sessionId: 1
+      }},
+      { $sort: { createdAt: -1 } }
+    ]);
+
+    res.json({ data: refunds, period: { from, to, label } });
+    
+
     // Get receipts that have any refund (refundAmount > 0)
     const [receiptRefunds, walletRefunds, totalReceipt, totalWallet] = await Promise.all([
 
@@ -1201,7 +1220,7 @@ router.get("/cashfree-recon", caMiddleware, async (req, res) => {
 router.get("/projects", caMiddleware, async (req, res) => {
   try {
     // Project model — adjust import at top of file if needed
-    const Project = require("../models/Project");
+    const Device = require('../models/device');
     const projects = await Project.find({}, "_id name location")
       .sort({ name: 1 })
       .lean();

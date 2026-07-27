@@ -42,6 +42,8 @@ if (!process.env.JWT_SECRET) {
   console.error('FATAL: JWT_SECRET is not defined. Set JWT_SECRET in environment variables and restart the server.');
 }
 
+app.use('/api/cashfree/webhook', express.raw({ type: 'application/json' }));
+
 // ── IMPORTANT: Mount webhook route BEFORE express.json() middleware ──
 // Raw body is required for HMAC signature verification
 app.use(

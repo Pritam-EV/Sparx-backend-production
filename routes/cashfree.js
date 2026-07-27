@@ -27,6 +27,9 @@ const {
 router.post(
   "/webhook",  caMiddleware, 
   async (req, res) => {
+
+     res.status(200).json({ status: "ok" });
+     
     const rawBody = req.rawBody;
     if (!rawBody) {
       console.warn("[CF Webhook] Empty rawBody — check middleware order in app.js");
