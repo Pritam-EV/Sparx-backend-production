@@ -4,7 +4,7 @@
 const crypto = require("crypto");
 const axios  = require("axios");
 
-const CF_BASE = process.env.CASHFREE_ENV === "production"
+const CF_BASE = process.env.CASHFREE_ENV === "PROD"
   ? "https://api.cashfree.com/pg"
   : "https://sandbox.cashfree.com/pg";
 
