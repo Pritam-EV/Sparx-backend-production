@@ -67,26 +67,23 @@ async function fetchOrderDetails(orderId) {
 // from, to: "YYYY-MM-DD"
 async function fetchSettlements(from, to) {
   try {
-    const { data } = await axios.post(
-      `${CF_BASE}/settlements/recon`,
+    const { data } = await axios.get(
+      `${CF_BASE}/settlements`,
       {
-        pagination: {
-          limit:  200,
-          cursor: null,
-        },
-        filters: {
-          start_date: from,   // "YYYY-MM-DD"
+        headers: CF_HEADERS,  // keeps 2023-08-01 — this endpoint supports it
+        params: {
+          start_date: from,  // YYYY-MM-DD
           end_date:   to,
+          limit:      200,
         },
-      },
-      { headers: CF_HEADERS }
+      }
     );
 
-    // Response shape: { data: { cursor, limit, results: [...] } }
+    // Response shape: { data: [...], cursor: "..." }
     return {
       success:     true,
-      settlements: data?.data?.results || [],
-      cursor:      data?.data?.cursor  || null,
+      settlements: data?.data || [],
+      cursor:      data?.cursor || null,
     };
   } catch (e) {
     return {
