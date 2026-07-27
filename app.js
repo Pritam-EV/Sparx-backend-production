@@ -3,7 +3,6 @@
 const express   = require("express");
 const mongoose  = require("mongoose");
 const cors      = require("cors");
-const dotenv    = require("dotenv");
 const crypto = require('crypto');
 const couponsRouter = require('./routes/coupons');
 const Device = require('./models/device');
@@ -89,6 +88,8 @@ app.options("*", cors({
 app.use(express.static("public"));
 app.use('/api/coupons', couponsRouter);
 app.use('/api/partner', partnerRoutes);
+
+app.use("/api/cashfree", cashfreeRouter);
 
 // ─── DATABASE ─────────────────────────────────────────────────────────────────
 mongoose

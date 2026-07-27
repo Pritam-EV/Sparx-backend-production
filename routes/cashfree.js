@@ -6,8 +6,9 @@ const router  = express.Router();
 const Payment          = require("../models/Payment");
 const WalletTransaction = require("../models/WalletTransaction");
 const Receipt          = require("../models/Receipt");
-const Session          = require("../models/Session");
+const Session          = require("../models/session");
 const User             = require("../models/User");
+const caMiddleware   = require("../middleware/caMiddleware");
 const {
   verifyCashfreeWebhook,
   fetchPaymentStatus,
@@ -24,10 +25,13 @@ const {
 // Cashfree sends events: PAYMENT_SUCCESS, PAYMENT_FAILED,
 //   PAYMENT_USER_DROPPED, REFUND_STATUS_WEBHOOK
 router.post(
-  "/webhook",
-  express.raw({ type: "application/json" }), // raw body for signature
+  "/webhook",  caMiddleware, 
   async (req, res) => {
-    const rawBody  = req.body.toString("utf8");
+    const rawBody = req.rawBody;
+    if (!rawBody) {
+      console.warn("[CF Webhook] Empty rawBody — check middleware order in app.js");
+      return res.status(400).json({ error: "Empty body" });
+    }
     const signature = req.headers["x-webhook-signature"];
     const timestamp = req.headers["x-webhook-timestamp"];
 
@@ -60,7 +64,9 @@ router.post(
         case "PAYMENT_SUCCESS": {
           const orderId   = data?.order?.order_id;
           const paymentId = data?.payment?.cf_payment_id?.toString();
-          const amount    = data?.payment?.payment_amount;
+          const amount = parseFloat(data?.payment?.payment_amount) || 0;
+          // then when using it:
+          const amountPaise = Math.round(amount * 100) / 100; // round to 2dp
           const method    = data?.payment?.payment_method;
           const bankRef   = data?.payment?.bank_reference;
 
@@ -101,6 +107,8 @@ router.post(
               console.log(`[CF Webhook] Duplicate topup event for order ${orderId} — skipped`);
               break;
             }
+
+
 
             const balanceBefore = user.walletBalance || 0;
             const balanceAfter  = balanceBefore + amount;
@@ -187,6 +195,16 @@ router.post(
 
           // If refund to wallet: credit the wallet
           if (status === "SUCCESS" && receipt?.refund?.mode === "wallet") {
+
+            const existingRefundTx = await WalletTransaction.findOne({
+              orderId,
+              type: "refund",
+            });
+            if (existingRefundTx) {
+              console.log(`[CF Webhook] Duplicate refund event for order ${orderId} — skipped`);
+              break;
+            }
+
             const user = await User.findById(receipt.userId);
             if (user) {
               const balBefore = user.walletBalance || 0;
@@ -200,7 +218,7 @@ router.post(
                 balanceBefore: balBefore,
                 balanceAfter:  balBefore + refundAmt,
                 orderId,
-                description:  `Refund from session ${receipt.sessionId} — CF Refund ${refundId}`,
+                description: `Refund from session ${receipt.sessionId || receipt.session || "?"} — CF Refund ${refundId}`,
                 initiatedBy:  "cashfree_webhook",
               });
               console.log(`[CF Webhook] Wallet refund ₹${refundAmt} for user ${receipt.userId}`);
@@ -224,7 +242,7 @@ router.post(
 // ─── MANUAL VERIFY: fetch live status from Cashfree API ─────────────────────
 // GET /api/cashfree/verify/:orderId
 // Used by CA dashboard "Verify with Cashfree" button
-router.get("/verify/:orderId", async (req, res) => {
+router.get("/verify/:orderId",  caMiddleware,  async (req, res) => {
   // Basic auth check — reuse your admin/CA middleware
   const { orderId } = req.params;
   const [cfResult, dbPayment] = await Promise.all([
@@ -268,7 +286,7 @@ router.get("/verify/:orderId", async (req, res) => {
 
 // ─── SETTLEMENTS: fetch from Cashfree + compare with DB ─────────────────────
 // GET /api/cashfree/settlements?from=2026-07-01&to=2026-07-31
-router.get("/settlements", async (req, res) => {
+router.get("/settlements",  caMiddleware, async (req, res) => {
   const { from, to } = req.query;
   if (!from || !to) return res.status(400).json({ error: "from and to dates required" });
 
@@ -292,8 +310,8 @@ router.get("/settlements", async (req, res) => {
       }
     }
   ]);
-
-  const cfTotal = cfResult.settlements.reduce((s, item) => s + (item.settlement_amount || 0), 0);
+  const settlements = cfResult.settlements || [];
+  const cfTotal = settlements.reduce((s, item) => s + (item.settlement_amount || 0), 0);
   const dbNet   = (dbReceipts?.totalBilled || 0)
                 - (dbReceipts?.totalPgCharges || 0)
                 - (dbReceipts?.totalRefunds || 0);
