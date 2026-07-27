@@ -11,8 +11,18 @@ const Receipt  = require("../models/Receipt");
 const Session  = require("../models/session");
 const User     = require("../models/User");
 const ExcelJS  = require("exceljs");
-
+const axios = require("axios");
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// ─── Cashfree Settlement helpers ──────────────────────────────────────────────
+const CF_BASE = "https://api.cashfree.com/pg";
+const CF_HEADERS = {
+  "x-api-version": "2023-08-01",
+  "x-client-id":     process.env.CASHFREE_APP_ID,
+  "x-client-secret": process.env.CASHFREE_SECRET_KEY,
+  "Content-Type":    "application/json",
+};
+
 
 const r2 = (n) => Math.round((n || 0) * 100) / 100;
 
@@ -1213,6 +1223,207 @@ router.get("/cashfree-recon", caMiddleware, async (req, res) => {
   } catch (err) {
     console.error("CA cashfree-recon error:", err);
     res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ─── ROUTE: List Settlements ──────────────────────────────────────────────────
+// GET /api/accountant/settlements?from=YYYY-MM-DD&to=YYYY-MM-DD&cursor=...
+router.get("/settlements", caMiddleware, async (req, res) => {
+  try {
+    const { from, to, cursor, limit = "20" } = req.query;
+
+    // Build Cashfree query
+    const params = new URLSearchParams({ count: String(Math.min(Number(limit), 200)) });
+    if (cursor) params.append("cursor", cursor);
+
+    // If date range provided, use the /settlements endpoint with pagination
+    const cfUrl = `${CF_BASE}/settlements?${params.toString()}`;
+    const cfRes = await axios.get(cfUrl, { headers: CF_HEADERS });
+
+    const settlements = cfRes.data?.data || [];
+
+    // Filter by date range client-side if provided (Cashfree doesn't filter by date on this endpoint)
+    const filtered = (from && to)
+      ? settlements.filter(s => {
+          const d = new Date(s.settlement_date || s.created_at);
+          return d >= new Date(from) && d <= new Date(to + "T23:59:59");
+        })
+      : settlements;
+
+    // Aggregate totals for this page
+    const totals = filtered.reduce((acc, s) => ({
+      totalSettled:  acc.totalSettled  + (s.settlement_amount || 0),
+      totalOrders:   acc.totalOrders   + (s.cf_count          || 0),
+      totalCharges:  acc.totalCharges  + (s.service_charge    || 0) + (s.service_tax || 0),
+    }), { totalSettled: 0, totalOrders: 0, totalCharges: 0 });
+
+    // Cross-reference with your Receipt collection using order IDs from Cashfree settlements
+    // (shallow ref — full drill-down is per /settlements/:id/orders)
+    const settledOrderIds = [];
+    filtered.forEach(s => { if (s.cf_id) settledOrderIds.push(s.cf_id); });
+
+    res.json({
+      settlements: filtered,
+      cursor: cfRes.data?.cursor || null,
+      totals,
+    });
+
+  } catch (err) {
+    console.error("CF settlements fetch error:", err?.response?.data || err.message);
+    res.status(500).json({
+      error: err?.response?.data?.message || "Failed to fetch settlements from Cashfree"
+    });
+  }
+});
+
+// ─── ROUTE: Settlement Orders (drill-down) ────────────────────────────────────
+// GET /api/accountant/settlements/:settlementId/orders?cursor=...
+router.get("/settlements/:settlementId/orders", caMiddleware, async (req, res) => {
+  try {
+    const { settlementId } = req.params;
+    const { cursor, limit = "50" } = req.query;
+
+    const params = new URLSearchParams({ count: String(Math.min(Number(limit), 200)) });
+    if (cursor) params.append("cursor", cursor);
+
+    const cfUrl = `${CF_BASE}/settlements/recon?${params.toString()}`;
+
+    // Cashfree's settlement recon endpoint
+    const cfRes = await axios.post(
+      `${CF_BASE}/settlements/recon`,
+      { pagination: { limit: Number(limit), cursor: cursor || null }, filters: { cf_settlement_id: Number(settlementId) } },
+      { headers: CF_HEADERS }
+    );
+
+    const orders = cfRes.data?.data || [];
+
+    // Cross-reference with your Receipts/Payments in MongoDB
+    const cfOrderIds = orders.map(o => o.order_id).filter(Boolean);
+    const [receipts, payments] = await Promise.all([
+      Receipt.find({ cashfreeOrderId: { $in: cfOrderIds } }).select("receiptId totalAmount gstAmount paymentGateway createdAt userName").lean(),
+      Payment.find({ cfOrderId: { $in: cfOrderIds } }).select("cfOrderId cfPaymentId amount status createdAt type").lean(),
+    ]);
+
+    const receiptMap = {};
+    receipts.forEach(r => { receiptMap[r.cashfreeOrderId] = r; });
+    const paymentMap = {};
+    payments.forEach(p => { paymentMap[p.cfOrderId] = p; });
+
+    // Enrich orders with your DB data
+    const enriched = orders.map(o => ({
+      ...o,
+      _receipt: receiptMap[o.order_id] || null,
+      _payment: paymentMap[o.order_id] || null,
+    }));
+
+    // Recon summary
+    const cfTotal    = orders.reduce((s, o) => s + (o.order_amount || 0), 0);
+    const localTotal = receipts.reduce((s, r) => s + (r.totalAmount || 0), 0);
+    const diffAmount = +(cfTotal - localTotal).toFixed(2);
+    const matchedCount = orders.filter(o => receiptMap[o.order_id]).length;
+
+    res.json({
+      settlementId,
+      orders: enriched,
+      cursor: cfRes.data?.cursor || null,
+      recon: {
+        cfOrderCount:    orders.length,
+        localMatchCount: matchedCount,
+        unmatchedCount:  orders.length - matchedCount,
+        cfTotalAmount:   +cfTotal.toFixed(2),
+        localTotalAmount: +localTotal.toFixed(2),
+        diffAmount,
+        isBalanced: diffAmount === 0,
+      },
+    });
+
+  } catch (err) {
+    console.error("CF settlement orders error:", err?.response?.data || err.message);
+    res.status(500).json({
+      error: err?.response?.data?.message || "Failed to fetch settlement orders"
+    });
+  }
+});
+
+// ─── ROUTE: Settlement Recon Summary (for CA dashboard) ───────────────────────
+// GET /api/accountant/settlements/summary?period=month
+router.get("/settlements/summary", caMiddleware, async (req, res) => {
+  try {
+    const { from, to, label } = buildDateRange(req.query);
+
+    // Fetch settlements from Cashfree for the period
+    // Use multiple pages if needed
+    let allSettlements = [];
+    let cursor = null;
+    let pageCount = 0;
+
+    do {
+      const params = new URLSearchParams({ count: "200" });
+      if (cursor) params.append("cursor", cursor);
+      const cfRes = await axios.get(`${CF_BASE}/settlements?${params.toString()}`, { headers: CF_HEADERS });
+      const page  = cfRes.data?.data || [];
+      cursor      = cfRes.data?.cursor || null;
+
+      // Filter to period
+      const inRange = page.filter(s => {
+        const d = new Date(s.settlement_date || s.created_at);
+        return d >= from && d <= to;
+      });
+      allSettlements = allSettlements.concat(inRange);
+
+      // Stop if we've gone past the from date (settlements are sorted desc)
+      const oldest = page[page.length - 1];
+      if (oldest && new Date(oldest.settlement_date || oldest.created_at) < from) break;
+      pageCount++;
+    } while (cursor && pageCount < 10);
+
+    // Your Receipt totals for same period (for recon)
+    const receiptAgg = await Receipt.aggregate([
+      { $match: { createdAt: { $gte: from, $lte: to }, paymentGateway: "cashfree" } },
+      { $group: {
+        _id: null,
+        totalBilled:     { $sum: "$totalAmount" },
+        totalPgCharges:  { $sum: { $ifNull: ["$paymentCharges", 0] } },
+        totalRefunds:    { $sum: { $ifNull: ["$refundAmount", 0] } },
+        count: { $sum: 1 },
+      }}
+    ]);
+
+    const cfTotal     = allSettlements.reduce((s, x) => s + (x.settlement_amount || 0), 0);
+    const cfCharges   = allSettlements.reduce((s, x) => s + (x.service_charge || 0) + (x.service_tax || 0), 0);
+    const cfOrders    = allSettlements.reduce((s, x) => s + (x.cf_count || 0), 0);
+    const rec         = receiptAgg[0] || {};
+    const netExpected = (rec.totalBilled || 0) - (rec.totalPgCharges || 0) - (rec.totalRefunds || 0);
+    const diffAmount  = +(cfTotal - netExpected).toFixed(2);
+
+    res.json({
+      period: { from, to, label },
+      cf: {
+        settlementCount: allSettlements.length,
+        totalSettled:    +cfTotal.toFixed(2),
+        totalCharges:    +cfCharges.toFixed(2),
+        totalOrders:     cfOrders,
+      },
+      local: {
+        cashfreeInvoices: rec.count || 0,
+        totalBilled:      +(rec.totalBilled || 0).toFixed(2),
+        totalPgCharges:   +(rec.totalPgCharges || 0).toFixed(2),
+        totalRefunds:     +(rec.totalRefunds || 0).toFixed(2),
+        netExpected:      +netExpected.toFixed(2),
+      },
+      recon: {
+        diffAmount,
+        isBalanced:  diffAmount === 0,
+        withinTolerance: Math.abs(diffAmount) < 1,
+      },
+      settlements: allSettlements.slice(0, 10), // latest 10 for preview
+    });
+
+  } catch (err) {
+    console.error("CF settlement summary error:", err?.response?.data || err.message);
+    res.status(500).json({
+      error: err?.response?.data?.message || "Failed to fetch settlement summary"
+    });
   }
 });
 
