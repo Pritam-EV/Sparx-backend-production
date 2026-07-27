@@ -62,21 +62,36 @@ async function fetchOrderDetails(orderId) {
 
 // ── Fetch settlements from Cashfree (for bank recon) ─────────────────────────
 // from, to: "YYYY-MM-DD"
+// ── Fetch settlements from Cashfree (for bank recon) ─────────────────────────
+// Cashfree 2023-08-01: POST /pg/settlements/recon  (not GET /pg/settlements)
+// from, to: "YYYY-MM-DD"
 async function fetchSettlements(from, to) {
   try {
-    const { data } = await axios.get(`${CF_BASE}/settlements`, {
-      headers: CF_HEADERS,
-      params: {
-        start_date: from,
-        end_date:   to,
-        limit: 200,
+    const { data } = await axios.post(
+      `${CF_BASE}/settlements/recon`,
+      {
+        pagination: {
+          limit:  200,
+          cursor: null,
+        },
+        filters: {
+          start_date: from,   // "YYYY-MM-DD"
+          end_date:   to,
+        },
       },
-    });
-    return { success: true, settlements: data?.data || [] };
+      { headers: CF_HEADERS }
+    );
+
+    // Response shape: { data: { cursor, limit, results: [...] } }
+    return {
+      success:     true,
+      settlements: data?.data?.results || [],
+      cursor:      data?.data?.cursor  || null,
+    };
   } catch (e) {
     return {
       success: false,
-      error: e?.response?.data?.message || e.message,
+      error:   e?.response?.data?.message || e.message,
     };
   }
 }
