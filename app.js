@@ -1,72 +1,82 @@
 // app.js
-
 const express   = require("express");
 const mongoose  = require("mongoose");
 const cors      = require("cors");
-const crypto = require('crypto');
-const couponsRouter = require('./routes/coupons');
-const Device = require('./models/device');
-// Load env vars
-require("dotenv").config(); // at top of app.js
+const crypto    = require("crypto");
+const couponsRouter = require("./routes/coupons");
+const Device    = require("./models/device");
+
+require("dotenv").config();
+
 const ALLOWED_ORIGINS = [
   "https://viz.vjratechnologies.com",
   "http://localhost:3000",
 ];
 
 // Route handlers
-const authRoutes         = require("./routes/auth");
-const deviceRoutes       = require("./routes/devices");
-const sessionRoutes      = require("./routes/sessions");
-const userRoutes         = require('./routes/users');
-const analyticsRoutes    = require('./routes/analytics');
-const receiptsRoutes     = require('./routes/receipts');
-const operatorRoutes     = require("./routes/operator");
-const partnerRoutes      = require('./routes/partner');
-const electricityBillRoutes = require('./routes/electricityBill'); // ← NEW
-const walletRoutes = require("./routes/wallet");
-const activityRoutes = require('./routes/activityRoutes');
-const adminTransactionsRoutes = require('./routes/adminTransactions');
+const authRoutes              = require("./routes/auth");
+const deviceRoutes            = require("./routes/devices");
+const sessionRoutes           = require("./routes/sessions");
+const userRoutes              = require("./routes/users");
+const analyticsRoutes         = require("./routes/analytics");
+const receiptsRoutes          = require("./routes/receipts");
+const operatorRoutes          = require("./routes/operator");
+const partnerRoutes           = require("./routes/partner");
+const electricityBillRoutes   = require("./routes/electricityBill");
+const walletRoutes            = require("./routes/wallet");
+const activityRoutes          = require("./routes/activityRoutes");
+const adminTransactionsRoutes = require("./routes/adminTransactions");
+const cashfreeRouter          = require("./routes/cashfree");
+const accountantRoutes        = require("./routes/accountant");
+
 // MQTT Subscriber
 const startMqttSubscriber = require("./mqttSubscriber");
 
 const app = express();
 
-const cashfreeRouter = require("./routes/cashfree");
-
-const accountantRoutes = require("./routes/accountant");
-
 const OFFLINE_THRESHOLD_MS = 30 * 1000;
-const allowedOrigins = [process.env.CLIENT_URL, 'http://localhost:3000'];
 
 if (!process.env.JWT_SECRET) {
-  console.error('FATAL: JWT_SECRET is not defined. Set JWT_SECRET in environment variables and restart the server.');
+  console.error(
+    "FATAL: JWT_SECRET is not defined. Set JWT_SECRET in environment variables and restart."
+  );
 }
 
-app.use('/api/cashfree/webhook', express.raw({ type: 'application/json' }));
-
-// ── IMPORTANT: Mount webhook route BEFORE express.json() middleware ──
-// Raw body is required for HMAC signature verification
+// ─── STEP 1: Raw body ONLY for Cashfree webhook (must be BEFORE express.json) ─
+// This captures the raw Buffer and attaches it as req.rawBody ONCE.
+// express.json() below is skipped for this path because body is already parsed here.
 app.use(
   "/api/cashfree/webhook",
-  express.raw({ type: "application/json" }),
+  express.raw({ type: "*/*" }),           // accept any content-type Cashfree sends
   (req, res, next) => {
-    // Attach raw body string for signature verification
-    req.rawBody = req.body.toString("utf8");
+    if (Buffer.isBuffer(req.body)) {
+      req.rawBody = req.body.toString("utf8");
+    } else if (typeof req.body === "string") {
+      req.rawBody = req.body;
+    } else {
+      req.rawBody = "";
+    }
     next();
   }
 );
 
-// ─── MIDDLEWARE ────────────────────────────────────────────────────────────────
-// ✅ CORRECT — single express.json() with rawBody capture
-app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf.toString("utf8");
-  },
-}));
+// ─── STEP 2: JSON middleware for all other routes ────────────────────────────
+// The verify function also captures rawBody for any OTHER routes that need it.
+// Note: for /api/cashfree/webhook the body is ALREADY consumed above,
+// so express.json() will just skip it (body already parsed).
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      // Only set rawBody if not already set by the webhook middleware above
+      if (!req.rawBody) {
+        req.rawBody = buf.toString("utf8");
+      }
+    },
+  })
+);
 app.use(express.urlencoded({ extended: true }));
 
-const client_URLs = process.env.CLIENT_URL;
-
+// ─── CORS ─────────────────────────────────────────────────────────────────────
 app.use(
   cors({
     origin: function (origin, cb) {
@@ -82,46 +92,52 @@ app.use(
 
 app.options("*", cors({
   origin: ALLOWED_ORIGINS,
-  methods: ["GET","HEAD","PUT","PATCH","POST","DELETE","OPTIONS"],
-  allowedHeaders: ["Content-Type","Authorization"],
+  methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
   credentials: false,
 }));
 
 app.use(express.static("public"));
-app.use('/api/coupons', couponsRouter);
-app.use('/api/partner', partnerRoutes);
 
-app.use("/api/cashfree", cashfreeRouter);
+// ─── ROUTES ───────────────────────────────────────────────────────────────────
+app.get("/ping", (req, res) => res.send("pong"));
+
+app.use("/api/coupons",            couponsRouter);
+app.use("/api/partner",            partnerRoutes);
+
+// Cashfree MUST be mounted BEFORE any auth-protected route groups
+// and after the raw-body middleware above
+app.use("/api/cashfree",           cashfreeRouter);
 
 // ─── DATABASE ─────────────────────────────────────────────────────────────────
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB Connected"))
-  .catch(err => console.error("❌ MongoDB Connection Error:", err.message));
+  .catch((err) => console.error("❌ MongoDB Connection Error:", err.message));
 
-// ─── ROUTES ───────────────────────────────────────────────────────────────────
-app.get('/ping', (req, res) => res.send('pong'));
+app.use("/api/auth",               authRoutes);
+app.use("/auth",                   authRoutes);
+app.use("/api/devices",            deviceRoutes);
+app.use("/api/sessions",           sessionRoutes);
+app.use("/api/users",              userRoutes);
+app.use("/api/analytics",          analyticsRoutes);
+app.use("/api/admin/transactions", adminTransactionsRoutes);
+app.use("/api/receipts",           receiptsRoutes);
+app.use("/api/eb",                 electricityBillRoutes);
+app.use("/api/wallet",             walletRoutes);
+app.use("/api/payment",            require("./routes/payment"));
+app.use("/api/operator",           operatorRoutes);
+app.use("/api/activity",           activityRoutes);
+app.use("/api/accountant",         accountantRoutes);
 
-app.use("/api/auth", authRoutes);
-app.use('/auth', authRoutes);
-app.use("/api/devices", deviceRoutes);
-app.use("/api/sessions", sessionRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/analytics', analyticsRoutes);
-app.use('/api/admin/transactions', adminTransactionsRoutes);
-app.use('/api/receipts', receiptsRoutes);
-app.use('/api/eb', electricityBillRoutes);   // ← NEW: EB management
-app.use("/api/wallet", walletRoutes);
 app.get("/api/getDevice", async (req, res) => {
   try {
     const { transactionId } = req.query;
-    if (!transactionId) {
+    if (!transactionId)
       return res.status(400).json({ error: "Transaction ID is required" });
-    }
     const session = await require("./models/session").findOne({ transactionId });
-    if (!session) {
+    if (!session)
       return res.status(404).json({ error: "Transaction ID not found" });
-    }
     res.json(session);
   } catch (err) {
     console.error("Error fetching session:", err);
@@ -129,20 +145,13 @@ app.get("/api/getDevice", async (req, res) => {
   }
 });
 
-app.use("/api/payment", require("./routes/payment"));
-app.use("/api/operator", operatorRoutes);
-app.use('/api/activity', activityRoutes);
-app.use("/api/accountant", accountantRoutes);
-
 // ─── OFFLINE SWEEP ────────────────────────────────────────────────────────────
 setInterval(async () => {
-  // console.log("🔍 Running offline sweep…");
   const cutoff = new Date(Date.now() - OFFLINE_THRESHOLD_MS);
-  const result = await Device.updateMany(
+  await Device.updateMany(
     { lastSeen: { $lt: cutoff }, status: { $ne: "Offline" } },
     { status: "Offline" }
   );
-  // console.log(`🛑 Offline sweep modified ${result.modifiedCount} devices`);
 }, 10 * 1000);
 
 // Start MQTT subscriber
