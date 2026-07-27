@@ -20,7 +20,7 @@ const RefundSchema = new mongoose.Schema({
   refundType:   { type: String, enum: ["FULL", "PARTIAL"], default: "FULL" },
 
   // ── Destination ───────────────────────────────────────────────────────────────
-  // "wallet" = credited to Sparx wallet instantly (no Cashfree call)
+  // "wallet" = credited to VIZ wallet instantly (no Cashfree call)
   // "bank"   = sent back to original payment source via Cashfree
   destination:  { type: String, enum: ["wallet", "bank"], required: true },
 

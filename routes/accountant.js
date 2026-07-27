@@ -543,7 +543,7 @@ router.get("/export", caMiddleware, async (req, res) => {
     ]);
 
     const wb = new ExcelJS.Workbook();
-    wb.creator  = "Sparx EV — VJRA Technologies Pvt Ltd";
+    wb.creator  = "VIZ EV — VJRA Technologies Pvt Ltd";
     wb.created  = new Date();
 
     const headerStyle = (color) => ({
@@ -700,7 +700,7 @@ router.get("/export", caMiddleware, async (req, res) => {
     // ── Sheet 4: GSTR-1 Summary ────────────────────────────────────────────────
     const ws4 = wb.addWorksheet("GSTR-1 Summary");
     ws4.mergeCells("A1:G1");
-    ws4.getCell("A1").value = "GSTR-1 SUMMARY — Sparx EV / VJRA Technologies Pvt Ltd";
+    ws4.getCell("A1").value = "GSTR-1 SUMMARY — VIZ EV / VJRA Technologies Pvt Ltd";
     ws4.getCell("A1").font  = { bold: true, size: 13 };
     ws4.getCell("A2").value = `Period: ${from.toDateString()} → ${to.toDateString()}`;
     ws4.getCell("A3").value = `Generated: ${new Date().toLocaleString("en-IN")}`;
@@ -863,7 +863,7 @@ router.get("/export", caMiddleware, async (req, res) => {
     }
 
     // Stream
-    const filename = `Sparx_CA_${label.replace(/\s+/g,"_")}_${Date.now()}.xlsx`;
+    const filename = `VIZ_CA_${label.replace(/\s+/g,"_")}_${Date.now()}.xlsx`;
     res.setHeader("Content-Type",        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     await wb.xlsx.write(res);
@@ -1237,16 +1237,20 @@ router.get("/settlements", caMiddleware, async (req, res) => {
     if (cursor) params.append("cursor", cursor);
 
     // If date range provided, use the /settlements endpoint with pagination
-    const cfUrl = `${CF_BASE}/settlements?${params.toString()}`;
+    const cfUrl = `${CFBASE}/settlements?${params.toString()}`;
     const cfRes = await axios.get(cfUrl, { headers: CF_HEADERS });
 
     const settlements = cfRes.data?.data || [];
 
     // Filter by date range client-side if provided (Cashfree doesn't filter by date on this endpoint)
-    const filtered = (from && to)
+    const filtered = from && to
       ? settlements.filter(s => {
-          const d = new Date(s.settlement_date || s.created_at);
-          return d >= new Date(from) && d <= new Date(to + "T23:59:59");
+          const raw = s.settlementdate || s.createdat;
+          if (!raw) return false;
+          // Compare just the date string prefix (YYYY-MM-DD) to avoid TZ issues
+          const dateStr = raw.substring(0, 10); // "2026-07-15"
+          return dateStr >= from.toISOString().substring(0, 10) && 
+                dateStr <= to.toISOString().substring(0, 10);
         })
       : settlements;
 
