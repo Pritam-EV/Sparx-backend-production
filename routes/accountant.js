@@ -543,7 +543,7 @@ router.get("/export", caMiddleware, async (req, res) => {
     ]);
 
     const wb = new ExcelJS.Workbook();
-    wb.creator  = "VIZ EV — VJRA Technologies Pvt Ltd";
+    wb.creator  = "VIZ EV — VJRA Technologies LLP";
     wb.created  = new Date();
 
     const headerStyle = (color) => ({
@@ -700,7 +700,7 @@ router.get("/export", caMiddleware, async (req, res) => {
     // ── Sheet 4: GSTR-1 Summary ────────────────────────────────────────────────
     const ws4 = wb.addWorksheet("GSTR-1 Summary");
     ws4.mergeCells("A1:G1");
-    ws4.getCell("A1").value = "GSTR-1 SUMMARY — VIZ EV / VJRA Technologies Pvt Ltd";
+    ws4.getCell("A1").value = "GSTR-1 SUMMARY — VIZ EV / VJRA Technologies LLP";
     ws4.getCell("A1").font  = { bold: true, size: 13 };
     ws4.getCell("A2").value = `Period: ${from.toDateString()} → ${to.toDateString()}`;
     ws4.getCell("A3").value = `Generated: ${new Date().toLocaleString("en-IN")}`;

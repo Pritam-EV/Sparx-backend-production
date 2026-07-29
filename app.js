@@ -26,6 +26,7 @@ const electricityBillRoutes   = require("./routes/electricityBill");
 const walletRoutes            = require("./routes/wallet");
 const activityRoutes          = require("./routes/activityRoutes");
 const adminTransactionsRoutes = require("./routes/adminTransactions");
+const adminProvisionRoutes = require("./routes/adminProvision");
 const cashfreeRouter          = require("./routes/cashfree");
 const accountantRoutes        = require("./routes/accountant");
 
@@ -122,6 +123,7 @@ app.use("/api/sessions",           sessionRoutes);
 app.use("/api/users",              userRoutes);
 app.use("/api/analytics",          analyticsRoutes);
 app.use("/api/admin/transactions", adminTransactionsRoutes);
+app.use("/api/admin/provision", adminProvisionRoutes);
 app.use("/api/receipts",           receiptsRoutes);
 app.use("/api/eb",                 electricityBillRoutes);
 app.use("/api/wallet",             walletRoutes);

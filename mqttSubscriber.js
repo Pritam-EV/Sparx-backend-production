@@ -37,10 +37,15 @@ function startMqttSubscriber() {
   mqttClient.on('connect', () => {
     // console.log('✅ Backend connected to MQTT broker');
 
-    const topics = ['viz/+/Telemetry', 'device/+/session/end', 'viz/+/sessionend'];
-    mqttClient.subscribe(topics, { qos: 1 }, (err) => {
-      if (err) {
-        console.error('MQTT subscribe failed:', err);
+const topics = [
+  'viz/+/Telemetry',
+  'device/+/session/end',
+  'viz/+/sessionend',
+  'viz/+/configACK',          // ← NEW: firmware ACK after receiving config payload
+];
+mqttClient.subscribe(topics, { qos: 1 }, (err) => {
+  if (err) {
+    console.error('MQTT subscribe failed:', err);
       } else {
         // console.log('✅ Subscribed to:', topics);
       }
@@ -102,6 +107,62 @@ function startMqttSubscriber() {
       return; // do NOT fall through to Telemetry handler
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // BLOCK A2: Config ACK — viz/<deviceId>/configAck
+    // Firmware publishes this after successfully receiving + applying a config
+    // push from the backend. Topic casing matches firmware exactly: "configAck".
+    // Expected payload:
+    //   { "status": "ok" | "error", "fwVersion": "<string>", "message": "<string>" }
+    // ─────────────────────────────────────────────────────────────────────────
+    if (parts[0] === 'viz' && parts[2] === 'configAck') {
+      const deviceId = parts[1].toUpperCase();
+
+      let ackMsg;
+      try {
+        ackMsg = JSON.parse(payload);
+      } catch (e) {
+        console.error(`[CONFIG ACK] Invalid JSON from ${deviceId}:`, e.message);
+        return;
+      }
+
+      const ackStatus  = (ackMsg.status    || '').toLowerCase(); // "ok" | "error"
+      const fwVersion  =  ackMsg.fwVersion || null;              // firmware version echoed back
+      const ackMessage =  ackMsg.message   || null;              // human-readable detail
+
+      if (!ackStatus) {
+        console.warn(`[CONFIG ACK] Missing status field from ${deviceId}:`, ackMsg);
+        return;
+      }
+
+      try {
+        const ackUpdate = {
+          configAckStatus:  ackStatus,   // "ok" or "error"
+          configAckAt:      new Date(),  // timestamp ACK arrived at backend
+          configAckMessage: ackMessage,  // e.g. "Config applied, restarting"
+        };
+        if (fwVersion) {
+          ackUpdate.configAckFwVersion = fwVersion; // firmware version at time of ACK
+        }
+
+        const result = await Device.updateOne(
+          { device_id: deviceId },
+          { $set: ackUpdate }
+        );
+
+        if (result.matchedCount === 0) {
+          console.warn(`[CONFIG ACK] Device ${deviceId} not found in DB — ACK ignored`);
+        } else if (ackStatus === 'ok') {
+          console.log(`[CONFIG ACK] ✅ Device ${deviceId} applied config successfully` +
+            (fwVersion ? ` (fw: ${fwVersion})` : ''));
+        } else {
+          console.warn(`[CONFIG ACK] ⚠️ Device ${deviceId} reported config error: ${ackMessage}`);
+        }
+      } catch (err) {
+        console.error(`[CONFIG ACK] ❌ DB update failed for ${deviceId}:`, err.message);
+      }
+
+      return; // do NOT fall through to Telemetry handler
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // BLOCK B: Telemetry — viz/<deviceId>/Telemetry
