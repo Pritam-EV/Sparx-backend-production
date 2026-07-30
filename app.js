@@ -130,7 +130,7 @@ app.use("/api/wallet",             walletRoutes);
 app.use("/api/payment",            require("./routes/payment"));
 app.use("/api/operator",           operatorRoutes);
 app.use("/api/activity",           activityRoutes);
-app.use('/api/provision', require('./routes/deviceProvision.routes'));
+app.use('/api/provision',           require('./routes/deviceProvision.routes'));
 app.use("/api/accountant",         accountantRoutes);
 
 app.get("/api/getDevice", async (req, res) => {
