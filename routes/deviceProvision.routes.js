@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { verifyToken, requireRole } = require('../middleware/authMiddleware');
+const authMiddleware = require('../middleware/authMiddleware');
 const {
   createGroupA,
   getGroupA,
@@ -11,7 +11,7 @@ const {
 } = require('../controllers/deviceProvision.controller');
 
 // All routes require admin
-router.use(verifyToken, authorizeRoles('admin'),);
+router.use(authMiddleware, authorizeRoles('admin'),);
 
 router.post('/group-a',          createGroupA);
 router.get('/group-a',           getAllGroupA);
