@@ -11,7 +11,7 @@ const {
 } = require('../controllers/deviceProvision.controller');
 
 // All routes require admin
-router.use(verifyToken, requireRole('admin'));
+router.use(verifyToken, authorizeRoles('admin'),);
 
 router.post('/group-a',          createGroupA);
 router.get('/group-a',           getAllGroupA);
