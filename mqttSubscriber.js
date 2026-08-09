@@ -460,13 +460,16 @@ if (relayOn && !sessionId) {
 //
 // Tightened conditions vs original:
 //   OLD: device.status === Available OR Offline  →  kill immediately
-//   NEW: ALL of these must be true before killing:
-//     1. device.status is Available or Offline
-//     2. Device has been in that state for >= CRON_GRACE_MS (5 min)
-//        — checked via device.lastSeen vs session.deviceAvailableSince
-//     3. Session has not received any telemetry in >= CRON_STALE_TELEMETRY_MS (5 min)
-//        — checked via session.lastTelemetryAt
-//     4. Session is older than 2 minutes (ignore brand-new sessions)
+// NEW: ALL of these must be true before killing:
+//   1. device.status is Available
+//   2. Device has been Available for >= CRON_GRACE_MS (5 min)
+//      — tracked using session.deviceAvailableSince
+//   3. Session has not received telemetry in >= CRON_STALE_TELEMETRY_MS (5 min)
+//   4. Session is older than 2 minutes
+//
+// IMPORTANT:
+//   Offline is not considered proof that charging has ended.
+//   Offline devices must never be auto-completed by this cron.
 //
 // This prevents killing sessions during:
 //   - Brief device reconnects / firmware reboots (device goes offline for <5 min)
@@ -505,21 +508,34 @@ async function cleanupOrphanSessions() {
 
       if (!device) continue;
 
-      const devStatus = (device.status || '').toLowerCase();
-      const isProblematic = devStatus === 'available' || devStatus === 'offline';
+const devStatus = (device.status || '').trim().toLowerCase();
 
-      if (!isProblematic) {
-        // Device is actively charging — clear deviceAvailableSince if it was set
-        if (sess.deviceAvailableSince) {
-          await Session.updateOne(
-            { sessionId: sess.sessionId },
-            { $set: { deviceAvailableSince: null } }
-          );
-        }
-        continue;
-      }
+// Only Available is allowed to start/continue orphan cleanup.
+// Offline must never automatically end a session.
+const isAvailable = devStatus === 'available';
 
-      // ── Device IS Available or Offline ───────────────────────────────────
+if (!isAvailable) {
+  // Includes:
+  // - offline
+  // - occupied
+  // - charging
+  // - paused
+  // - faulty
+  // - unknown
+  //
+  // Do not end the session for any of these states.
+  // Clear any previously started Available grace-period clock.
+  if (sess.deviceAvailableSince) {
+    await Session.updateOne(
+      { sessionId: sess.sessionId },
+      { $set: { deviceAvailableSince: null } }
+    );
+  }
+
+  continue;
+}
+
+// ── Device IS Available ──────────────────────────────────────────────
 
       // Condition 1: Has the session received telemetry recently?
       //   If lastTelemetryAt is null (session never got any telemetry),
