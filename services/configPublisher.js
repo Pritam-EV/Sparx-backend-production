@@ -1,145 +1,165 @@
-// services/configPublisher.js
-const mqttClient      = require('../mqttClient');
+const mqttClient = require('../mqttClient');
 const DeviceProvision = require('../models/DeviceProvision');
-const Device          = require('../models/device');
+const Device = require('../models/device');
 
-// Builds topic for config push based on serialNumber.
-// Firmware expects viz/<SERIAL_NUMBER>/config for provisioning.
-function buildConfigTopicFromSerial(serialNumber) {
-  return `viz/${serialNumber.toUpperCase()}/config`;
+const {
+  CONFIG_ACTION,
+  CONFIG_SCHEMA_VERSION,
+  CONFIG_ACK_STATUS,
+  PROVISION_STATUS,
+  buildConfigTopic,
+  normalizeDeviceId,
+} = require('../config/deviceProtocol');
+
+function publishAsync(topic, payload) {
+  return new Promise((resolve, reject) => {
+    mqttClient.publish(
+      topic,
+      JSON.stringify(payload),
+      { qos: 1, retain: false },
+      (error) => {
+        if (error) return reject(error);
+        resolve();
+      }
+    );
+  });
 }
 
-// Publish config for a DeviceProvision document (Group B / dispatch config).
+function buildFirmwareConfig({
+  serialNumber,
+  deviceId,
+  cf,
+  vf,
+  currentRF,
+  wifiSSID,
+  wifiPassword,
+  nvsVersion,
+}) {
+  return {
+    action: CONFIG_ACTION,
+    schemaVersion: CONFIG_SCHEMA_VERSION,
+
+    serialNumber,
+    deviceId: normalizeDeviceId(deviceId),
+
+    cf,
+    vf,
+    currentRF,
+
+    // Firmware contract names
+    ssid: wifiSSID || '',
+    password: wifiPassword || '',
+
+    nvsVersion,
+  };
+}
+
 async function publishProvisionConfig(provisionId) {
-  const provision = await DeviceProvision.findById(provisionId).lean();
+  const provision = await DeviceProvision.findById(provisionId);
+
   if (!provision) {
-    throw new Error(`DeviceProvision ${provisionId} not found`);
+    throw new Error('DeviceProvision not found');
   }
+
   if (!provision.serialNumber || !provision.deviceId) {
-    throw new Error(`Provision ${provisionId} missing serialNumber or deviceId`);
+    throw new Error(
+      'Provision must contain serialNumber and deviceId'
+    );
   }
 
-  const nextNvsVersion = (provision.nvsVersion || 0) + 1;
+  const nextNvsVersion = Number(provision.nvsVersion || 0) + 1;
 
-  const topic = buildConfigTopicFromSerial(provision.serialNumber);
-  const payload = {
-    serialNumber:  provision.serialNumber,
-    device_id:     provision.deviceId,
-    cf:            provision.cf,
-    vf:            provision.vf,
-    currentRF:     provision.currentRF,
-    wifiSSID:      provision.wifiSSID,
-    wifiPassword:  provision.wifiPassword,
-    location:      provision.location,
-    lat:           provision.lat,
-    lng:           provision.lng,
-    area:          provision.area,
-    city:          provision.city,
-    state:         provision.state,
-    meterType:     provision.meterType,
-    meterConsumerNumber: provision.meterConsumerNumber,
-    rate:          provision.rate,
-    commercial:    provision.commercial,
-    targetFirmwareVersion: provision.targetFirmwareVersion,
-    nvsVersion:    nextNvsVersion,
+  const payload = buildFirmwareConfig({
+    serialNumber: provision.serialNumber,
+    deviceId: provision.deviceId,
+    cf: provision.cf,
+    vf: provision.vf,
+    currentRF: provision.currentRF,
+    wifiSSID: provision.wifiSSID,
+    wifiPassword: provision.wifiPassword,
+    nvsVersion: nextNvsVersion,
+  });
+
+  await publishAsync(
+    buildConfigTopic(provision.serialNumber),
+    payload
+  );
+
+  provision.nvsVersion = nextNvsVersion;
+  provision.provisionStatus = PROVISION_STATUS.SENT;
+  provision.lastProvisionSentAt = new Date();
+  provision.configAck = {
+    status: CONFIG_ACK_STATUS.PENDING,
+    ackedAt: null,
+    message: null,
+    fwVersion: null,
+    nvsVersion: nextNvsVersion,
   };
 
-  return new Promise((resolve, reject) => {
-    mqttClient.publish(topic, JSON.stringify(payload), { qos: 1 }, async (err) => {
-      if (err) {
-        return reject(err);
-      }
+  await provision.save();
 
-      try {
-        await DeviceProvision.updateOne(
-          { _id: provisionId },
-          {
-            $set: {
-              provisionStatus: 'sent',
-              lastProvisionSentAt: new Date(),
-              'configAck.status': 'pending',
-              'configAck.ackedAt': null,
-              'configAck.message': null,
-              'configAck.fwVersion': null,
-              'configAck.nvsVersion': nextNvsVersion,
-              nvsVersion: nextNvsVersion,
-            },
-          }
-        );
-      } catch (dbErr) {
-        return reject(dbErr);
-      }
-
-      resolve();
-    });
-  });
+  return {
+    topic: buildConfigTopic(provision.serialNumber),
+    payload,
+    nvsVersion: nextNvsVersion,
+  };
 }
 
-// Publish config for a live Device document (Group C / runtime changes).
 async function publishDeviceConfig(deviceId) {
-  const device = await Device.findOne({ device_id: deviceId.toUpperCase() }).lean();
+  const normalizedDeviceId = normalizeDeviceId(deviceId);
+
+  const device = await Device.findOne({
+    device_id: normalizedDeviceId,
+  });
+
   if (!device) {
-    throw new Error(`Device ${deviceId} not found`);
+    throw new Error(`Device ${normalizedDeviceId} not found`);
   }
+
   if (!device.serialNumber) {
-    throw new Error(`Device ${deviceId} missing serialNumber`);
+    throw new Error(
+      `Device ${normalizedDeviceId} has no serialNumber`
+    );
   }
 
-  const nextNvsVersion = (device.nvsVersion || 0) + 1;
+  const nextNvsVersion = Number(device.nvsVersion || 0) + 1;
 
-  const topic = buildConfigTopicFromSerial(device.serialNumber);
-  const payload = {
-    serialNumber:  device.serialNumber,
-    device_id:     device.device_id,
-    cf:            device.cf,
-    vf:            device.vf,
-    currentRF:     device.currentRF,
-    wifiSSID:      device.wifiSSID,
-    wifiPassword:  device.wifiPassword,
-    location:      device.location,
-    lat:           device.lat,
-    lng:           device.lng,
-    area:          device.area,
-    city:          device.city,
-    state:         device.state,
-    meterType:     device.meterType,
-    meterConsumerNumber: device.meterConsumerNumber,
-    rate:          device.rate,
-    commercial:    device.commercial,
-    targetFirmwareVersion: device.targetFirmwareVersion,
-    nvsVersion:    nextNvsVersion,
+  const payload = buildFirmwareConfig({
+    serialNumber: device.serialNumber,
+    deviceId: device.device_id,
+    cf: device.cf,
+    vf: device.vf,
+    currentRF: device.currentRF,
+    wifiSSID: device.wifiSSID,
+    wifiPassword: device.wifiPassword,
+    nvsVersion: nextNvsVersion,
+  });
+
+  await publishAsync(
+    buildConfigTopic(device.serialNumber),
+    payload
+  );
+
+  device.nvsVersion = nextNvsVersion;
+  device.configAck = {
+    status: CONFIG_ACK_STATUS.PENDING,
+    ackedAt: null,
+    message: null,
+    fwVersion: null,
+    nvsVersion: nextNvsVersion,
   };
 
-  return new Promise((resolve, reject) => {
-    mqttClient.publish(topic, JSON.stringify(payload), { qos: 1 }, async (err) => {
-      if (err) {
-        return reject(err);
-      }
+  await device.save();
 
-      try {
-        await Device.updateOne(
-          { device_id: device.device_id },
-          {
-            $set: {
-              'configAck.status': 'pending',
-              'configAck.ackedAt': null,
-              'configAck.message': null,
-              'configAck.fwVersion': null,
-              'configAck.nvsVersion': nextNvsVersion,
-              nvsVersion: nextNvsVersion,
-            },
-          }
-        );
-      } catch (dbErr) {
-        return reject(dbErr);
-      }
-
-      resolve();
-    });
-  });
+  return {
+    topic: buildConfigTopic(device.serialNumber),
+    payload,
+    nvsVersion: nextNvsVersion,
+  };
 }
 
 module.exports = {
+  buildFirmwareConfig,
   publishProvisionConfig,
   publishDeviceConfig,
 };

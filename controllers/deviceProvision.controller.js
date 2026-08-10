@@ -1,4 +1,10 @@
 const DeviceProvision = require('../models/DeviceProvision');
+const Device = require('../models/device');
+const {
+  MANUFACTURING_STATUS,
+  normalizeDeviceId,
+  normalizeSerialNumber,
+} = require('../config/deviceProtocol');
 const Device          = require('../models/device');
 const { publishProvisionConfig } = require('../services/configPublisher');
 
@@ -6,40 +12,56 @@ const { publishProvisionConfig } = require('../services/configPublisher');
 exports.createGroupA = async (req, res) => {
   try {
     const {
-      serialNumber, hardwareRevision, project,
-      charger_type, pcbBatch, manufacturedAt, productionNotes,
+      serialNumber,
+      hardwareRevision,
+      project,
+      pcbBatch,
+      manufacturedAt,
+      notes,
     } = req.body;
 
     if (!serialNumber || !hardwareRevision) {
       return res.status(400).json({
         success: false,
-        message: 'serialNumber and hardwareRevision are required.',
+        message: 'serialNumber and hardwareRevision are required',
       });
     }
 
-    const existing = await DeviceProvision.findOne({ serialNumber });
+    const normalizedSerial = normalizeSerialNumber(serialNumber);
+
+    const existing = await DeviceProvision.findOne({
+      serialNumber: normalizedSerial,
+    });
+
     if (existing) {
       return res.status(409).json({
         success: false,
-        message: `Serial number ${serialNumber} already exists in provision records.`,
+        message: `Serial number ${normalizedSerial} already exists`,
       });
     }
 
     const provision = await DeviceProvision.create({
-      serialNumber,
-      hardwareRevision,
-      project:            project          || '',
-      charger_type:       charger_type     || null,
-      pcbBatch:           pcbBatch         || null,
-      manufacturedAt:     manufacturedAt   || new Date(),
-      productionNotes:    productionNotes  || '',
-      manufacturingStatus: 'group_a',       // ← correct field + value
-      provisionedBy:      req.user.uid,     // Firebase UID string
+      serialNumber: normalizedSerial,
+      hardwareRevision: String(hardwareRevision).trim(),
+      project: project || '',
+      pcbBatch: pcbBatch || null,
+      manufacturedAt: manufacturedAt || new Date(),
+      notes: notes || '',
+      manufacturingStatus: MANUFACTURING_STATUS.GROUP_A,
+      provisionedBy: req.user.uid || req.user.userId || req.user._id,
     });
 
-    return res.status(201).json({ success: true, data: provision });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return res.status(201).json({
+      success: true,
+      data: provision,
+    });
+  } catch (error) {
+    console.error('[GROUP A CREATE]', error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
@@ -60,23 +82,45 @@ exports.getGroupA = async (req, res) => {
 // ─── GET ALL GROUP A ──────────────────────────────────────────────────────────
 exports.getAllGroupA = async (req, res) => {
   try {
-    const { page = 1, limit = 50, pcbBatch, hwRevision } = req.query;
-    const filter = { manufacturingStatus: 'group_a' };  // ← correct field + value
-    if (pcbBatch)    filter.pcbBatch         = pcbBatch;
-    if (hwRevision)  filter.hardwareRevision = hwRevision;  // ← correct field
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+
+    const filter = {
+      manufacturingStatus: MANUFACTURING_STATUS.GROUP_A,
+    };
+
+    if (req.query.pcbBatch) {
+      filter.pcbBatch = req.query.pcbBatch;
+    }
+
+    if (req.query.hardwareRevision) {
+      filter.hardwareRevision = req.query.hardwareRevision;
+    }
 
     const [data, total] = await Promise.all([
       DeviceProvision.find(filter)
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
-        .limit(Number(limit))
+        .limit(limit)
         .lean(),
+
       DeviceProvision.countDocuments(filter),
     ]);
 
-    return res.json({ success: true, total, page: Number(page), data });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return res.json({
+      success: true,
+      total,
+      page,
+      limit,
+      data,
+    });
+  } catch (error) {
+    console.error('[GROUP A LIST]', error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
@@ -84,149 +128,232 @@ exports.getAllGroupA = async (req, res) => {
 exports.updateGroupA = async (req, res) => {
   try {
     const allowedFields = [
-      'hardwareRevision', 'project', 'charger_type',   // ← hardwareRevision
-      'pcbBatch', 'manufacturedAt', 'productionNotes',
+      'hardwareRevision',
+      'project',
+      'pcbBatch',
+      'manufacturedAt',
+      'notes',
     ];
 
     const updates = {};
-    allowedFields.forEach((f) => {
-      if (req.body[f] !== undefined) updates[f] = req.body[f];
-    });
 
-    if (!Object.keys(updates).length) {
-      return res.status(400).json({ success: false, message: 'No valid fields to update.' });
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field];
+      }
     }
 
-    updates.provisionedBy = req.user.uid;  // track last modifier (string UID)
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid Group A fields supplied',
+      });
+    }
+
+    const serialNumber = normalizeSerialNumber(req.params.serial);
 
     const provision = await DeviceProvision.findOneAndUpdate(
-      { serialNumber: req.params.serial, manufacturingStatus: 'group_a' },  // ← correct
-      { $set: updates },
-      { new: true }
+      {
+        serialNumber,
+        manufacturingStatus: MANUFACTURING_STATUS.GROUP_A,
+      },
+      {
+        $set: updates,
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
     );
 
-    if (!provision) return res.status(404).json({ success: false, message: 'Group A record not found.' });
-    return res.json({ success: true, data: provision });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    if (!provision) {
+      return res.status(404).json({
+        success: false,
+        message: 'Group A record not found',
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: provision,
+    });
+  } catch (error) {
+    console.error('[GROUP A UPDATE]', error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
 // ─── DELETE GROUP A ───────────────────────────────────────────────────────────
 exports.deleteGroupA = async (req, res) => {
   try {
+    const serialNumber = normalizeSerialNumber(req.params.serial);
+
     const provision = await DeviceProvision.findOne({
-      serialNumber:        req.params.serial,
-      manufacturingStatus: 'group_a',        // ← correct
+      serialNumber,
+      manufacturingStatus: MANUFACTURING_STATUS.GROUP_A,
     });
-    if (!provision) return res.status(404).json({ success: false, message: 'Not found or already promoted.' });
+
+    if (!provision) {
+      return res.status(404).json({
+        success: false,
+        message: 'Group A record not found or already promoted',
+      });
+    }
 
     await provision.deleteOne();
-    return res.json({ success: true, message: 'Group A record deleted.' });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+
+    return res.json({
+      success: true,
+      message: 'Group A record deleted',
+    });
+  } catch (error) {
+    console.error('[GROUP A DELETE]', error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
 // ─── PROMOTE GROUP A → GROUP B ────────────────────────────────────────────────
 exports.promoteToGroupB = async (req, res) => {
   try {
+    const serialNumber = normalizeSerialNumber(req.params.serial);
+
     const provision = await DeviceProvision.findOne({
-      serialNumber:        req.params.serial,
-      manufacturingStatus: 'group_a',         // ← correct
+      serialNumber,
+      manufacturingStatus: MANUFACTURING_STATUS.GROUP_A,
     });
+
     if (!provision) {
       return res.status(404).json({
         success: false,
-        message: 'Group A record not found or already promoted.',
+        message: 'Group A record not found or already promoted',
       });
     }
 
     const {
-      deviceId, wifiSSID, wifiPassword,
-      rate,                                   // ← 'rate' not 'defaultRate'
-      location, lat, lng, area, city, state,
-      charger_type, cf, vf, currentRF,
-      meterType, meterConsumerNumber,
+      deviceId,
+      wifiSSID,
+      wifiPassword,
+      cf,
+      vf,
+      currentRF,
+      rate,
+      location,
+      lat,
+      lng,
+      area,
+      city,
+      state,
+      charger_type,
+      meterType,
+      meterConsumerNumber,
       commercial,
       targetFirmwareVersion,
-      calibrationNotes, dispatchNotes,
+      notes,
     } = req.body;
 
-    // Required for Group B promotion
-    if (!deviceId || !wifiSSID || !wifiPassword || !rate || !location ||
-        !lat || !lng || !area || !city || !state || !charger_type) {
+    const normalizedDeviceId = normalizeDeviceId(deviceId);
+
+    const required = {
+      deviceId: normalizedDeviceId,
+      wifiSSID,
+      wifiPassword,
+      rate,
+      location,
+      lat,
+      lng,
+      area,
+      city,
+      state,
+      charger_type,
+    };
+
+    const missing = Object.entries(required)
+      .filter(
+        ([, value]) =>
+          value === undefined ||
+          value === null ||
+          value === ''
+      )
+      .map(([key]) => key);
+
+    if (missing.length > 0) {
       return res.status(400).json({
         success: false,
-        message: 'deviceId, wifiSSID, wifiPassword, rate, location, lat, lng, area, city, state, charger_type are required for Group B promotion.',
+        message: `Missing Group B fields: ${missing.join(', ')}`,
       });
     }
 
-    // Check deviceId uniqueness in BOTH collections
-    const [takenInDevice, takenInProvision] = await Promise.all([
-      Device.findOne({ device_id: deviceId }),
-      DeviceProvision.findOne({ deviceId, serialNumber: { $ne: req.params.serial } }),
+    const [deviceIdInUse, provisionIdInUse] = await Promise.all([
+      Device.findOne({ device_id: normalizedDeviceId }).lean(),
+      DeviceProvision.findOne({
+        deviceId: normalizedDeviceId,
+        _id: { $ne: provision._id },
+      }).lean(),
     ]);
-    if (takenInDevice || takenInProvision) {
+
+    if (deviceIdInUse || provisionIdInUse) {
       return res.status(409).json({
         success: false,
-        message: `deviceId ${deviceId} is already assigned to another device.`,
+        message: `Device ID ${normalizedDeviceId} is already assigned`,
       });
     }
 
-    const updated = await DeviceProvision.findOneAndUpdate(
-      { serialNumber: req.params.serial },
+    provision.deviceId = normalizedDeviceId;
+    provision.wifiSSID = wifiSSID;
+    provision.wifiPassword = wifiPassword;
+    provision.cf = cf ?? provision.cf;
+    provision.vf = vf ?? provision.vf;
+    provision.currentRF = currentRF ?? provision.currentRF;
+    provision.rate = rate;
+    provision.location = location;
+    provision.lat = lat;
+    provision.lng = lng;
+    provision.area = area;
+    provision.city = city;
+    provision.state = state;
+    provision.charger_type = charger_type;
+    provision.meterType = meterType ?? null;
+    provision.meterConsumerNumber = meterConsumerNumber ?? null;
+    provision.commercial = commercial ?? provision.commercial;
+    provision.targetFirmwareVersion =
+      targetFirmwareVersion ?? null;
+    provision.notes = notes ?? provision.notes;
+
+    provision.rateHistory = [
       {
-        $set: {
-          manufacturingStatus:  'group_b',    // ← correct field + value
-          deviceId,
-          wifiSSID,
-          wifiPassword,
-          rate,                               // ← correct field name
-          rateHistory: [{                     // seed first rateHistory entry
-            rate,
-            setBy:     req.user.uid,          // ← String (Firebase UID), not ObjectId
-            setByRole: 'admin',               // ← required by schema
-            setAt:     new Date(),
-          }],
-          location,
-          lat,
-          lng,
-          area,
-          city,
-          state,
-          charger_type:              charger_type,
-          cf:                        cf              ?? 0.231,
-          vf:                        vf              ?? 1.880,
-          currentRF:                 currentRF       ?? 0.001,
-          meterType:                 meterType       || null,
-          meterConsumerNumber:       meterConsumerNumber || null,
-          ...(commercial && { commercial }),
-          targetFirmwareVersion:     targetFirmwareVersion || null,
-          notes:                     calibrationNotes || '',
-          dispatchNotes:             dispatchNotes    || '',
-          provisionStatus:           'pending',
-          provisionedBy:             req.user.uid,   // ← String UID
-          promotedToGroupBAt:        new Date(),      // stored in notes field or add to schema if needed
-        },
+        rate,
+        setBy: req.user.uid || req.user.userId || req.user._id,
+        setByRole: 'admin',
+        setAt: new Date(),
       },
-      { new: true }
-    );
+    ];
 
-    try {
-  await publishProvisionConfig(updated._id);
-} catch (publishErr) {
-  console.error('[PROVISION] Config publish failed:', publishErr.message);
-  // You can decide whether to treat this as fatal or just warn:
-  // return res.status(500).json({ success: false, message: 'Config publish failed' });
-}
+    provision.manufacturingStatus = MANUFACTURING_STATUS.GROUP_B;
+    provision.provisionedAt = new Date();
+    provision.provisionedBy =
+      req.user.uid || req.user.userId || req.user._id;
 
-return res.status(200).json({
-  success: true,
-  message: `Serial ${req.params.serial} promoted to Group B and config queued to device.`,
-  data: updated,
-});
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    await provision.save();
+
+    return res.json({
+      success: true,
+      message: `Serial ${serialNumber} promoted to Group B`,
+      data: provision,
+    });
+  } catch (error) {
+    console.error('[GROUP B PROMOTION]', error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };

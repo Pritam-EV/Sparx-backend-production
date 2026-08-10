@@ -5,6 +5,9 @@
 // ALL existing field names are preserved so no controller breaks.
 // ─────────────────────────────────────────────────────────────────────────────
 const mongoose = require('mongoose');
+const {
+  CONFIG_ACK_STATUS,
+} = require('../config/deviceProtocol');
 
 // ── Rate history sub-schema (admin or owner change tracked, last 1 entry) ────
 const rateHistorySchema = new mongoose.Schema({
@@ -16,7 +19,11 @@ const rateHistorySchema = new mongoose.Schema({
 
 // ── NVS config push tracking sub-schema ──────────────────────────────────────
 const configAckSchema = new mongoose.Schema({
-  status:    { type: String, enum: ['ok', 'error', 'pending'], default: null },
+  status: {
+  type: String,
+  enum: Object.values(CONFIG_ACK_STATUS),
+  default: null,
+},
   ackedAt:   { type: Date, default: null },
   message:   { type: String, default: null },
   fwVersion: { type: String, default: null },
@@ -26,7 +33,11 @@ const configAckSchema = new mongoose.Schema({
 // ── Main device schema ────────────────────────────────────────────────────────
 const deviceSchema = new mongoose.Schema({
 
-  // ── IDENTITY (set by admin at dispatch, never changed after) ───────────────
+// IDENTITY
+// serialNumber is immutable hardware identity.
+// device_id is the current operational identity and may be changed
+// only through the controlled admin device-ID migration flow.
+
   device_id: {
     type: String,
     required: true,

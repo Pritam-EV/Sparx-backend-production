@@ -13,6 +13,10 @@
 //   from this provision doc and linkedDeviceId is stamped here.
 // ─────────────────────────────────────────────────────────────────────────────
 const mongoose = require('mongoose');
+const {
+  MANUFACTURING_STATUS,
+  PROVISION_STATUS,
+} = require('../config/deviceProtocol');
 
 // ── Rate history (same shape as device.js, last 1 entry) ─────────────────────
 const rateHistorySchema = new mongoose.Schema({
@@ -39,12 +43,12 @@ const deviceProvisionSchema = new mongoose.Schema({
   // group_b  → calibrated, dispatch-configured, ready to ship
   // dispatched → physically sent to owner
   // live       → Device (Group C) doc created and device is online
-  manufacturingStatus: {
-    type: String,
-    enum: ['group_a', 'group_b', 'dispatched', 'live'],
-    default: 'group_a',
-    index: true
-  },
+manufacturingStatus: {
+  type: String,
+  enum: Object.values(MANUFACTURING_STATUS),
+  default: MANUFACTURING_STATUS.GROUP_A,
+  index: true,
+},
 
   // ── IDENTITY ─────────────────────────────────────────────────────────────
   // serialNumber: set at Group A entry (factory-assigned, physical sticker)
@@ -127,11 +131,12 @@ const deviceProvisionSchema = new mongoose.Schema({
   // sent         → backend published config to MQTT provision topic
   // acknowledged → firmware echoed back ACK
   // failed       → firmware reported error
-  provisionStatus: {
-    type: String,
-    enum: ['pending', 'sent', 'acknowledged', 'failed'],
-    default: 'pending'
-  },
+provisionStatus: {
+  type: String,
+  enum: Object.values(PROVISION_STATUS),
+  default: PROVISION_STATUS.PENDING,
+},
+
   provisionedAt:       { type: Date, default: null },
   lastProvisionSentAt: { type: Date, default: null },
   provisionedBy:       { type: String, default: null },  // admin Firebase UID
@@ -164,15 +169,38 @@ deviceProvisionSchema.index({ manufacturingStatus: 1 });
 
 // ── Helper: promote Group A → Group B ─────────────────────────────────────────
 // Usage: await provision.promoteToGroupB(adminUID);
-deviceProvisionSchema.methods.promoteToGroupB = function(adminUID) {
-  const required = ['deviceId', 'wifiSSID', 'wifiPassword', 'location', 'lat', 'lng',
-                    'area', 'city', 'state', 'charger_type', 'rate'];
-  const missing = required.filter(f => !this[f] && this[f] !== 0);
-  if (missing.length) {
-    throw new Error(`Cannot promote to Group B. Missing fields: ${missing.join(', ')}`);
+deviceProvisionSchema.methods.promoteToGroupB = function (adminUID) {
+  const required = [
+    'deviceId',
+    'wifiSSID',
+    'wifiPassword',
+    'location',
+    'lat',
+    'lng',
+    'area',
+    'city',
+    'state',
+    'charger_type',
+    'rate',
+  ];
+
+  const missing = required.filter(
+    (field) =>
+      this[field] === undefined ||
+      this[field] === null ||
+      this[field] === ''
+  );
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Cannot promote to Group B. Missing fields: ${missing.join(', ')}`
+    );
   }
-  this.manufacturingStatus = 'group_b';
+
+  this.deviceId = String(this.deviceId).trim().toUpperCase();
+  this.manufacturingStatus = MANUFACTURING_STATUS.GROUP_B;
   this.provisionedBy = adminUID;
+  this.provisionedAt = new Date();
 };
 
 // ── Export ────────────────────────────────────────────────────────────────────
