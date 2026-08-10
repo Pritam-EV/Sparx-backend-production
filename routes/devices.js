@@ -16,11 +16,6 @@ const {
   publishDeviceConfig,
 } = require('../services/configPublisher');
 
-const {
-  normalizeDeviceId,
-} = require('../config/deviceProtocol');
-
-
 function getNormalizedDeviceId(value) {
   return normalizeDeviceId(value);
 }
