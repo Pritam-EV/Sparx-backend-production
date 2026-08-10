@@ -4,6 +4,7 @@ const Device = require('../models/device'); // Adjust path as needed
 const authMiddleware = require('../middleware/authMiddleware');
 const authorizeRoles = require('../middleware/roleMiddleware');
 const DeviceTelemetry = require("../models/deviceTelemetry");
+const { publishDeviceConfig } = require('../services/configPublisher');
 
 // Public route: Get all devices (any authenticated user)
 router.get('/', async (req, res) => {
@@ -336,8 +337,233 @@ router.post('/add', authMiddleware, authorizeRoles('admin'), async (req, res) =>
   }
 });
 
+// PATCH /api/devices/admin/config/:deviceId
+// Admin-only: update device config (cf/vf/currentRF, wifi, rate, location, meter, commercial)
+// and push new config to firmware via MQTT (publishDeviceConfig).
+router.patch(
+  '/admin/config/:deviceId',
+  authMiddleware,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      const deviceId = req.params.deviceId.toUpperCase();
 
+      // Load device
+      const device = await Device.findOne({ device_id: deviceId });
+      if (!device) {
+        return res.status(404).json({ error: 'Device not found' });
+      }
 
+      // Extract allowed fields from body
+      const {
+        // calibration
+        cf,
+        vf,
+        currentRF,
+        // wifi
+        wifiSSID,
+        wifiPassword,
+        // rate
+        rate,
+        // location
+        location,
+        lat,
+        lng,
+        area,
+        city,
+        state,
+        // meter
+        meterType,
+        meterConsumerNumber,
+        // commercial config
+        commercial,
+        // target firmware version (optional)
+        targetFirmwareVersion,
+      } = req.body;
 
+      // Apply calibration (admin-only)
+      if (typeof cf === 'number')        device.cf        = cf;
+      if (typeof vf === 'number')        device.vf        = vf;
+      if (typeof currentRF === 'number') device.currentRF = currentRF;
+
+      // Apply WiFi credentials (admin may overwrite)
+      if (typeof wifiSSID === 'string')     device.wifiSSID     = wifiSSID;
+      if (typeof wifiPassword === 'string') device.wifiPassword = wifiPassword;
+
+      // Apply location
+      if (typeof location === 'string') device.location = location;
+      if (typeof lat === 'number')      device.lat      = lat;
+      if (typeof lng === 'number')      device.lng      = lng;
+      if (typeof area === 'string')     device.area     = area;
+      if (typeof city === 'string')     device.city     = city;
+      if (typeof state === 'string')    device.state    = state;
+
+      // Apply meter fields
+      if (typeof meterType === 'string')          device.meterType          = meterType;
+      if (typeof meterConsumerNumber === 'string') device.meterConsumerNumber = meterConsumerNumber;
+
+      // Apply commercial object if provided
+      if (commercial && typeof commercial === 'object') {
+        device.commercial = {
+          ...device.commercial,
+          ...commercial,
+        };
+      }
+
+      // Apply target firmware version, if provided
+      if (typeof targetFirmwareVersion === 'string') {
+        device.targetFirmwareVersion = targetFirmwareVersion;
+      }
+
+      // Apply rate + rateHistory (admin change)
+      if (typeof rate === 'number') {
+        // track last change only
+        device.setRate(rate, req.user.uid || req.user.userId || 'admin', 'admin');
+      }
+
+      // Save changes
+      await device.save();
+
+      // Push config to firmware (NVS version increment + configAck.status='pending')
+      try {
+        await publishDeviceConfig(deviceId);
+      } catch (mqttErr) {
+        console.error('[ADMIN CONFIG] MQTT publish failed:', mqttErr.message);
+        // Still return 200 with device; surface MQTT error separately if needed
+        return res.status(200).json({
+          device,
+          warning: 'Device updated in DB, but MQTT config push failed',
+          mqttError: mqttErr.message,
+        });
+      }
+
+      return res.status(200).json({
+        device,
+        message: 'Device config updated and MQTT config push initiated',
+      });
+    } catch (err) {
+      console.error('[ADMIN CONFIG] Error:', err);
+      return res.status(500).json({ error: 'Failed to update device config', details: err.message });
+    }
+  }
+);
+
+// PATCH /api/devices/owner/wifi/:deviceId
+// Owner + admin: update WiFi credentials only and push config to device.
+// Owner can change WiFi any time; admin can also override via portal.
+router.patch(
+  '/owner/wifi/:deviceId',
+  authMiddleware,
+  authorizeRoles('owner', 'admin'),
+  async (req, res) => {
+    try {
+      const deviceId = req.params.deviceId.toUpperCase();
+      const { wifiSSID, wifiPassword } = req.body;
+
+      if (!wifiSSID || !wifiPassword) {
+        return res.status(400).json({ error: 'wifiSSID and wifiPassword are required' });
+      }
+
+      const device = await Device.findOne({ device_id: deviceId });
+      if (!device) {
+        return res.status(404).json({ error: 'Device not found' });
+      }
+
+      // Optional: check that owner really owns this device (if role is owner)
+      if (req.user.role === 'owner') {
+        const ownerIdStr = req.user.userId.toString();
+        const ownsDevice = Array.isArray(device.ownerId)
+          ? device.ownerId.some(id => id.toString() === ownerIdStr)
+          : device.ownerId && device.ownerId.toString() === ownerIdStr;
+
+        if (!ownsDevice) {
+          return res.status(403).json({ error: 'You do not own this device' });
+        }
+      }
+
+      // Update WiFi creds
+      device.wifiSSID     = wifiSSID;
+      device.wifiPassword = wifiPassword;
+
+      await device.save();
+
+      // Push config to firmware
+      try {
+        await publishDeviceConfig(deviceId);
+      } catch (mqttErr) {
+        console.error('[OWNER WIFI] MQTT publish failed:', mqttErr.message);
+        return res.status(200).json({
+          device,
+          warning: 'WiFi updated in DB, but MQTT config push failed',
+          mqttError: mqttErr.message,
+        });
+      }
+
+      return res.status(200).json({
+        device,
+        message: 'WiFi credentials updated and MQTT config push initiated',
+      });
+    } catch (err) {
+      console.error('[OWNER WIFI] Error:', err);
+      return res.status(500).json({ error: 'Failed to update WiFi credentials', details: err.message });
+    }
+  }
+);
+
+// POST /api/devices/:deviceId/claim
+// Owner self-claim flow: move onboardingStatus from 'pending' -> 'approved',
+// add ownerId[] entry, and stamp onboardedAt / onboardedBy.
+router.post(
+  '/:deviceId/claim',
+  authMiddleware,
+  authorizeRoles('owner'),
+  async (req, res) => {
+    try {
+      const deviceId = req.params.deviceId.toUpperCase();
+      const userId   = req.user.userId;  // from authMiddleware
+
+      const device = await Device.findOne({ device_id: deviceId });
+      if (!device) {
+        return res.status(404).json({ error: 'Device not found' });
+      }
+
+      // Only allow claim when onboardingStatus is 'pending'
+      if (device.onboardingStatus !== 'pending') {
+        return res.status(400).json({
+          error: 'Device is not in a claimable state',
+          onboardingStatus: device.onboardingStatus,
+        });
+      }
+
+      // Prevent duplicate owner entries
+      const alreadyOwner = Array.isArray(device.ownerId)
+        ? device.ownerId.some(id => id.toString() === userId.toString())
+        : device.ownerId && device.ownerId.toString() === userId.toString();
+
+      if (!alreadyOwner) {
+        // Append ownerId into array (create array if missing)
+        if (!Array.isArray(device.ownerId)) {
+          device.ownerId = [];
+        }
+        device.ownerId.push(userId);
+      }
+
+      // Mark onboarding as approved
+      device.onboardingStatus = 'approved';
+      device.onboardedAt      = new Date();
+      device.onboardedBy      = userId;
+
+      await device.save();
+
+      return res.status(200).json({
+        device,
+        message: 'Device claimed successfully',
+      });
+    } catch (err) {
+      console.error('[OWNER CLAIM] Error:', err);
+      return res.status(500).json({ error: 'Failed to claim device', details: err.message });
+    }
+  }
+);
 
 module.exports = router;
