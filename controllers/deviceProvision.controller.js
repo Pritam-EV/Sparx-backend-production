@@ -5,7 +5,6 @@ const {
   normalizeDeviceId,
   normalizeSerialNumber,
 } = require('../config/deviceProtocol');
-const Device          = require('../models/device');
 const { publishProvisionConfig } = require('../services/configPublisher');
 
 // ─── CREATE GROUP A ──────────────────────────────────────────────────────────
