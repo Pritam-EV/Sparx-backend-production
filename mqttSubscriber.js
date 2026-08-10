@@ -301,22 +301,7 @@ if (
 
     try {
 
-      // ── 1) Update Device document ────────────────────────────────────────
-      const devResult = await Device.updateOne(
-        { device_id: (deviceId || '').toUpperCase() },
-        {
-          $set: {
-            status,
-            relayOn,
-            voltage:     v,
-            current:     c,
-            power:       p,
-            totalenergy: totalEnergy,
-            lastSeen:    now,
-            updatedAt:   now,
-          }
-        }
-      );
+
 
       // If no Device document exists yet, auto-create from DeviceProvision
 const devKey = normalizeDeviceId(deviceId);
