@@ -1,5 +1,6 @@
 const DeviceProvision = require('../models/DeviceProvision');
 const Device          = require('../models/device');
+const { publishProvisionConfig } = require('../services/configPublisher');
 
 // ─── CREATE GROUP A ──────────────────────────────────────────────────────────
 exports.createGroupA = async (req, res) => {
@@ -212,11 +213,19 @@ exports.promoteToGroupB = async (req, res) => {
       { new: true }
     );
 
-    return res.status(200).json({
-      success: true,
-      message: `Serial ${req.params.serial} promoted to Group B.`,
-      data: updated,
-    });
+    try {
+  await publishProvisionConfig(updated._id);
+} catch (publishErr) {
+  console.error('[PROVISION] Config publish failed:', publishErr.message);
+  // You can decide whether to treat this as fatal or just warn:
+  // return res.status(500).json({ success: false, message: 'Config publish failed' });
+}
+
+return res.status(200).json({
+  success: true,
+  message: `Serial ${req.params.serial} promoted to Group B and config queued to device.`,
+  data: updated,
+});
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

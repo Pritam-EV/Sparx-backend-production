@@ -6,6 +6,7 @@ const Device = require('./models/device');
 const mqttClient = require('./mqttClient'); // shared connection
 const Receipt = require('./models/Receipt');
 const DeviceTelemetry = require('./models/deviceTelemetry');
+const DeviceProvision = require('./models/DeviceProvision');
 
 // FIX 2: top-of-file import (no more inline require inside handlers)
 const { completeSessionInternal } = require('./controllers/sessionController');
@@ -41,7 +42,7 @@ const topics = [
   'viz/+/Telemetry',
   'device/+/session/end',
   'viz/+/sessionend',
-  'viz/+/configACK',          // ← NEW: firmware ACK after receiving config payload
+  'viz/+/configAck',          // ← NEW: firmware ACK after receiving config payload
 ];
 mqttClient.subscribe(topics, { qos: 1 }, (err) => {
   if (err) {
@@ -114,55 +115,62 @@ mqttClient.subscribe(topics, { qos: 1 }, (err) => {
     // Expected payload:
     //   { "status": "ok" | "error", "fwVersion": "<string>", "message": "<string>" }
     // ─────────────────────────────────────────────────────────────────────────
-    if (parts[0] === 'viz' && parts[2] === 'configAck') {
-      const deviceId = parts[1].toUpperCase();
+if (parts[0] === 'viz' && parts[2] === 'configAck') {
+  const deviceId = parts[1].toUpperCase();
 
-      let ackMsg;
-      try {
-        ackMsg = JSON.parse(payload);
-      } catch (e) {
-        console.error(`[CONFIG ACK] Invalid JSON from ${deviceId}:`, e.message);
-        return;
-      }
+  let ackMsg;
+  try {
+    ackMsg = JSON.parse(payload);
+  } catch (e) {
+    console.error(`[CONFIG ACK] Invalid JSON from ${deviceId}:`, e.message);
+    return;
+  }
 
-      const ackStatus  = (ackMsg.status    || '').toLowerCase(); // "ok" | "error"
-      const fwVersion  =  ackMsg.fwVersion || null;              // firmware version echoed back
-      const ackMessage =  ackMsg.message   || null;              // human-readable detail
+  const ackStatus  = (ackMsg.status    || '').toLowerCase(); // "ok" | "error"
+  const fwVersion  =  ackMsg.fwVersion || null;
+  const ackMessage =  ackMsg.message   || null;
+  const ackNvsVer  =  ackMsg.nvsVersion != null ? Number(ackMsg.nvsVersion) : null;
 
-      if (!ackStatus) {
-        console.warn(`[CONFIG ACK] Missing status field from ${deviceId}:`, ackMsg);
-        return;
-      }
+  if (!ackStatus) {
+    console.warn(`[CONFIG ACK] Missing status field from ${deviceId}:`, ackMsg);
+    return;
+  }
 
-      try {
-        const ackUpdate = {
-          configAckStatus:  ackStatus,   // "ok" or "error"
-          configAckAt:      new Date(),  // timestamp ACK arrived at backend
-          configAckMessage: ackMessage,  // e.g. "Config applied, restarting"
-        };
-        if (fwVersion) {
-          ackUpdate.configAckFwVersion = fwVersion; // firmware version at time of ACK
-        }
+  try {
+    const update = {
+      'configAck.status':   ackStatus,
+      'configAck.ackedAt':  new Date(),
+      'configAck.message':  ackMessage,
+    };
 
-        const result = await Device.updateOne(
-          { device_id: deviceId },
-          { $set: ackUpdate }
-        );
-
-        if (result.matchedCount === 0) {
-          console.warn(`[CONFIG ACK] Device ${deviceId} not found in DB — ACK ignored`);
-        } else if (ackStatus === 'ok') {
-          console.log(`[CONFIG ACK] ✅ Device ${deviceId} applied config successfully` +
-            (fwVersion ? ` (fw: ${fwVersion})` : ''));
-        } else {
-          console.warn(`[CONFIG ACK] ⚠️ Device ${deviceId} reported config error: ${ackMessage}`);
-        }
-      } catch (err) {
-        console.error(`[CONFIG ACK] ❌ DB update failed for ${deviceId}:`, err.message);
-      }
-
-      return; // do NOT fall through to Telemetry handler
+    if (fwVersion) {
+      update['configAck.fwVersion']            = fwVersion;
+      update['lastKnownFirmwareVersion']       = fwVersion;
     }
+    if (ackNvsVer !== null && !Number.isNaN(ackNvsVer)) {
+      update['configAck.nvsVersion'] = ackNvsVer;
+      update['nvsVersion']           = ackNvsVer;
+    }
+
+    const result = await Device.updateOne(
+      { device_id: deviceId },
+      { $set: update }
+    );
+
+    if (result.matchedCount === 0 && result.n === undefined) {
+      console.warn(`[CONFIG ACK] Device ${deviceId} not found in DB — ACK ignored`);
+    } else if (ackStatus === 'ok') {
+      console.log(`[CONFIG ACK] ✅ Device ${deviceId} applied config successfully` +
+        (fwVersion ? ` (fw: ${fwVersion})` : ''));
+    } else {
+      console.warn(`[CONFIG ACK] ⚠️ Device ${deviceId} reported config error: ${ackMessage}`);
+    }
+  } catch (err) {
+    console.error(`[CONFIG ACK] ❌ DB update failed for ${deviceId}:`, err.message);
+  }
+
+  return; // do NOT fall through to Telemetry handler
+}
 
     // ─────────────────────────────────────────────────────────────────────────
     // BLOCK B: Telemetry — viz/<deviceId>/Telemetry
@@ -229,6 +237,69 @@ mqttClient.subscribe(topics, { qos: 1 }, (err) => {
           }
         }
       );
+
+      // If no Device document exists yet, auto-create from DeviceProvision
+const matched = devResult?.matchedCount ?? devResult?.n ?? 0;
+if (matched === 0) {
+  try {
+    const devKey = (deviceId || '').toUpperCase();
+    const provision = await DeviceProvision.findOne({
+      deviceId: devKey,
+      manufacturingStatus: { $in: ['group_b', 'dispatched'] },
+    }).lean();
+
+    if (provision) {
+      const newDevice = await Device.create({
+        device_id:        devKey,
+        serialNumber:     provision.serialNumber,
+        hardwareRevision: provision.hardwareRevision || '',
+        project:          provision.project || '',
+        charger_type:     provision.charger_type || '',
+        location:         provision.location || '',
+        lat:              provision.lat,
+        lng:              provision.lng,
+        area:             provision.area || '',
+        city:             provision.city || '',
+        state:            provision.state || '',
+        meterType:        provision.meterType || null,
+        meterConsumerNumber: provision.meterConsumerNumber || null,
+        cf:               provision.cf,
+        vf:               provision.vf,
+        currentRF:        provision.currentRF,
+        wifiSSID:         provision.wifiSSID,
+        wifiPassword:     provision.wifiPassword,
+        rate:             provision.rate,
+        rateHistory:      provision.rateHistory || [],
+        commercial:       provision.commercial || {},
+        targetFirmwareVersion: provision.targetFirmwareVersion || null,
+        lastKnownFirmwareVersion: provision.lastKnownFirmwareVersion || null,
+        nvsVersion:       provision.nvsVersion || 0,
+        onboardingStatus: 'pending',
+        provisionRef:     provision._id,
+        status,
+        relayOn,
+        totalenergy:      totalEnergy,
+        lastSeen:         now,
+      });
+
+      await DeviceProvision.updateOne(
+        { _id: provision._id },
+        {
+          $set: {
+            manufacturingStatus: 'live',
+            linkedDeviceId:      newDevice._id,
+          },
+        }
+      );
+
+      console.log(`[MQTT AUTO-DEVICE] Created Device ${devKey} from provision ${provision.serialNumber}`);
+    } else {
+      console.warn(`[MQTT AUTO-DEVICE] No Device or DeviceProvision found for ${devKey}`);
+    }
+  } catch (createErr) {
+    console.error('[MQTT AUTO-DEVICE] Failed to auto-create Device:', createErr.message);
+  }
+}
 
       // console.log(
       //   '[MQTT DEBUG] Device update', deviceId,
