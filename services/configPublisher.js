@@ -1,4 +1,5 @@
 const mqttClient = require('../mqttClient');
+
 const DeviceProvision = require('../models/DeviceProvision');
 const Device = require('../models/device');
 
@@ -16,9 +17,15 @@ function publishAsync(topic, payload) {
     mqttClient.publish(
       topic,
       JSON.stringify(payload),
-      { qos: 1, retain: false },
+      {
+        qos: 1,
+        retain: false,
+      },
       (error) => {
-        if (error) return reject(error);
+        if (error) {
+          return reject(error);
+        }
+
         resolve();
       }
     );
@@ -46,7 +53,7 @@ function buildFirmwareConfig({
     vf,
     currentRF,
 
-    // Firmware contract names
+    // Firmware names.
     ssid: wifiSSID || '',
     password: wifiPassword || '',
 
@@ -54,20 +61,29 @@ function buildFirmwareConfig({
   };
 }
 
-async function publishProvisionConfig(provisionId) {
-  const provision = await DeviceProvision.findById(provisionId);
+async function publishProvisionConfig(
+  provisionId
+) {
+  const provision =
+    await DeviceProvision.findById(provisionId);
 
   if (!provision) {
-    throw new Error('DeviceProvision not found');
-  }
-
-  if (!provision.serialNumber || !provision.deviceId) {
     throw new Error(
-      'Provision must contain serialNumber and deviceId'
+      'DeviceProvision not found'
     );
   }
 
-  const nextNvsVersion = Number(provision.nvsVersion || 0) + 1;
+  if (
+    !provision.serialNumber ||
+    !provision.deviceId
+  ) {
+    throw new Error(
+      'Provision requires serialNumber and deviceId'
+    );
+  }
+
+  const nextNvsVersion =
+    Number(provision.nvsVersion || 0) + 1;
 
   const payload = buildFirmwareConfig({
     serialNumber: provision.serialNumber,
@@ -80,14 +96,17 @@ async function publishProvisionConfig(provisionId) {
     nvsVersion: nextNvsVersion,
   });
 
-  await publishAsync(
-    buildConfigTopic(provision.serialNumber),
-    payload
+  const topic = buildConfigTopic(
+    provision.serialNumber
   );
 
+  await publishAsync(topic, payload);
+
   provision.nvsVersion = nextNvsVersion;
-  provision.provisionStatus = PROVISION_STATUS.SENT;
+  provision.provisionStatus =
+    PROVISION_STATUS.SENT;
   provision.lastProvisionSentAt = new Date();
+
   provision.configAck = {
     status: CONFIG_ACK_STATUS.PENDING,
     ackedAt: null,
@@ -99,21 +118,24 @@ async function publishProvisionConfig(provisionId) {
   await provision.save();
 
   return {
-    topic: buildConfigTopic(provision.serialNumber),
+    topic,
     payload,
     nvsVersion: nextNvsVersion,
   };
 }
 
 async function publishDeviceConfig(deviceId) {
-  const normalizedDeviceId = normalizeDeviceId(deviceId);
+  const normalizedDeviceId =
+    normalizeDeviceId(deviceId);
 
   const device = await Device.findOne({
     device_id: normalizedDeviceId,
   });
 
   if (!device) {
-    throw new Error(`Device ${normalizedDeviceId} not found`);
+    throw new Error(
+      `Device ${normalizedDeviceId} not found`
+    );
   }
 
   if (!device.serialNumber) {
@@ -122,7 +144,8 @@ async function publishDeviceConfig(deviceId) {
     );
   }
 
-  const nextNvsVersion = Number(device.nvsVersion || 0) + 1;
+  const nextNvsVersion =
+    Number(device.nvsVersion || 0) + 1;
 
   const payload = buildFirmwareConfig({
     serialNumber: device.serialNumber,
@@ -135,10 +158,11 @@ async function publishDeviceConfig(deviceId) {
     nvsVersion: nextNvsVersion,
   });
 
-  await publishAsync(
-    buildConfigTopic(device.serialNumber),
-    payload
+  const topic = buildConfigTopic(
+    device.serialNumber
   );
+
+  await publishAsync(topic, payload);
 
   device.nvsVersion = nextNvsVersion;
   device.configAck = {
@@ -152,7 +176,7 @@ async function publishDeviceConfig(deviceId) {
   await device.save();
 
   return {
-    topic: buildConfigTopic(device.serialNumber),
+    topic,
     payload,
     nvsVersion: nextNvsVersion,
   };

@@ -6,7 +6,9 @@ const router = express.Router();
 const Device = require('../models/device');
 const DeviceProvision = require('../models/DeviceProvision');
 const DeviceTelemetry = require('../models/deviceTelemetry');
-
+const {
+  normalizeDeviceId,
+} = require('../config/deviceProtocol');
 const authMiddleware = require('../middleware/authMiddleware');
 const authorizeRoles = require('../middleware/roleMiddleware');
 
@@ -18,6 +20,11 @@ const {
   normalizeDeviceId,
 } = require('../config/deviceProtocol');
 
+
+function getNormalizedDeviceId(value) {
+  return normalizeDeviceId(value);
+}
+
 function getActorId(req) {
   return (
     req.user?.uid ||
@@ -27,18 +34,14 @@ function getActorId(req) {
   );
 }
 
-function getNormalizedDeviceId(value) {
-  return normalizeDeviceId(value);
-}
-
-function isOwnerOfDevice(device, userId) {
-  if (!userId || !Array.isArray(device.ownerId)) {
-    return false;
-  }
-
-  return device.ownerId.some(
-    (ownerId) =>
-      ownerId.toString() === userId.toString()
+function isOwnerOfDevice(device, actorId) {
+  return (
+    Array.isArray(device.ownerId) &&
+    device.ownerId.some(
+      (ownerId) =>
+        ownerId.toString() ===
+        actorId?.toString()
+    )
   );
 }
 
@@ -48,7 +51,6 @@ function sanitizeDevice(device) {
       ? device.toObject()
       : { ...device };
 
-  // Never expose WiFi password in API responses.
   delete output.wifiPassword;
 
   return output;
@@ -418,34 +420,18 @@ router.patch(
   authorizeRoles('admin'),
   async (req, res) => {
     try {
-      const deviceId = getNormalizedDeviceId(
+      const deviceId = normalizeDeviceId(
         req.params.deviceId
       );
 
-      if (!deviceId) {
-        return res.status(400).json({
-          error: 'Device ID is required',
-        });
-      }
-
-      // Prevent identity changes through the normal config route.
       if (
-        Object.prototype.hasOwnProperty.call(
-          req.body,
-          'device_id'
-        ) ||
-        Object.prototype.hasOwnProperty.call(
-          req.body,
-          'deviceId'
-        ) ||
-        Object.prototype.hasOwnProperty.call(
-          req.body,
-          'serialNumber'
-        )
+        req.body.device_id !== undefined ||
+        req.body.deviceId !== undefined ||
+        req.body.serialNumber !== undefined
       ) {
         return res.status(400).json({
           error:
-            'Identity changes must use the dedicated device identity endpoint',
+            'Use the dedicated identity endpoint for device ID changes',
         });
       }
 
@@ -463,35 +449,39 @@ router.patch(
         cf,
         vf,
         currentRF,
-
         wifiSSID,
         wifiPassword,
-
         rate,
-
         location,
         lat,
         lng,
         area,
         city,
         state,
-
         meterType,
         meterConsumerNumber,
-
         commercial,
         targetFirmwareVersion,
       } = req.body;
 
-      // Validate numeric fields before modifying the document.
-      assertFiniteNumber(cf, 'cf');
-      assertFiniteNumber(vf, 'vf');
-      assertFiniteNumber(currentRF, 'currentRF');
-      assertFiniteNumber(rate, 'rate');
-      assertFiniteNumber(lat, 'lat');
-      assertFiniteNumber(lng, 'lng');
+      for (const [field, value] of Object.entries({
+        cf,
+        vf,
+        currentRF,
+        rate,
+        lat,
+        lng,
+      })) {
+        if (
+          value !== undefined &&
+          !Number.isFinite(Number(value))
+        ) {
+          return res.status(400).json({
+            error: `${field} must be numeric`,
+          });
+        }
+      }
 
-      // Calibration.
       if (cf !== undefined) {
         device.cf = Number(cf);
       }
@@ -504,34 +494,22 @@ router.patch(
         device.currentRF = Number(currentRF);
       }
 
-      // WiFi.
       if (wifiSSID !== undefined) {
-        if (
-          typeof wifiSSID !== 'string' ||
-          wifiSSID.trim().length === 0
-        ) {
-          return res.status(400).json({
-            error: 'wifiSSID must be a non-empty string',
-          });
-        }
-
-        device.wifiSSID = wifiSSID.trim();
+        device.wifiSSID = String(wifiSSID).trim();
       }
 
       if (wifiPassword !== undefined) {
-        if (
-          typeof wifiPassword !== 'string' ||
-          wifiPassword.length === 0
-        ) {
-          return res.status(400).json({
-            error: 'wifiPassword must be a non-empty string',
-          });
-        }
-
-        device.wifiPassword = wifiPassword;
+        device.wifiPassword = String(wifiPassword);
       }
 
-      // Location.
+      if (rate !== undefined) {
+        device.setRate(
+          Number(rate),
+          getActorId(req) || 'admin',
+          'admin'
+        );
+      }
+
       if (location !== undefined) {
         device.location = location;
       }
@@ -556,7 +534,6 @@ router.patch(
         device.state = state;
       }
 
-      // Meter.
       if (meterType !== undefined) {
         device.meterType = meterType;
       }
@@ -566,21 +543,7 @@ router.patch(
           meterConsumerNumber;
       }
 
-      // Commercial configuration.
-      if (
-        commercial !== undefined &&
-        commercial !== null
-      ) {
-        if (
-          typeof commercial !== 'object' ||
-          Array.isArray(commercial)
-        ) {
-          return res.status(400).json({
-            error:
-              'commercial must be a JSON object',
-          });
-        }
-
+      if (commercial !== undefined) {
         device.commercial = {
           ...(device.commercial?.toObject
             ? device.commercial.toObject()
@@ -589,47 +552,19 @@ router.patch(
         };
       }
 
-      // Firmware target version.
       if (targetFirmwareVersion !== undefined) {
         device.targetFirmwareVersion =
           targetFirmwareVersion;
       }
 
-      // Rate and last-change history.
-      if (rate !== undefined) {
-        const actorId = getActorId(req);
-
-        device.setRate(
-          Number(rate),
-          actorId || 'admin',
-          'admin'
-        );
-      }
-
       await device.save();
 
-      let publishResult;
-
-      try {
-        publishResult = await publishDeviceConfig(
+      const publishResult =
+        await publishDeviceConfig(
           device.device_id
         );
-      } catch (mqttError) {
-        console.error(
-          '[ADMIN CONFIG] MQTT publish failed:',
-          mqttError.message
-        );
 
-        return res.status(502).json({
-          success: false,
-          error:
-            'Device was updated in database, but MQTT configuration publish failed',
-          mqttError: mqttError.message,
-          device: sanitizeDevice(device),
-        });
-      }
-
-      return res.status(200).json({
+      return res.json({
         success: true,
         message:
           'Device configuration updated and published',
@@ -637,25 +572,16 @@ router.patch(
         config: {
           topic: publishResult.topic,
           nvsVersion: publishResult.nvsVersion,
-          payload: {
-            ...publishResult.payload,
-            password: undefined,
-          },
         },
       });
     } catch (error) {
-      console.error('[ADMIN CONFIG] Error:', error);
+      console.error('[ADMIN CONFIG]', error);
 
-      return res.status(
-        error.statusCode || 500
-      ).json({
+      return res.status(502).json({
         success: false,
         error:
-          error.statusCode === 400
-            ? error.message
-            : 'Failed to update device configuration',
-        details:
-          error.statusCode ? undefined : error.message,
+          'Database update succeeded or partially succeeded, but configuration publish failed',
+        details: error.message,
       });
     }
   }
@@ -674,7 +600,7 @@ router.patch(
   authorizeRoles('owner', 'admin'),
   async (req, res) => {
     try {
-      const deviceId = getNormalizedDeviceId(
+      const deviceId = normalizeDeviceId(
         req.params.deviceId
       );
 
@@ -685,7 +611,7 @@ router.patch(
 
       if (
         typeof wifiSSID !== 'string' ||
-        wifiSSID.trim().length === 0
+        wifiSSID.trim() === ''
       ) {
         return res.status(400).json({
           error:
@@ -721,7 +647,7 @@ router.patch(
         ) {
           return res.status(403).json({
             error:
-              'Device must be approved before owner configuration is allowed',
+              'Device must be approved before owner configuration',
           });
         }
 
@@ -738,28 +664,12 @@ router.patch(
 
       await device.save();
 
-      let publishResult;
-
-      try {
-        publishResult = await publishDeviceConfig(
+      const publishResult =
+        await publishDeviceConfig(
           device.device_id
         );
-      } catch (mqttError) {
-        console.error(
-          '[OWNER WIFI] MQTT publish failed:',
-          mqttError.message
-        );
 
-        return res.status(502).json({
-          success: false,
-          error:
-            'WiFi was updated in database, but MQTT configuration publish failed',
-          mqttError: mqttError.message,
-          device: sanitizeDevice(device),
-        });
-      }
-
-      return res.status(200).json({
+      return res.json({
         success: true,
         message:
           'WiFi credentials updated and published',
@@ -767,19 +677,15 @@ router.patch(
         config: {
           topic: publishResult.topic,
           nvsVersion: publishResult.nvsVersion,
-          payload: {
-            ...publishResult.payload,
-            password: undefined,
-          },
         },
       });
     } catch (error) {
-      console.error('[OWNER WIFI] Error:', error);
+      console.error('[OWNER WIFI]', error);
 
-      return res.status(500).json({
+      return res.status(502).json({
         success: false,
         error:
-          'Failed to update WiFi credentials',
+          'WiFi database update or MQTT publish failed',
         details: error.message,
       });
     }
@@ -806,19 +712,13 @@ router.patch(
     const session = await mongoose.startSession();
 
     try {
-      const oldDeviceId = getNormalizedDeviceId(
+      const oldDeviceId = normalizeDeviceId(
         req.params.deviceId
       );
 
-      const newDeviceId = getNormalizedDeviceId(
+      const newDeviceId = normalizeDeviceId(
         req.body.newDeviceId
       );
-
-      if (!oldDeviceId) {
-        return res.status(400).json({
-          error: 'Current device ID is required',
-        });
-      }
 
       if (!newDeviceId) {
         return res.status(400).json({
@@ -829,7 +729,7 @@ router.patch(
       if (oldDeviceId === newDeviceId) {
         return res.status(400).json({
           error:
-            'newDeviceId must be different from the current device ID',
+            'newDeviceId must be different from current device ID',
         });
       }
 
@@ -848,38 +748,26 @@ router.patch(
           throw error;
         }
 
-        const duplicateDevice = await Device.findOne({
-          device_id: newDeviceId,
-          _id: { $ne: device._id },
-        })
-          .session(session)
-          .lean();
-
-        if (duplicateDevice) {
-          const error = new Error(
-            `Device ID ${newDeviceId} is already in use`
-          );
-          error.statusCode = 409;
-          throw error;
-        }
-
-        const duplicateProvision =
-          await DeviceProvision.findOne({
-            deviceId: newDeviceId,
-            serialNumber: {
-              $ne: device.serialNumber,
-            },
+        const duplicate =
+          await Device.findOne({
+            device_id: newDeviceId,
+            _id: { $ne: device._id },
           })
             .session(session)
             .lean();
 
-        if (duplicateProvision) {
+        if (duplicate) {
           const error = new Error(
-            `Device ID ${newDeviceId} is already assigned in provisioning`
+            'New device ID is already in use'
           );
           error.statusCode = 409;
           throw error;
         }
+
+        const provision =
+          await DeviceProvision.findOne({
+            serialNumber: device.serialNumber,
+          }).session(session);
 
         device.device_id = newDeviceId;
 
@@ -888,82 +776,45 @@ router.patch(
           validateModifiedOnly: true,
         });
 
-        await DeviceProvision.updateOne(
-          {
-            serialNumber: device.serialNumber,
-          },
-          {
-            $set: {
-              deviceId: newDeviceId,
-            },
-          },
-          {
+        if (provision) {
+          provision.deviceId = newDeviceId;
+          await provision.save({
             session,
-            runValidators: true,
-          }
-        );
+            validateModifiedOnly: true,
+          });
+        }
 
         updatedDevice = device;
       });
 
-      // The transaction is committed before MQTT publish.
-      // The publisher uses the new device ID and the unchanged serial number.
-      let publishResult;
+      const publishResult =
+        await publishDeviceConfig(newDeviceId);
 
-      try {
-        publishResult = await publishDeviceConfig(
-          newDeviceId
-        );
-      } catch (mqttError) {
-        console.error(
-          '[DEVICE ID MIGRATION] MQTT publish failed:',
-          mqttError.message
-        );
-
-        return res.status(502).json({
-          success: false,
-          error:
-            'Device ID was updated in database, but firmware configuration publish failed',
-          mqttError: mqttError.message,
-          device: sanitizeDevice(updatedDevice),
-        });
-      }
-
-      return res.status(200).json({
+      return res.json({
         success: true,
         message:
           'Device ID updated and configuration published',
         previousDeviceId: oldDeviceId,
         deviceId: newDeviceId,
-        serialNumber: updatedDevice.serialNumber,
+        serialNumber:
+          updatedDevice.serialNumber,
         device: sanitizeDevice(updatedDevice),
         config: {
           topic: publishResult.topic,
           nvsVersion: publishResult.nvsVersion,
-          payload: {
-            ...publishResult.payload,
-            password: undefined,
-          },
         },
       });
     } catch (error) {
       console.error(
-        '[DEVICE ID MIGRATION] Error:',
+        '[DEVICE ID MIGRATION]',
         error
       );
 
       return res.status(
-        error.statusCode || 500
+        error.statusCode || 502
       ).json({
         success: false,
-        error:
-          error.statusCode
-            ? error.message
-            : 'Device ID migration failed',
-        details:
-          error.statusCode
-            ? undefined
-            : error.message,
+        error: error.message,
       });
     } finally {
       await session.endSession();
@@ -1061,6 +912,6 @@ if (req.user?.role === 'owner') {
       res.status(500).json({ error: "Internal server error" });
     }
   });
-  
+
 
 module.exports = router;

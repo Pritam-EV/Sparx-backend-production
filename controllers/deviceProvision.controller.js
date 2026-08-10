@@ -1,5 +1,5 @@
 const DeviceProvision = require('../models/DeviceProvision');
-const Device = require('../models/device');
+
 const {
   MANUFACTURING_STATUS,
   normalizeDeviceId,
@@ -22,11 +22,13 @@ exports.createGroupA = async (req, res) => {
     if (!serialNumber || !hardwareRevision) {
       return res.status(400).json({
         success: false,
-        message: 'serialNumber and hardwareRevision are required',
+        message:
+          'serialNumber and hardwareRevision are required',
       });
     }
 
-    const normalizedSerial = normalizeSerialNumber(serialNumber);
+    const normalizedSerial =
+      normalizeSerialNumber(serialNumber);
 
     const existing = await DeviceProvision.findOne({
       serialNumber: normalizedSerial,
@@ -35,19 +37,26 @@ exports.createGroupA = async (req, res) => {
     if (existing) {
       return res.status(409).json({
         success: false,
-        message: `Serial number ${normalizedSerial} already exists`,
+        message:
+          `Serial number ${normalizedSerial} already exists`,
       });
     }
 
     const provision = await DeviceProvision.create({
       serialNumber: normalizedSerial,
-      hardwareRevision: String(hardwareRevision).trim(),
+      hardwareRevision: hardwareRevision.trim(),
       project: project || '',
       pcbBatch: pcbBatch || null,
       manufacturedAt: manufacturedAt || new Date(),
       notes: notes || '',
-      manufacturingStatus: MANUFACTURING_STATUS.GROUP_A,
-      provisionedBy: req.user.uid || req.user.userId || req.user._id,
+      manufacturingStatus:
+        MANUFACTURING_STATUS.GROUP_A,
+      provisionStatus: 'pending',
+      provisionedBy:
+        req.user?.uid ||
+        req.user?.userId ||
+        req.user?._id ||
+        null,
     });
 
     return res.status(201).json({
@@ -67,10 +76,13 @@ exports.createGroupA = async (req, res) => {
 // ─── GET SINGLE GROUP A BY SERIAL ────────────────────────────────────────────
 exports.getGroupA = async (req, res) => {
   try {
-    const provision = await DeviceProvision.findOne({
-      serialNumber:        req.params.serial,
-      manufacturingStatus: 'group_a',        // ← correct field + value
-    });
+const provision = await DeviceProvision.findOne({
+  serialNumber: normalizeSerialNumber(
+    req.params.serial
+  ),
+  manufacturingStatus:
+    MANUFACTURING_STATUS.GROUP_A,
+});
     if (!provision) return res.status(404).json({ success: false, message: 'Not found.' });
     return res.json({ success: true, data: provision });
   } catch (err) {
@@ -222,17 +234,20 @@ exports.deleteGroupA = async (req, res) => {
 // ─── PROMOTE GROUP A → GROUP B ────────────────────────────────────────────────
 exports.promoteToGroupB = async (req, res) => {
   try {
-    const serialNumber = normalizeSerialNumber(req.params.serial);
+    const serialNumber =
+      normalizeSerialNumber(req.params.serial);
 
     const provision = await DeviceProvision.findOne({
       serialNumber,
-      manufacturingStatus: MANUFACTURING_STATUS.GROUP_A,
+      manufacturingStatus:
+        MANUFACTURING_STATUS.GROUP_A,
     });
 
     if (!provision) {
       return res.status(404).json({
         success: false,
-        message: 'Group A record not found or already promoted',
+        message:
+          'Group A record not found or already promoted',
       });
     }
 
@@ -258,7 +273,8 @@ exports.promoteToGroupB = async (req, res) => {
       notes,
     } = req.body;
 
-    const normalizedDeviceId = normalizeDeviceId(deviceId);
+    const normalizedDeviceId =
+      normalizeDeviceId(deviceId);
 
     const required = {
       deviceId: normalizedDeviceId,
@@ -281,71 +297,99 @@ exports.promoteToGroupB = async (req, res) => {
           value === null ||
           value === ''
       )
-      .map(([key]) => key);
+      .map(([field]) => field);
 
     if (missing.length > 0) {
       return res.status(400).json({
         success: false,
-        message: `Missing Group B fields: ${missing.join(', ')}`,
+        message:
+          `Missing Group B fields: ${missing.join(', ')}`,
       });
     }
 
-    const [deviceIdInUse, provisionIdInUse] = await Promise.all([
-      Device.findOne({ device_id: normalizedDeviceId }).lean(),
-      DeviceProvision.findOne({
-        deviceId: normalizedDeviceId,
-        _id: { $ne: provision._id },
-      }).lean(),
-    ]);
+    const duplicate = await DeviceProvision.findOne({
+      deviceId: normalizedDeviceId,
+      _id: { $ne: provision._id },
+    });
 
-    if (deviceIdInUse || provisionIdInUse) {
+    if (duplicate) {
       return res.status(409).json({
         success: false,
-        message: `Device ID ${normalizedDeviceId} is already assigned`,
+        message:
+          `Device ID ${normalizedDeviceId} is already assigned`,
       });
     }
 
     provision.deviceId = normalizedDeviceId;
     provision.wifiSSID = wifiSSID;
     provision.wifiPassword = wifiPassword;
+
     provision.cf = cf ?? provision.cf;
     provision.vf = vf ?? provision.vf;
-    provision.currentRF = currentRF ?? provision.currentRF;
-    provision.rate = rate;
+    provision.currentRF =
+      currentRF ?? provision.currentRF;
+
+    provision.rate = Number(rate);
+
     provision.location = location;
-    provision.lat = lat;
-    provision.lng = lng;
+    provision.lat = Number(lat);
+    provision.lng = Number(lng);
     provision.area = area;
     provision.city = city;
     provision.state = state;
     provision.charger_type = charger_type;
+
     provision.meterType = meterType ?? null;
-    provision.meterConsumerNumber = meterConsumerNumber ?? null;
-    provision.commercial = commercial ?? provision.commercial;
+    provision.meterConsumerNumber =
+      meterConsumerNumber ?? null;
+
+    provision.commercial =
+      commercial ?? provision.commercial;
+
     provision.targetFirmwareVersion =
       targetFirmwareVersion ?? null;
+
     provision.notes = notes ?? provision.notes;
 
     provision.rateHistory = [
       {
-        rate,
-        setBy: req.user.uid || req.user.userId || req.user._id,
+        rate: Number(rate),
+        setBy:
+          req.user?.uid ||
+          req.user?.userId ||
+          req.user?._id ||
+          'admin',
         setByRole: 'admin',
         setAt: new Date(),
       },
     ];
 
-    provision.manufacturingStatus = MANUFACTURING_STATUS.GROUP_B;
+    provision.manufacturingStatus =
+      MANUFACTURING_STATUS.GROUP_B;
+
+    provision.provisionStatus = 'pending';
     provision.provisionedAt = new Date();
     provision.provisionedBy =
-      req.user.uid || req.user.userId || req.user._id;
+      req.user?.uid ||
+      req.user?.userId ||
+      req.user?._id ||
+      null;
 
     await provision.save();
 
-    return res.json({
+    // Publish the initial Group B configuration.
+    const publishResult =
+      await publishProvisionConfig(provision._id);
+
+    return res.status(200).json({
       success: true,
-      message: `Serial ${serialNumber} promoted to Group B`,
+      message:
+        `Serial ${serialNumber} promoted to Group B`,
       data: provision,
+      config: {
+        topic: publishResult.topic,
+        nvsVersion: publishResult.nvsVersion,
+      },
     });
   } catch (error) {
     console.error('[GROUP B PROMOTION]', error);

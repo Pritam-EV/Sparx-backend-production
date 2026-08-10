@@ -319,102 +319,133 @@ if (
       );
 
       // If no Device document exists yet, auto-create from DeviceProvision
-const matched = devResult?.matchedCount ?? devResult?.n ?? 0;
+const devKey = normalizeDeviceId(deviceId);
+
+const devResult = await Device.updateOne(
+  { device_id: devKey },
+  {
+    $set: {
+      status,
+      relayOn,
+      voltage: v,
+      current: c,
+      power: p,
+      totalenergy: totalEnergy,
+      lastSeen: now,
+      updatedAt: now,
+    },
+  }
+);
+
+const matched =
+  devResult?.matchedCount ??
+  devResult?.n ??
+  0;
+
 if (matched === 0) {
-  try {
-    const devKey = (deviceId || '').toUpperCase();
-    const provision = await DeviceProvision.findOne({
+  const provision =
+    await DeviceProvision.findOne({
       deviceId: devKey,
-      manufacturingStatus: { $in: ['group_b', 'dispatched'] },
-    }).lean();
+      manufacturingStatus: {
+        $in: ['group_b', 'dispatched'],
+      },
+    });
 
-    if (provision) {
-const newDevice = await Device.create({
-  device_id: normalizeDeviceId(provision.deviceId),
-  serialNumber: provision.serialNumber,
+  if (provision) {
+    try {
+      const newDevice = await Device.create({
+        device_id: devKey,
+        serialNumber: provision.serialNumber,
 
-  hardwareRevision:
-    provision.hardwareRevision || '',
+        hardwareRevision:
+          provision.hardwareRevision || '',
 
-  project:
-    provision.project || '',
+        project:
+          provision.project || '',
 
-  charger_type:
-    provision.charger_type || '',
+        charger_type:
+          provision.charger_type || '',
 
-  location:
-    provision.location,
+        location: provision.location,
+        lat: provision.lat,
+        lng: provision.lng,
+        area: provision.area,
+        city: provision.city,
+        state: provision.state,
 
-  lat: provision.lat,
-  lng: provision.lng,
-  area: provision.area,
-  city: provision.city,
-  state: provision.state,
+        meterType:
+          provision.meterType || null,
 
-  meterType:
-    provision.meterType || null,
+        meterConsumerNumber:
+          provision.meterConsumerNumber || null,
 
-  meterConsumerNumber:
-    provision.meterConsumerNumber || null,
+        cf: provision.cf,
+        vf: provision.vf,
+        currentRF: provision.currentRF,
 
-  cf: provision.cf,
-  vf: provision.vf,
-  currentRF: provision.currentRF,
+        wifiSSID:
+          provision.wifiSSID || null,
 
-  wifiSSID:
-    provision.wifiSSID || null,
+        wifiPassword:
+          provision.wifiPassword || null,
 
-  wifiPassword:
-    provision.wifiPassword || null,
+        rate: provision.rate,
+        rateHistory:
+          provision.rateHistory || [],
 
-  rate: provision.rate,
+        commercial:
+          provision.commercial || {},
 
-  rateHistory:
-    provision.rateHistory || [],
+        targetFirmwareVersion:
+          provision.targetFirmwareVersion || null,
 
-  commercial:
-    provision.commercial || {},
+        lastKnownFirmwareVersion:
+          provision.lastKnownFirmwareVersion || null,
 
-  targetFirmwareVersion:
-    provision.targetFirmwareVersion || null,
+        nvsVersion:
+          provision.nvsVersion || 0,
 
-  lastKnownFirmwareVersion:
-    provision.lastKnownFirmwareVersion || null,
+        onboardingStatus: 'pending',
+        provisionRef: provision._id,
 
-  nvsVersion:
-    provision.nvsVersion || 0,
-
-  onboardingStatus: 'pending',
-  provisionRef: provision._id,
-
-  status,
-  relayOn,
-  totalenergy: totalEnergy,
-  lastSeen: now,
-});
+        status,
+        relayOn,
+        totalenergy: totalEnergy,
+        lastSeen: now,
+      });
 
       await DeviceProvision.updateOne(
         { _id: provision._id },
         {
           $set: {
             manufacturingStatus: 'live',
-            linkedDeviceId:      newDevice._id,
+            linkedDeviceId: newDevice._id,
           },
         }
       );
-const provision = await DeviceProvision.findOne({
-  deviceId: normalizeDeviceId(deviceId),
-  manufacturingStatus: {
-    $in: ['group_b', 'dispatched'],
-  },
-});
 
-      console.log(`[MQTT AUTO-DEVICE] Created Device ${devKey} from provision ${provision.serialNumber}`);
-    } else {
-      console.warn(`[MQTT AUTO-DEVICE] No Device or DeviceProvision found for ${devKey}`);
+      console.log(
+        `[AUTO DEVICE] Created ${devKey} ` +
+        `from serial ${provision.serialNumber}`
+      );
+    } catch (error) {
+      // Duplicate-key errors can occur if two telemetry
+      // packets arrive simultaneously.
+      if (error.code === 11000) {
+        console.warn(
+          `[AUTO DEVICE] Duplicate creation avoided for ${devKey}`
+        );
+      } else {
+        console.error(
+          '[AUTO DEVICE] Creation failed:',
+          error.message
+        );
+      }
     }
-  } catch (createErr) {
-    console.error('[MQTT AUTO-DEVICE] Failed to auto-create Device:', createErr.message);
+  } else {
+    console.warn(
+      `[AUTO DEVICE] No Group B provision found for ${devKey}`
+    );
   }
 }
 
