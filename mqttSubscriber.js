@@ -34,7 +34,22 @@ const CRON_STALE_TELEMETRY_MS = 5 * 60 * 1000; // 5 minutes
 // key: deviceId (uppercase), value: number of consecutive ticks seen
 const availableNoSessionTicks = new Map();
 // ─────────────────────────────────────────────────────────────────────────────
+function deviceIdCandidates(value) {
+  const raw = String(value || "").trim();
 
+  if (!raw) {
+    return [];
+  }
+
+  return [
+    ...new Set([
+      raw,
+      raw.toUpperCase(),
+      raw.toLowerCase(),
+      normalizeDeviceId(raw),
+    ]),
+  ].filter(Boolean);
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN SUBSCRIBER
 // ─────────────────────────────────────────────────────────────────────────────
@@ -305,9 +320,10 @@ if (
 
       // If no Device document exists yet, auto-create from DeviceProvision
 const devKey = normalizeDeviceId(deviceId);
+const deviceIds = deviceIdCandidates(deviceId);
 
 const devResult = await Device.updateOne(
-  { device_id: devKey },
+  { device_id: { $in: deviceIds } },
   {
     $set: {
       status,
@@ -497,6 +513,10 @@ if (matched === 0) {
           }
         );
 
+        // Device is actively reporting a sessionId — reset available-tick counter
+availableNoSessionTicks.delete(deviceId.toUpperCase());
+
+
         // console.log(
         //   '[MQTT DEBUG] Session update', sessionId,
         //   'matched=',  sessResult?.matchedCount  ?? sessResult?.n,
@@ -565,8 +585,7 @@ if (matched === 0) {
         // ── END ETA ENGINE ───────────────────────────────────────────────
       }
 
-// Device is actively reporting a sessionId — reset available-tick counter
-availableNoSessionTicks.delete(deviceId.toUpperCase());
+
 
 // ── FIX 1 (REVISED): Grace-period auto-end + fault state ─────────────────────
 //
@@ -583,15 +602,23 @@ availableNoSessionTicks.delete(deviceId.toUpperCase());
 // ─────────────────────────────────────────────────────────────────────────────
 
 const isAvailable = status === 'Available' || status === 'available';
-
+console.log("[MQTT SESSION STATE]", {
+  deviceId,
+  normalizedDeviceId: devKey,
+  status,
+  sessionId,
+  relayOn,
+  energyConsumed,
+  availableTick: availableNoSessionTicks.get(devKey) || 0,
+});
 if (relayOn && !sessionId) {
   // ── CASE 1: Fault — relay ON but no session ───────────────────────────────
   console.warn(
     `[MQTT FAULT] Device ${deviceId} relay is ON but no sessionId in telemetry. ` +
     `Marking device as fault_no_session.`
   );
-  await Device.updateOne(
-    { device_id: deviceId.toUpperCase() },
+await Device.updateOne(
+  { device_id: { $in: deviceIdCandidates(deviceId) } },
     {
       $set: {
         faultCode:   'fault_no_session',
@@ -613,38 +640,63 @@ if (relayOn && !sessionId) {
   //   `[MQTT GRACE] Device ${devKey} Available+noSession tick ${count}/${AUTO_END_CONSECUTIVE_TICKS_REQUIRED}`
   // );
 
-  if (count >= AUTO_END_CONSECUTIVE_TICKS_REQUIRED) {
-    availableNoSessionTicks.delete(devKey); // reset counter
+if (count >= AUTO_END_CONSECUTIVE_TICKS_REQUIRED) {
+  availableNoSessionTicks.delete(devKey);
 
-    const orphanSession = await Session.findOne({
-      deviceId: devKey,
-      status:   { $in: ['active', 'paused'] },
-    }).lean();
+  const orphanSession = await Session.findOne({
+    deviceId: { $in: deviceIdCandidates(deviceId) },
+    status: "active",
+  })
+    .sort({ startTime: 1 })
+    .lean();
 
-    if (orphanSession) {
-      // console.log(
-      //   `[MQTT AUTO-END] ${count} consecutive Available+noSession ticks — ` +
-      //   `ending orphan session ${orphanSession.sessionId}`
-      // );
+  if (!orphanSession) {
+    console.warn(
+      `[MQTT AUTO-END] No active session found for device ${devKey}`
+    );
 
-      await completeSessionInternal({
-        sessionId:        orphanSession.sessionId,
-        endTime:          new Date().toISOString(),
-        endTrigger:       'device_auto_available',
-        deltaEnergy:      energyConsumed !== undefined
-                            ? energyConsumed
-                            : Number(orphanSession.energyConsumed || 0),
-        deviceIdOverride: devKey,
-        sendStopMqtt:     false,
-      });
-
-      console.log(`[MQTT AUTO-END] ✅ Session ${orphanSession.sessionId} completed`);
-    }
+    return;
   }
 
+  if (relayOn) {
+    console.warn(
+      `[MQTT AUTO-END] Refusing to end ${orphanSession.sessionId}: relay is ON`
+    );
+
+    return;
+  }
+
+  try {
+    await completeSessionInternal({
+      sessionId: orphanSession.sessionId,
+      endTime: new Date().toISOString(),
+      endTrigger: "device_auto_available",
+      deltaEnergy:
+        energyConsumed !== undefined
+          ? Number(energyConsumed)
+          : Number(orphanSession.energyConsumed || 0),
+      deviceIdOverride: orphanSession.deviceId,
+      sendStopMqtt: false,
+    });
+
+    console.log(
+      `[MQTT AUTO-END] Completed orphan session ` +
+      `${orphanSession.sessionId} for device ${devKey}`
+    );
+  } catch (error) {
+    console.error(
+      `[MQTT AUTO-END] Failed to complete ` +
+      `${orphanSession.sessionId}:`,
+      error
+    );
+  }
+}
+  
+
 } else {
-  // ── CASE 3: Device is in any active state — reset counter ────────────────
-  availableNoSessionTicks.delete(deviceId.toUpperCase());
+  availableNoSessionTicks.delete(
+    normalizeDeviceId(deviceId)
+  );
 }
 // ── END FIX 1 (REVISED) ──────────────────────────────────────────────────────
 
@@ -693,11 +745,11 @@ async function cleanupOrphanSessions() {
     // Only fetch sessions that are:
     //  - active or paused
     //  - started more than 2 minutes ago (skip brand-new sessions)
-    const activeSessions = await Session.find(
-      {
-        status:    { $in: ['active', 'paused'] },
-        startTime: { $lte: minAgeCutoff },
-      },
+const activeSessions = await Session.find(
+  {
+    status: "active",
+    startTime: { $lte: minAgeCutoff },
+  },
       { sessionId: 1, deviceId: 1, energyConsumed: 1, startTime: 1,
         lastTelemetryAt: 1, deviceAvailableSince: 1, _id: 0 }
     ).lean();
@@ -705,10 +757,18 @@ async function cleanupOrphanSessions() {
     if (!activeSessions.length) return;
 
     for (const sess of activeSessions) {
-      const device = await Device.findOne(
-        { device_id: sess.deviceId },
-        { status: 1, lastSeen: 1, _id: 0 }
-      ).lean();
+const device = await Device.findOne(
+  {
+    device_id: {
+      $in: deviceIdCandidates(sess.deviceId),
+    },
+  },
+  {
+    status: 1,
+    lastSeen: 1,
+    _id: 0,
+  }
+).lean();
 
       if (!device) continue;
 
