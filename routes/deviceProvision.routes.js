@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
+
 const authMiddleware = require('../middleware/authMiddleware');
 const authorizeRoles = require('../middleware/roleMiddleware');
+
 const {
   createGroupA,
   getGroupA,
@@ -9,18 +11,75 @@ const {
   updateGroupA,
   deleteGroupA,
   promoteToGroupB,
+  getAllProvisionDevices,
 } = require('../controllers/deviceProvision.controller');
 
-// All routes require admin
-router.use(authMiddleware, authorizeRoles('admin'),);
+// ─────────────────────────────────────────────────────────────────────────────
+// ALL PROVISION ROUTES REQUIRE ADMIN
+// ─────────────────────────────────────────────────────────────────────────────
+router.use(
+  authMiddleware,
+  authorizeRoles('admin')
+);
 
-router.post('/group-a',          createGroupA);
-router.get('/group-a',           getAllGroupA);
-router.get('/group-a/:serial',   getGroupA);
-router.patch('/group-a/:serial', updateGroupA);
-router.delete('/group-a/:serial',deleteGroupA);
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN DASHBOARD — ALL MANUFACTURING / PROVISION DEVICES
+//
+// Returns:
+//   Group A
+//   Group B
+//   Dispatched
+//   Live
+//
+// Optional:
+//   ?status=group_b
+//   ?status=dispatched
+//   ?search=VIZ1A01
+//   ?page=1&limit=100
+//
+// IMPORTANT:
+// Keep this route BEFORE /group-a/:serial
+// so "admin" is never interpreted as a serial number.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get(
+  '/admin',
+  getAllProvisionDevices
+);
 
-// Promote a Group A entry to Group B (triggers calibration + dispatch config)
-router.post('/group-a/:serial/promote', promoteToGroupB);
+// ─────────────────────────────────────────────────────────────────────────────
+// GROUP A
+// ─────────────────────────────────────────────────────────────────────────────
+router.post(
+  '/group-a',
+  createGroupA
+);
+
+router.get(
+  '/group-a',
+  getAllGroupA
+);
+
+router.get(
+  '/group-a/:serial',
+  getGroupA
+);
+
+router.patch(
+  '/group-a/:serial',
+  updateGroupA
+);
+
+router.delete(
+  '/group-a/:serial',
+  deleteGroupA
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GROUP A → GROUP B
+// ─────────────────────────────────────────────────────────────────────────────
+router.post(
+  '/group-a/:serial/promote',
+  promoteToGroupB
+);
 
 module.exports = router;

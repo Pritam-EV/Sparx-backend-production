@@ -400,3 +400,68 @@ exports.promoteToGroupB = async (req, res) => {
     });
   }
 };
+
+// ─── GET ALL PROVISION / MANUFACTURING DEVICES ───────────────────────────────
+// Admin dashboard:
+// Returns Group A, Group B, Dispatched and Live provision records.
+//
+// Optional query params:
+//   ?status=group_b
+//   ?status=dispatched
+//   ?search=VIZ1A01
+//   ?page=1&limit=100
+//
+// This endpoint is intentionally read-only.
+exports.getAllProvisionDevices = async (req, res) => {
+  try {
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(
+      Math.max(Number(req.query.limit) || 100, 1),
+      500
+    );
+
+    const filter = {};
+
+    // Filter by manufacturing lifecycle if requested
+    if (req.query.status) {
+      filter.manufacturingStatus = req.query.status;
+    }
+
+    // Search serial number / device ID
+    if (req.query.search) {
+      const searchRegex = new RegExp(req.query.search, 'i');
+
+      filter.$or = [
+        { serialNumber: searchRegex },
+        { deviceId: searchRegex },
+      ];
+    }
+
+    const [data, total] = await Promise.all([
+      DeviceProvision.find(filter)
+        .sort({ updatedAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .select('-wifiPassword')
+        .lean(),
+
+      DeviceProvision.countDocuments(filter),
+    ]);
+
+    return res.json({
+      success: true,
+      total,
+      page,
+      limit,
+      data,
+    });
+
+  } catch (error) {
+    console.error('[ALL PROVISION DEVICES]', error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
