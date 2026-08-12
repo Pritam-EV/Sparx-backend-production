@@ -112,7 +112,7 @@ mqttClient.subscribe(topics, { qos: 1 }, (err) => {
       const energy_kWh = msg.energy_kWh !== undefined ? msg.energy_kWh : msg.energykWh;
 
       if (!sessionId || !endTime || !endTrigger) {
-        console.warn('[MQTT] Incomplete session/end payload:', msg);
+      //  console.warn('[MQTT] Incomplete session/end payload:', msg);
         return;
       }
 
@@ -175,9 +175,9 @@ if (
       : null;
 
   if (!serialNumber) {
-    console.warn(
-      '[CONFIG ACK] Missing serialNumber'
-    );
+    // console.warn(
+    //   '[CONFIG ACK] Missing serialNumber'
+    // );
     return;
   }
 
@@ -187,10 +187,10 @@ if (
       CONFIG_ACK_STATUS.ERROR,
     ].includes(ackStatus)
   ) {
-    console.warn(
-      '[CONFIG ACK] Invalid status:',
-      ackStatus
-    );
+    // console.warn(
+    //   '[CONFIG ACK] Invalid status:',
+    //   ackStatus
+    // );
     return;
   }
 
@@ -215,9 +215,9 @@ if (
     });
 
     if (!device && !provision) {
-      console.warn(
-        `[CONFIG ACK] No record for serial ${serialNumber}`
-      );
+      // console.warn(
+      //   `[CONFIG ACK] No record for serial ${serialNumber}`
+      // );
       return;
     }
 
@@ -277,7 +277,7 @@ if (
     // BLOCK B: Telemetry — viz/<deviceId>/Telemetry
     // ─────────────────────────────────────────────────────────────────────────
     if (parts.length < 3 || parts[0] !== 'viz' || parts[2] !== 'Telemetry') {
-      console.warn('[MQTT RX] Ignoring unexpected topic:', topic);
+   //   console.warn('[MQTT RX] Ignoring unexpected topic:', topic);
       return;
     }
 
@@ -445,20 +445,20 @@ if (matched === 0) {
       // Duplicate-key errors can occur if two telemetry
       // packets arrive simultaneously.
       if (error.code === 11000) {
-        console.warn(
-          `[AUTO DEVICE] Duplicate creation avoided for ${devKey}`
-        );
+        // console.warn(
+        //   `[AUTO DEVICE] Duplicate creation avoided for ${devKey}`
+        // );
       } else {
-        console.error(
-          '[AUTO DEVICE] Creation failed:',
-          error.message
-        );
+        // console.error(
+        //   '[AUTO DEVICE] Creation failed:',
+        //   error.message
+        // );
       }
     }
   } else {
-    console.warn(
-      `[AUTO DEVICE] No Group B provision found for ${devKey}`
-    );
+    // console.warn(
+    //   `[AUTO DEVICE] No Group B provision found for ${devKey}`
+    // );
   }
 }
 
@@ -689,10 +689,10 @@ if (isAvailable && !relayOn && sessionId) {
 
 } else if (relayOn && !sessionId) {
   // ── CASE 1: Fault — relay ON but no session ───────────────────────────────
-  console.warn(
-    `[MQTT FAULT] Device ${deviceId} relay is ON but no sessionId in telemetry. ` +
-    `Marking device as fault_no_session.`
-  );
+  // console.warn(
+  //   `[MQTT FAULT] Device ${deviceId} relay is ON but no sessionId in telemetry. ` +
+  //   `Marking device as fault_no_session.`
+  // );
 await Device.updateOne(
   { device_id: { $in: deviceIdCandidates(deviceId) } },
     {
