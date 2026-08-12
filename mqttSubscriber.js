@@ -727,17 +727,17 @@ if (count >= AUTO_END_CONSECUTIVE_TICKS_REQUIRED) {
     .lean();
 
   if (!orphanSession) {
-    console.warn(
-      `[MQTT AUTO-END] No active session found for device ${devKey}`
-    );
+    // console.warn(
+    //   `[MQTT AUTO-END] No active session found for device ${devKey}`
+    // );
 
     return;
   }
 
   if (relayOn) {
-    console.warn(
-      `[MQTT AUTO-END] Refusing to end ${orphanSession.sessionId}: relay is ON`
-    );
+    // console.warn(
+    //   `[MQTT AUTO-END] Refusing to end ${orphanSession.sessionId}: relay is ON`
+    // );
 
     return;
   }
