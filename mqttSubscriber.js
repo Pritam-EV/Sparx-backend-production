@@ -33,6 +33,12 @@ const CRON_STALE_TELEMETRY_MS = 5 * 60 * 1000; // 5 minutes
 // In-memory counter per deviceId for consecutive "Available, no sessionId" ticks
 // key: deviceId (uppercase), value: number of consecutive ticks seen
 const availableNoSessionTicks = new Map();
+
+const availableWithSessionSince = new Map();
+
+const AVAILABLE_WITH_SESSION_GRACE_MS =
+  3 * 60 * 1000; // 3 minutes
+
 // ─────────────────────────────────────────────────────────────────────────────
 function deviceIdCandidates(value) {
   const raw = String(value || "").trim();
@@ -310,16 +316,22 @@ if (
     const p              = Number(msg.power) || 0;
     const relayOn        = (msg.relay || '').toString().toUpperCase() === 'ON';
     const sessionId      = msg.sessionId || null;
-    const energyConsumed = msg.consumed_kWh != null
-      ? Number(msg.consumed_kWh) || 0
-      : undefined;
+const energyConsumed = msg.consumed_kWh != null
+  ? Number(msg.consumed_kWh) || 0
+  : undefined;
 
-    try {
+const isAvailable =
+  status === "Available" ||
+  status === "available";
+
+const devKey = normalizeDeviceId(deviceId);
+
+try {
 
 
 
       // If no Device document exists yet, auto-create from DeviceProvision
-const devKey = normalizeDeviceId(deviceId);
+
 const deviceIds = deviceIdCandidates(deviceId);
 
 const devResult = await Device.updateOne(
@@ -513,8 +525,15 @@ if (matched === 0) {
           }
         );
 
+
+        if (!isAvailable || relayOn) {
+  availableWithSessionSince.delete(
+    normalizeDeviceId(deviceId)
+  );
+}
+
         // Device is actively reporting a sessionId — reset available-tick counter
-availableNoSessionTicks.delete(deviceId.toUpperCase());
+availableNoSessionTicks.delete(devKey);
 
 
         // console.log(
@@ -601,17 +620,74 @@ availableNoSessionTicks.delete(deviceId.toUpperCase());
 //   Reset the consecutive tick counter — device is alive and working.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const isAvailable = status === 'Available' || status === 'available';
-console.log("[MQTT SESSION STATE]", {
-  deviceId,
-  normalizedDeviceId: devKey,
-  status,
-  sessionId,
-  relayOn,
-  energyConsumed,
-  availableTick: availableNoSessionTicks.get(devKey) || 0,
-});
-if (relayOn && !sessionId) {
+
+
+if (isAvailable && !relayOn && sessionId) {
+  const firstAvailableAt =
+    availableWithSessionSince.get(devKey) || now;
+
+  availableWithSessionSince.set(
+    devKey,
+    firstAvailableAt
+  );
+
+  const availableDurationMs =
+    now.getTime() - firstAvailableAt.getTime();
+
+  console.log("[MQTT AVAILABLE SESSION]", {
+    deviceId: devKey,
+    sessionId,
+    relayOn,
+    availableForSeconds: Math.floor(
+      availableDurationMs / 1000
+    ),
+    requiredSeconds: Math.floor(
+      AVAILABLE_WITH_SESSION_GRACE_MS / 1000
+    ),
+  });
+
+  if (
+    availableDurationMs >=
+    AVAILABLE_WITH_SESSION_GRACE_MS
+  ) {
+    availableWithSessionSince.delete(devKey);
+
+    try {
+      await completeSessionInternal({
+        sessionId,
+        endTime: now.toISOString(),
+        endTrigger:
+          "device_auto_available_relay_off",
+        deltaEnergy:
+          energyConsumed !== undefined
+            ? Number(energyConsumed)
+            : 0,
+        deviceIdOverride: devKey,
+        sendStopMqtt: true,
+      });
+
+      console.log(
+        "[MQTT AUTO-END] Session completed " +
+          "because device was Available with relay OFF:",
+        {
+          deviceId: devKey,
+          sessionId,
+        }
+      );
+    } catch (error) {
+      console.error(
+        "[MQTT AUTO-END] Failed to complete " +
+          "Available + relay OFF session:",
+        {
+          deviceId: devKey,
+          sessionId,
+          error,
+        }
+      );
+    }
+  }
+
+} else if (relayOn && !sessionId) {
   // ── CASE 1: Fault — relay ON but no session ───────────────────────────────
   console.warn(
     `[MQTT FAULT] Device ${deviceId} relay is ON but no sessionId in telemetry. ` +
@@ -631,7 +707,7 @@ await Device.updateOne(
 
 } else if (isAvailable && !sessionId) {
   // ── CASE 2: Available with no sessionId — check consecutive ticks ─────────
-  const devKey = deviceId.toUpperCase();
+
   const prev   = availableNoSessionTicks.get(devKey) || 0;
   const count  = prev + 1;
   availableNoSessionTicks.set(devKey, count);
@@ -694,9 +770,8 @@ if (count >= AUTO_END_CONSECUTIVE_TICKS_REQUIRED) {
   
 
 } else {
-  availableNoSessionTicks.delete(
-    normalizeDeviceId(deviceId)
-  );
+  availableNoSessionTicks.delete(devKey);
+  availableWithSessionSince.delete(devKey);
 }
 // ── END FIX 1 (REVISED) ──────────────────────────────────────────────────────
 
