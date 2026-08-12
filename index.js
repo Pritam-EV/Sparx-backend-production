@@ -36,7 +36,7 @@ async function connectOnce() {
     // NOTE: do not pass deprecated mongoose options
     await mongoose.connect(mongoUri);
     isConnected = true;
-    console.log("✅ MongoDB connected (connectOnce).");
+   // console.log("✅ MongoDB connected (connectOnce).");
   } catch (err) {
     console.error("❌ Mongo connect failed (connectOnce):", err && err.message ? err.message : err);
     // do NOT rethrow — container should still start; subsequent requests may fail until DB is available
@@ -53,7 +53,7 @@ let routesMounted = false;
 function mountApiRoutes() {
   if (routesMounted) return;
   routesMounted = true;
-  console.log("Mounting API routes now...");
+//  console.log("Mounting API routes now...");
 
   try {
     app.use("/api/auth", require("./routes/auth"));
@@ -64,7 +64,7 @@ function mountApiRoutes() {
     app.use("/api/analytics", require("./routes/analytics"));
     app.use("/api/payment", require("./routes/payment"));
     app.use("/api/receipts", require("./routes/receipts"));
-    console.log("API routes mounted.");
+   // console.log("API routes mounted.");
   } catch (e) {
     console.error("Failed to mount routes:", e && e.stack ? e.stack : e);
   }

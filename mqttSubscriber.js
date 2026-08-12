@@ -258,11 +258,11 @@ if (
       );
     }
 
-    console.log(
-      `[CONFIG ACK] serial=${serialNumber} ` +
-      `deviceId=${deviceId} status=${ackStatus} ` +
-      `nvsVersion=${nvsVersion}`
-    );
+    // console.log(
+    //   `[CONFIG ACK] serial=${serialNumber} ` +
+    //   `deviceId=${deviceId} status=${ackStatus} ` +
+    //   `nvsVersion=${nvsVersion}`
+    // );
   } catch (error) {
     console.error(
       '[CONFIG ACK] Database update failed:',
@@ -437,10 +437,10 @@ if (matched === 0) {
         }
       );
 
-      console.log(
-        `[AUTO DEVICE] Created ${devKey} ` +
-        `from serial ${provision.serialNumber}`
-      );
+      // console.log(
+      //   `[AUTO DEVICE] Created ${devKey} ` +
+      //   `from serial ${provision.serialNumber}`
+      // );
     } catch (error) {
       // Duplicate-key errors can occur if two telemetry
       // packets arrive simultaneously.
@@ -634,17 +634,17 @@ if (isAvailable && !relayOn && sessionId) {
   const availableDurationMs =
     now.getTime() - firstAvailableAt.getTime();
 
-  console.log("[MQTT AVAILABLE SESSION]", {
-    deviceId: devKey,
-    sessionId,
-    relayOn,
-    availableForSeconds: Math.floor(
-      availableDurationMs / 1000
-    ),
-    requiredSeconds: Math.floor(
-      AVAILABLE_WITH_SESSION_GRACE_MS / 1000
-    ),
-  });
+  // console.log("[MQTT AVAILABLE SESSION]", {
+  //   deviceId: devKey,
+  //   sessionId,
+  //   relayOn,
+  //   availableForSeconds: Math.floor(
+  //     availableDurationMs / 1000
+  //   ),
+  //   requiredSeconds: Math.floor(
+  //     AVAILABLE_WITH_SESSION_GRACE_MS / 1000
+  //   ),
+  // });
 
   if (
     availableDurationMs >=
@@ -657,7 +657,7 @@ if (isAvailable && !relayOn && sessionId) {
         sessionId,
         endTime: now.toISOString(),
         endTrigger:
-          "device_auto_available_relay_off",
+          "device_auto_available_session_active",
         deltaEnergy:
           energyConsumed !== undefined
             ? Number(energyConsumed)
@@ -666,14 +666,14 @@ if (isAvailable && !relayOn && sessionId) {
         sendStopMqtt: true,
       });
 
-      console.log(
-        "[MQTT AUTO-END] Session completed " +
-          "because device was Available with relay OFF:",
-        {
-          deviceId: devKey,
-          sessionId,
-        }
-      );
+      // console.log(
+      //   "[MQTT AUTO-END] Session completed " +
+      //     "because device was Available with relay OFF:",
+      //   {
+      //     deviceId: devKey,
+      //     sessionId,
+      //   }
+      // );
     } catch (error) {
       console.error(
         "[MQTT AUTO-END] Failed to complete " +
@@ -755,10 +755,10 @@ if (count >= AUTO_END_CONSECUTIVE_TICKS_REQUIRED) {
       sendStopMqtt: false,
     });
 
-    console.log(
-      `[MQTT AUTO-END] Completed orphan session ` +
-      `${orphanSession.sessionId} for device ${devKey}`
-    );
+    // console.log(
+    //   `[MQTT AUTO-END] Completed orphan session ` +
+    //   `${orphanSession.sessionId} for device ${devKey}`
+    // );
   } catch (error) {
     console.error(
       `[MQTT AUTO-END] Failed to complete ` +
@@ -931,7 +931,7 @@ if (!isAvailable) {
           deltaEnergy:  Number(sess.energyConsumed || 0),
           sendStopMqtt: false,
         });
-        console.log(`[CRON ORPHAN] ✅ Completed orphan session: ${sess.sessionId}`);
+       // console.log(`[CRON ORPHAN] ✅ Completed orphan session: ${sess.sessionId}`);
       } catch (e) {
         console.error(`[CRON ORPHAN] ❌ Failed for ${sess.sessionId}:`, e.message);
       }
