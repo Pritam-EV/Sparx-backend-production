@@ -40,6 +40,18 @@ const sessionSchema = new mongoose.Schema({
   enum: ["cashfree", "wallet", "free"],
   default: "cashfree",
 },
+  // Session initiation audit
+  initiatedBy: {
+    type: String,
+    enum: ["user", "admin"],
+    default: "user",
+  },
+
+  initiatedByAdminId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    default: null,
+  },
   // ─── ETA fields ───────────────────────────────────────────────────────────
 // Continuously refined estimated session end time based on actual charge rate
 estimatedEndTime:   { type: Date,   default: null },

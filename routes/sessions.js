@@ -231,6 +231,19 @@ router.get('/active', authMiddleware, getActiveSession);
 // 4. Start session (Triggered after payment success)
 router.post("/start", authMiddleware, startSession);
 
+// Admin: start a wallet-paid session on behalf of a user
+router.post("/admin/start", authMiddleware, async (req, res) => {
+  if (req.user?.role !== "admin") {
+    return res.status(403).json({ error: "Admin access required" });
+  }
+
+  // Pass the selected user's ID to the existing session-start logic.
+  req.adminTargetUserId = req.body.userId;
+  req.initiatedByAdmin = true;
+
+  return startSession(req, res);
+});
+
 router.post("/pause", authMiddleware, pauseSession);
 
 router.post("/resume", authMiddleware, resumeSession);

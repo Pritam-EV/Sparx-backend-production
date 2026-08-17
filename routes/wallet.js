@@ -329,4 +329,96 @@ router.post("/pay", authMiddleware, async (req, res) => {
   }
 });
 
+// POST /api/wallet/admin/pay
+// Admin debits the selected user's wallet for a charging session.
+router.post("/admin/pay", authMiddleware, async (req, res) => {
+  try {
+    if (req.user?.role !== "admin") {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+
+    const {
+      userId,
+      deviceId,
+      amount,
+      chargingOption,
+      energySelected,
+    } = req.body;
+
+    const amountNum = Number(amount);
+
+    if (!userId || !deviceId || !amountNum || amountNum <= 0) {
+      return res.status(400).json({ message: "Invalid request" });
+    }
+
+    // Selected user's wallet
+    const user = await User.findById(userId)
+      .select("walletBalance walletFrozen")
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.walletFrozen) {
+      return res.status(403).json({ message: "User wallet is frozen" });
+    }
+
+    if (user.walletBalance < amountNum) {
+      return res.status(400).json({
+        message: "Insufficient user wallet balance",
+      });
+    }
+
+    const walletOrderId = `wlt_pay_${uuidv4()}`;
+
+    // Same Payment structure as normal wallet payment
+    await Payment.create({
+      orderId: walletOrderId,
+      userId,
+      deviceId,
+      amountPaid: amountNum,
+      currency: "INR",
+      status: "PENDING",
+      gateway: "wallet",
+      type: "charging",
+    });
+
+    // Debit SELECTED USER's wallet
+    const result = await debitWallet({
+      userId,
+      amount: amountNum,
+      orderId: walletOrderId,
+      description: `Charging session on device ${deviceId} initiated by admin`,
+      idempotencyKey: `debit_${walletOrderId}`,
+      ip: req.ip,
+    });
+
+    await Payment.updateOne(
+      { orderId: walletOrderId },
+      {
+        $set: {
+          status: "SUCCESS",
+          paidAt: new Date(),
+          paymentMethod: "wallet",
+        },
+      }
+    );
+
+    return res.json({
+      success: true,
+      orderId: walletOrderId,
+      newBalance: result.newBalance,
+      userId,
+    });
+
+  } catch (err) {
+    console.error("Admin wallet pay error:", err.message);
+
+    return res.status(500).json({
+      message: err.message || "Admin wallet payment failed",
+    });
+  }
+});
+
 module.exports = router;

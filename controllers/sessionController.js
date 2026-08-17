@@ -163,7 +163,10 @@ const startSession = async (req, res) => {
       amountPaid,
       startEnergy
     } = req.body;
-    const userId = req.user?.userId;
+    const userId =
+    req.initiatedByAdmin && req.adminTargetUserId
+      ? req.adminTargetUserId
+      : req.user?.userId;
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized: userId missing" });
     }
@@ -297,22 +300,25 @@ if (couponCode) {
   }
 }
     // 4) Create new session and save
-      const newSession = new Session({
-        sessionId,
-        deviceId,
-        transactionId,
-        userId: userId,        // Mongoose will cast string to ObjectId
-        startTime: new Date(startTime),
-        startDate,
-        energySelected,
-        amountPaid,
-        amountSelected,
-        discountApplied, 
-        status: "active",
-        ratePerKwh,
-        paymentGateway: req.body.paymentGateway || "cashfree",
-      });
-    await newSession.save();
+    const newSession = new Session({
+      sessionId,
+      deviceId,
+      transactionId,
+      userId: userId,
+      startTime: new Date(startTime),
+      startDate,
+      energySelected,
+      amountPaid,
+      amountSelected,
+      discountApplied,
+      status: "active",
+      ratePerKwh,
+      paymentGateway: req.body.paymentGateway || "cashfree",
+
+      // Admin initiation metadata
+      initiatedBy: req.initiatedByAdmin ? "admin" : "user",
+      initiatedByAdminId: req.initiatedByAdmin ? req.user.userId : null,
+    });
 
 
 
