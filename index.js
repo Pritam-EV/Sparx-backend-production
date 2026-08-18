@@ -64,6 +64,7 @@ function mountApiRoutes() {
     app.use("/api/analytics", require("./routes/analytics"));
     app.use("/api/payment", require("./routes/payment"));
     app.use("/api/receipts", require("./routes/receipts"));
+    app.use("/api/wallet", require("./routes/wallet"));
    // console.log("API routes mounted.");
   } catch (e) {
     console.error("Failed to mount routes:", e && e.stack ? e.stack : e);
