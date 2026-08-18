@@ -320,7 +320,8 @@ if (couponCode) {
       initiatedByAdminId: req.initiatedByAdmin ? req.user.userId : null,
     });
 
-
+// 4a) Persist session in MongoDB BEFORE touching the device
+await newSession.save();
 
 await Payment.updateOne(
   { orderId: transactionId },
