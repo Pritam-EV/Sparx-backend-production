@@ -341,38 +341,85 @@ router.post("/admin/pay", authMiddleware, async (req, res) => {
       userId,
       deviceId,
       amount,
-      chargingOption,
       energySelected,
     } = req.body;
 
     const amountNum = Number(amount);
+    const energyNum = Number(energySelected);
 
-    if (!userId || !deviceId || !amountNum || amountNum <= 0) {
-      return res.status(400).json({ message: "Invalid request" });
+    if (
+      !userId ||
+      !deviceId ||
+      !amountNum ||
+      amountNum <= 0 ||
+      !energyNum ||
+      energyNum <= 0
+    ) {
+      return res.status(400).json({
+        message: "Invalid user, device, amount or energy.",
+      });
     }
 
-    // Selected user's wallet
+    // Verify user
     const user = await User.findById(userId)
       .select("walletBalance walletFrozen")
       .lean();
 
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
+      return res.status(404).json({
+        message: "User not found",
+      });
     }
 
     if (user.walletFrozen) {
-      return res.status(403).json({ message: "User wallet is frozen" });
+      return res.status(403).json({
+        message: "User wallet is frozen",
+      });
+    }
+
+    // Verify device + use the actual customer-payable rate
+    const device = await require("../models/device")
+      .findOne({ device_id: deviceId })
+      .select("device_id status rate")
+      .lean();
+
+    if (!device) {
+      return res.status(404).json({
+        message: "Device not found",
+      });
+    }
+
+    if (device.status === "Occupied") {
+      return res.status(409).json({
+        message: "Device is currently occupied",
+      });
+    }
+
+    const rate = Number(device.rate ?? 20);
+
+    // Server-side consistency check:
+    // amount = energy × actual device rate
+    const expectedAmount = Number((energyNum * rate).toFixed(2));
+
+    if (Math.abs(expectedAmount - amountNum) > 0.02) {
+      return res.status(400).json({
+        message: "Amount does not match device rate.",
+        rate,
+        expectedAmount,
+        receivedAmount: amountNum,
+      });
     }
 
     if (user.walletBalance < amountNum) {
       return res.status(400).json({
         message: "Insufficient user wallet balance",
+        balance: user.walletBalance,
+        required: amountNum,
       });
     }
 
     const walletOrderId = `wlt_pay_${uuidv4()}`;
 
-    // Same Payment structure as normal wallet payment
     await Payment.create({
       orderId: walletOrderId,
       userId,
@@ -384,7 +431,6 @@ router.post("/admin/pay", authMiddleware, async (req, res) => {
       type: "charging",
     });
 
-    // Debit SELECTED USER's wallet
     const result = await debitWallet({
       userId,
       amount: amountNum,
@@ -410,10 +456,14 @@ router.post("/admin/pay", authMiddleware, async (req, res) => {
       orderId: walletOrderId,
       newBalance: result.newBalance,
       userId,
+      deviceId,
+      amountPaid: amountNum,
+      energySelected: energyNum,
+      rate,
     });
 
   } catch (err) {
-    console.error("Admin wallet pay error:", err.message);
+    console.error("Admin wallet pay error:", err);
 
     return res.status(500).json({
       message: err.message || "Admin wallet payment failed",
