@@ -259,6 +259,65 @@ router.get(
   }
 );
 
+// GET latest voltage/current for one selected device
+// Final URL:
+// GET /api/devices/admin/telemetry/:deviceId
+router.get(
+  "/admin/telemetry/:deviceId",
+  authMiddleware,
+  authorizeRoles("admin"),
+  async (req, res) => {
+    try {
+      const deviceId = getNormalizedDeviceId(
+        req.params.deviceId
+      );
+
+      if (!deviceId) {
+        return res.status(400).json({
+          error: "Device ID is required",
+        });
+      }
+
+      const latestTelemetry =
+        await DeviceTelemetry.findOne(
+          { deviceId },
+          {
+            _id: 0,
+            deviceId: 1,
+            voltage: 1,
+            current: 1,
+            timestamp: 1,
+          }
+        )
+          .sort({ timestamp: -1 })
+          .lean();
+
+      if (!latestTelemetry) {
+        return res.status(404).json({
+          error: "No telemetry found for this device",
+          deviceId,
+        });
+      }
+
+      return res.json({
+        deviceId: latestTelemetry.deviceId,
+        voltage: latestTelemetry.voltage ?? null,
+        current: latestTelemetry.current ?? null,
+        timestamp: latestTelemetry.timestamp ?? null,
+      });
+    } catch (error) {
+      console.error(
+        "[ADMIN DEVICE TELEMETRY]",
+        error
+      );
+
+      return res.status(500).json({
+        error: "Failed to fetch latest telemetry",
+      });
+    }
+  }
+);
+
 // GET /api/devices/admin/live-devices/filter-options
 // Returns distinct project/area/status values from devices that have recent telemetry
 router.get(
