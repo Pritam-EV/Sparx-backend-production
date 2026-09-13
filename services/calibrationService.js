@@ -9,7 +9,8 @@ const {
   publishDeviceConfig,
 } = require("./configPublisher");
 
-const TELEMETRY_MAX_AGE_MS = 15000;
+const TELEMETRY_MAX_AGE_MS = 5 * 600 * 1000;
+const LIVE_VALUE_TOLERANCE = 5;
 
 function finitePositive(value, fieldName) {
   const number = Number(value);
@@ -158,18 +159,18 @@ async function createCalibration({
     latestTelemetry.timestamp
   ).getTime();
 
-  if (
-    !Number.isFinite(telemetryTimestamp) ||
-    Date.now() - telemetryTimestamp >
-      TELEMETRY_MAX_AGE_MS
-  ) {
-    const error = new Error(
-      "Device telemetry is stale. Refresh before calibrating."
-    );
+if (
+  !Number.isFinite(telemetryTimestamp) ||
+  Date.now() - telemetryTimestamp >
+    TELEMETRY_MAX_AGE_MS
+) {
+  const error = new Error(
+    "Device telemetry is older than 5 minutes. Refresh before calibrating."
+  );
 
-    error.statusCode = 409;
-    throw error;
-  }
+  error.statusCode = 409;
+  throw error;
+}
 
   const latestVoltage = finitePositive(
     latestTelemetry.voltage,
@@ -191,23 +192,29 @@ async function createCalibration({
       latestCurrent - submittedLiveCurrent
     ) / latestCurrent;
 
-  if (voltageDifference > 0.1) {
-    const error = new Error(
-      "Submitted live voltage differs too much from latest device telemetry"
-    );
+if (
+  voltageDifference >
+  LIVE_VALUE_TOLERANCE
+) {
+  const error = new Error(
+    "Submitted live voltage differs more than 500% from latest device telemetry"
+  );
 
-    error.statusCode = 409;
-    throw error;
-  }
+  error.statusCode = 409;
+  throw error;
+}
 
-  if (currentDifference > 0.1) {
-    const error = new Error(
-      "Submitted live current differs too much from latest device telemetry"
-    );
+if (
+  currentDifference >
+  LIVE_VALUE_TOLERANCE
+) {
+  const error = new Error(
+    "Submitted live current differs more than 500% from latest device telemetry"
+  );
 
-    error.statusCode = 409;
-    throw error;
-  }
+  error.statusCode = 409;
+  throw error;
+}
 
   const { newCf, newVf } =
     calculateCalibration({
