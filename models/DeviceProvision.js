@@ -66,7 +66,8 @@ manufacturingStatus: {
     unique: true,
     sparse: true,   // sparse so null values don't violate unique constraint at Group A
     trim: true,
-    default: null
+    default: null,
+    index: true
   },
   hardwareRevision: { type: String, trim: true, default: '' },  // e.g. "PCB_V1.2"
   project:          { type: String, trim: true, default: '' },  // e.g. "GLIDE", "VIZ"
