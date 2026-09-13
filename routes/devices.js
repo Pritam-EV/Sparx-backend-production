@@ -16,6 +16,10 @@ const {
   publishDeviceConfig,
 } = require('../services/configPublisher');
 
+const {
+  createCalibration,
+} = require("../services/calibrationService");
+
 function getNormalizedDeviceId(value) {
   return normalizeDeviceId(value);
 }
@@ -97,6 +101,52 @@ router.get('/public/:deviceId', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// POST /api/devices/admin/calibration/:deviceId
+router.post(
+  "/admin/calibration/:deviceId",
+  authMiddleware,
+  authorizeRoles("admin"),
+  async (req, res) => {
+    try {
+      const result = await createCalibration({
+        deviceId: req.params.deviceId,
+        referenceVoltage:
+          req.body.referenceVoltage,
+        referenceCurrent:
+          req.body.referenceCurrent,
+        liveVoltage:
+          req.body.liveVoltage,
+        liveCurrent:
+          req.body.liveCurrent,
+        expectedNvsVersion:
+          req.body.expectedNvsVersion,
+        createdBy:
+          req.user?.uid ||
+          req.user?.userId ||
+          req.user?._id ||
+          null,
+      });
+
+      return res.status(202).json({
+        success: true,
+        calibration: result,
+      });
+    } catch (error) {
+      console.error(
+        "[ADMIN CALIBRATION]",
+        error
+      );
+
+      return res.status(
+        error.statusCode || 500
+      ).json({
+        success: false,
+        error: error.message,
+      });
+    }
+  }
+);
 
 // Check if a device exists
 router.get("/check-device/:device_id", async (req, res) => {

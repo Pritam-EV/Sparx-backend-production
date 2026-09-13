@@ -19,11 +19,21 @@ const deviceTelemetrySchema = new mongoose.Schema({
 });
 
 // 🔥 TTL Index: auto delete after 24 hours
+// TTL cleanup: delete telemetry after 24 hours.
 deviceTelemetrySchema.index(
-  { timestamp: 1 },
-  { expireAfterSeconds: 60 * 60 * 24 }
+  {
+    timestamp: 1,
+  },
+  {
+    expireAfterSeconds: 60 * 60 * 24,
+  }
 );
 
+// Latest telemetry lookup by device.
+deviceTelemetrySchema.index({
+  deviceId: 1,
+  timestamp: -1,
+});
 // IMPORTANT: force mongoose to sync indexes
 deviceTelemetrySchema.set("autoIndex", true);
 
