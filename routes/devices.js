@@ -479,91 +479,8 @@ router.get('/admin-dashboard',
   }
 );
 
-// GET live monitoring data
-router.get(
-  "/admin/live-monitoring/:deviceId",
-  authMiddleware,
-  authorizeRoles('admin'),
-  async (req, res) => {
-    try {
-      const { deviceId } = req.params;
 
-      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-      const data = await DeviceTelemetry.find({
-        deviceId,
-        timestamp: { $gte: since },
-      }).sort({ timestamp: 1 });
-
-      const response = {
-        timestamps: data.map(d => d.timestamp),
-        voltage: data.map(d => d.voltage),
-        current: data.map(d => d.current),
-      };
-
-      res.json(response);
-
-    } catch (err) {
-      console.error("Live monitoring fetch error:", err);
-      res.status(500).json({ error: "Failed to fetch telemetry" });
-    }
-  }
-);
-
-// GET latest voltage/current for one selected device
-router.get(
-  "/admin/telemetry/:deviceId",
-  authMiddleware,
-  authorizeRoles("admin"),
-  async (req, res) => {
-    try {
-      const deviceId = getNormalizedDeviceId(
-        req.params.deviceId
-      );
-
-      if (!deviceId) {
-        return res.status(400).json({
-          error: "Device ID is required",
-        });
-      }
-
-      const latestTelemetry =
-        await DeviceTelemetry.findOne(
-          { deviceId },
-          {
-            _id: 0,
-            deviceId: 1,
-            voltage: 1,
-            current: 1,
-            timestamp: 1,
-          }
-        ).sort({ timestamp: -1 }).lean();
-
-      if (!latestTelemetry) {
-        return res.status(404).json({
-          error: "No telemetry found for this device",
-          deviceId,
-        });
-      }
-
-      return res.json({
-        deviceId: latestTelemetry.deviceId,
-        voltage: latestTelemetry.voltage ?? null,
-        current: latestTelemetry.current ?? null,
-        timestamp: latestTelemetry.timestamp ?? null,
-      });
-    } catch (error) {
-      console.error(
-        "[ADMIN DEVICE TELEMETRY]",
-        error
-      );
-
-      return res.status(500).json({
-        error: "Failed to fetch latest telemetry",
-      });
-    }
-  }
-);
 
 // GET /api/devices/admin/live-devices/filter-options
 router.get(
@@ -800,6 +717,94 @@ router.get(
     } catch (err) {
       console.error("Live devices error:", err);
       res.status(500).json({ error: "Failed to fetch devices" });
+    }
+  }
+);
+
+
+
+// GET live monitoring data
+router.get(
+  "/admin/live-monitoring/:deviceId",
+  authMiddleware,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      const { deviceId } = req.params;
+
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      const data = await DeviceTelemetry.find({
+        deviceId,
+        timestamp: { $gte: since },
+      }).sort({ timestamp: 1 });
+
+      const response = {
+        timestamps: data.map(d => d.timestamp),
+        voltage: data.map(d => d.voltage),
+        current: data.map(d => d.current),
+      };
+
+      res.json(response);
+
+    } catch (err) {
+      console.error("Live monitoring fetch error:", err);
+      res.status(500).json({ error: "Failed to fetch telemetry" });
+    }
+  }
+);
+
+// GET latest voltage/current for one selected device
+router.get(
+  "/admin/telemetry/:deviceId",
+  authMiddleware,
+  authorizeRoles("admin"),
+  async (req, res) => {
+    try {
+      const deviceId = getNormalizedDeviceId(
+        req.params.deviceId
+      );
+
+      if (!deviceId) {
+        return res.status(400).json({
+          error: "Device ID is required",
+        });
+      }
+
+      const latestTelemetry =
+        await DeviceTelemetry.findOne(
+          { deviceId },
+          {
+            _id: 0,
+            deviceId: 1,
+            voltage: 1,
+            current: 1,
+            timestamp: 1,
+          }
+        ).sort({ timestamp: -1 }).lean();
+
+      if (!latestTelemetry) {
+        return res.status(404).json({
+          error: "No telemetry found for this device",
+          deviceId,
+        });
+      }
+
+      return res.json({
+        deviceId: latestTelemetry.deviceId,
+        voltage: latestTelemetry.voltage ?? null,
+        current: latestTelemetry.current ?? null,
+        timestamp: latestTelemetry.timestamp ?? null,
+      });
+    } catch (error) {
+      console.error(
+        "[ADMIN DEVICE TELEMETRY]",
+        error
+      );
+
+      return res.status(500).json({
+        error: "Failed to fetch latest telemetry",
+      });
     }
   }
 );
