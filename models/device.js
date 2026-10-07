@@ -86,6 +86,14 @@ const deviceSchema = new mongoose.Schema({
   // ── RUNTIME STATE (updated by telemetry / session logic) ─────────────────
   status:              { type: String, required: true, default: 'offline' },
   relayOn:             { type: Boolean, default: false },
+    lastKnownVoltage: {
+    type: Number,
+    default: 0
+  },
+  lastKnownCurrent: {
+    type: Number,
+    default: 0
+  },
   lastSeen:            { type: Date, default: Date.now },
   totalenergy:         { type: Number, default: 0 },
   current_session_id:  {
@@ -165,6 +173,21 @@ deviceSchema.index({ serialNumber: 1 });
 deviceSchema.index({ ownerId: 1 });
 deviceSchema.index({ status: 1 });
 deviceSchema.index({ city: 1, state: 1 });
+
+// Add these indexes if not already present
+deviceSchema.index({ project: 1 });
+deviceSchema.index({ city: 1 });
+deviceSchema.index({ state: 1 });
+deviceSchema.index({ status: 1 });
+deviceSchema.index({ device_id: 1 });
+deviceSchema.index({ serialNumber: 1 });
+deviceSchema.index({ updatedAt: -1 });
+deviceSchema.index({ ownerId: 1 });
+
+// Compound indexes for common queries
+deviceSchema.index({ project: 1, status: 1 });
+deviceSchema.index({ city: 1, status: 1 });
+deviceSchema.index({ status: 1, updatedAt: -1 });
 
 // ── Helper: update rate with history (call from controller) ──────────────────
 // Usage: await device.setRate(newRate, byUID, byRole);

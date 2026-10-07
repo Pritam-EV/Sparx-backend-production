@@ -1017,5 +1017,232 @@ if (req.user?.role === 'owner') {
     }
   });
 
+  // ============================================
+// NEW: Admin Devices Dashboard Routes
+// ============================================
+
+/**
+ * GET /api/admin/devices/summary
+ * Get aggregated summary stats for devices dashboard
+ */
+router.get('/admin/devices/summary', async (req, res) => {
+  try {
+    const { project, city, state } = req.query;
+    
+    // Build filter object
+    const filter = {};
+    if (project) filter.project = project;
+    if (city) filter.city = city;
+    if (state) filter.state = state;
+
+    // Aggregation pipeline for summary stats
+    const summary = await Device.aggregate([
+      { $match: filter },
+      {
+        $facet: {
+          total: [{ $count: 'count' }],
+          available: [{ $match: { status: 'Available' } }, { $count: 'count' }],
+          occupied: [{ $match: { status: 'Occupied' } }, { $count: 'count' }],
+          offline: [{ $match: { status: 'Offline' } }, { $count: 'count' }],
+          faulty: [{ $match: { status: 'Faulty' } }, { $count: 'count' }],
+          withSession: [{ $match: { current_session_id: { $ne: null } } }, { $count: 'count' }],
+          relayOn: [{ $match: { relayOn: true } }, { $count: 'count' }]
+        }
+      }
+    ]);
+
+    const result = {
+      total: summary[0].total[0]?.count || 0,
+      available: summary[0].available[0]?.count || 0,
+      occupied: summary[0].occupied[0]?.count || 0,
+      offline: summary[0].offline[0]?.count || 0,
+      faulty: summary[0].faulty[0]?.count || 0,
+      withActiveSession: summary[0].withSession[0]?.count || 0,
+      relayOn: summary[0].relayOn[0]?.count || 0,
+      lastUpdated: new Date().toISOString()
+    };
+
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error fetching device summary:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch device summary',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/admin/devices/table
+ * Get paginated device list with filters for table display
+ */
+router.get('/admin/devices/table', async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 50,
+      project,
+      status,
+      state,
+      city,
+      ownerId,
+      search,
+      sortBy = 'updatedAt',
+      sortOrder = 'desc'
+    } = req.query;
+
+    // Build filter object
+    const filter = {};
+    
+    if (project) filter.project = project;
+    if (status) filter.status = status;
+    if (state) filter.state = state;
+    if (city) filter.city = city;
+    if (ownerId) filter.ownerId = { $in: [ownerId] };
+    
+    // Search across multiple fields
+    if (search) {
+      filter.$or = [
+        { device_id: { $regex: search, $options: 'i' } },
+        { serialNumber: { $regex: search, $options: 'i' } },
+        { project: { $regex: search, $options: 'i' } },
+        { location: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Calculate pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const sortField = sortBy || 'updatedAt';
+    const sortDirection = sortOrder === 'asc' ? 1 : -1;
+
+    // Get total count
+    const total = await Device.countDocuments(filter);
+
+    // Get paginated data with only required fields
+    const devices = await Device.find(filter)
+      .select(`
+        device_id serialNumber project status relayOn 
+        lastKnownVoltage lastKnownCurrent 
+        updatedAt city state ownerId current_session_id
+      `)
+      .sort({ [sortField]: sortDirection })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Transform data for frontend
+    const tableData = devices.map(device => ({
+      deviceId: device.device_id,
+      serialNumber: device.serialNumber,
+      status: device.status || 'Offline',
+      project: device.project || 'N/A',
+      relayOn: device.relayOn || false,
+      voltage: device.lastKnownVoltage || 0,
+      current: device.lastKnownCurrent || 0,
+      updatedAt: device.updatedAt,
+      city: device.city || 'N/A',
+      state: device.state || 'N/A',
+      hasActiveSession: !!device.current_session_id
+    }));
+
+    res.json({
+      success: true,
+      data: tableData,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        totalPages: Math.ceil(total / parseInt(limit)),
+        hasMore: skip + parseInt(limit) < total
+      },
+      lastUpdated: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error fetching device table data:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch device table data',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/admin/devices/:id
+ * Get complete device details
+ */
+router.get('/admin/devices/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const device = await Device.findOne({
+      $or: [
+        { device_id: id },
+        { serialNumber: id },
+        { _id: id }
+      ]
+    }).lean();
+
+    if (!device) {
+      return res.status(404).json({
+        success: false,
+        message: 'Device not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: device
+    });
+  } catch (error) {
+    console.error('Error fetching device details:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch device details',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/admin/devices/filters/options
+ * Get unique values for filter dropdowns
+ */
+router.get('/admin/devices/filters/options', async (req, res) => {
+  try {
+    // Get unique projects
+    const projects = await Device.distinct('project', { project: { $ne: null, $ne: '' } });
+    
+    // Get unique cities
+    const cities = await Device.distinct('city', { city: { $ne: null, $ne: '' } });
+    
+    // Get unique states
+    const states = await Device.distinct('state', { state: { $ne: null, $ne: '' } });
+    
+    // Get unique status values
+    const statuses = await Device.distinct('status');
+
+    res.json({
+      success: true,
+      data: {
+        projects: projects.sort(),
+        cities: cities.sort(),
+        states: states.sort(),
+        statuses: statuses.sort()
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching filter options:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch filter options',
+      error: error.message
+    });
+  }
+});
 
 module.exports = router;
