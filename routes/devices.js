@@ -2,7 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 
 const router = express.Router();
-
+const Session = require('../models/session');
 const Device = require('../models/device');
 const DeviceProvision = require('../models/DeviceProvision');
 const DeviceTelemetry = require('../models/deviceTelemetry');
@@ -1139,11 +1139,15 @@ router.post(
           .slice(2, 8)
           .toUpperCase()}`;
 
-      const userId =
-        req.user?.uid ||
-        req.user?.userId ||
-        req.user?._id ||
-        'ADMIN';
+      const adminId = req.user?.userId || req.user?.uid || req.user?._id;
+
+      if (!adminId || !mongoose.Types.ObjectId.isValid(adminId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Valid admin user id not found in token',
+        });
+      }
+      const userId = adminId;
 
       const amountPaid =
         req.body.amountPaid === undefined
@@ -1169,36 +1173,63 @@ router.post(
         });
       }
 
-      const mqttResult = await publishStartSession({
-        deviceId: device.device_id,
-        sessionId,
-        userId: String(userId),
-        transactionId,
-        selectedEnergy,
-        amountPaid,
-      });
+const now = new Date();
 
-      // Important:
-      // Do NOT update current_session_id here.
-      // The device has only received the command.
-      // Device telemetry/acknowledgement must confirm the session first.
+// 1. Save the session first
+const session = await Session.create({
+  sessionId,
+  deviceId: device.device_id,
+  transactionId,
+  userId: adminId,
+  startTime: now,
+  startDate: now.toISOString().slice(0, 10),
+  energySelected: selectedEnergy,
+  amountSelected: amountPaid,
+  amountPaid,
+  ratePerKwh: Number(device.rate ?? 20),
+  status: 'active',
+  paymentGateway: 'free',
+  initiatedBy: 'admin',
+  initiatedByAdminId: adminId,
+});
 
-      return res.status(202).json({
-        success: true,
-        message: 'Start-session command published to device',
-        commandAccepted: true,
-        acknowledgedByDevice: false,
-        data: {
-          deviceId: device.device_id,
-          sessionId,
-          transactionId,
-          userId: String(userId),
-          selectedEnergy,
-          amountPaid,
-          topic: mqttResult.topic,
-          publishedAt: mqttResult.publishedAt,
-        },
-      });
+// 2. Save the session id on the device immediately
+device.current_session_id = sessionId;
+device.status = 'Occupied';
+await device.save();
+
+// 3. Publish the MQTT command; roll back if it fails
+let mqttResult;
+try {
+  mqttResult = await publishStartSession({
+    deviceId: device.device_id,
+    sessionId,
+    userId: String(adminId),
+    transactionId,
+    selectedEnergy,
+    amountPaid,
+  });
+} catch (mqttError) {
+  await Session.deleteOne({ _id: session._id });
+  device.current_session_id = null;
+  device.status = 'Available';
+  await device.save();
+  throw mqttError;
+}
+
+return res.status(202).json({
+  success: true,
+  message: 'Admin session started',
+  data: {
+    deviceId: device.device_id,
+    sessionId,
+    transactionId,
+    selectedEnergy,
+    amountPaid,
+    topic: mqttResult.topic,
+    publishedAt: mqttResult.publishedAt,
+  },
+});
     } catch (error) {
       console.error('[ADMIN START SESSION]', error);
 
