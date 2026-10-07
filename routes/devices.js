@@ -246,11 +246,11 @@ router.get('/admin/devices/:id',
     try {
       const { id } = req.params;
       
+      // Try multiple fields, avoid casting non-ObjectId strings to _id
       const device = await Device.findOne({
         $or: [
           { device_id: id },
-          { serialNumber: id },
-          { _id: id }
+          { serialNumber: id }
         ]
       }).lean();
 
