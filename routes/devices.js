@@ -453,11 +453,11 @@ router.post(
         energy
       });
 
-      // Update device with session info
-      device.current_session_id = sessionId;
-      device.relayOn = true;
-      device.status = 'Occupied';
-      await device.save();
+      // // Update device with session info
+      // device.current_session_id = sessionId;
+      // device.relayOn = true;
+      // device.status = 'Occupied';
+      // await device.save();
 
       // Create session record (optional - if you have a Session model)
       // const session = await Session.create({
@@ -1187,6 +1187,193 @@ router.post(
     }
   }
 );
+
+const {
+  publishStartSession,
+  publishStopSession,
+} = require('../services/sessionCommandService');
+
+router.post(
+  '/admin/start-session/:deviceId',
+  authMiddleware,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      const requestedDeviceId = normalizeDeviceId(req.params.deviceId);
+
+      const device = await Device.findOne({
+        device_id: requestedDeviceId,
+      });
+
+      if (!device) {
+        return res.status(404).json({
+          success: false,
+          message: 'Device not found',
+        });
+      }
+
+      if (device.current_session_id) {
+        return res.status(409).json({
+          success: false,
+          message: 'Device already has an active session',
+          sessionId: device.current_session_id,
+        });
+      }
+
+      const sessionId =
+        `ADM_${Date.now()}_${Math.random()
+          .toString(36)
+          .slice(2, 8)
+          .toUpperCase()}`;
+
+      const transactionId =
+        `TXN_${Date.now()}_${Math.random()
+          .toString(36)
+          .slice(2, 8)
+          .toUpperCase()}`;
+
+      const userId =
+        req.user?.uid ||
+        req.user?.userId ||
+        req.user?._id ||
+        'ADMIN';
+
+      const amountPaid =
+        req.body.amountPaid === undefined
+          ? 100
+          : Number(req.body.amountPaid);
+
+      const selectedEnergy =
+        req.body.selectedEnergy === undefined
+          ? 100
+          : Number(req.body.selectedEnergy);
+
+      if (!Number.isFinite(amountPaid) || amountPaid < 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'amountPaid must be a valid non-negative number',
+        });
+      }
+
+      if (!Number.isFinite(selectedEnergy) || selectedEnergy <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'selectedEnergy must be a valid positive number',
+        });
+      }
+
+      const mqttResult = await publishStartSession({
+        deviceId: device.device_id,
+        sessionId,
+        userId: String(userId),
+        transactionId,
+        selectedEnergy,
+        amountPaid,
+      });
+
+      // Important:
+      // Do NOT update current_session_id here.
+      // The device has only received the command.
+      // Device telemetry/acknowledgement must confirm the session first.
+
+      return res.status(202).json({
+        success: true,
+        message: 'Start-session command published to device',
+        commandAccepted: true,
+        acknowledgedByDevice: false,
+        data: {
+          deviceId: device.device_id,
+          sessionId,
+          transactionId,
+          userId: String(userId),
+          selectedEnergy,
+          amountPaid,
+          topic: mqttResult.topic,
+          publishedAt: mqttResult.publishedAt,
+        },
+      });
+    } catch (error) {
+      console.error('[ADMIN START SESSION]', error);
+
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to publish start-session command',
+        error: error.message,
+      });
+    }
+  }
+);
+
+router.post(
+  '/admin/stop-session/:deviceId',
+  authMiddleware,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      const requestedDeviceId = normalizeDeviceId(req.params.deviceId);
+
+      const device = await Device.findOne({
+        device_id: requestedDeviceId,
+      });
+
+      if (!device) {
+        return res.status(404).json({
+          success: false,
+          message: 'Device not found',
+        });
+      }
+
+      const sessionId =
+        req.body.sessionId ||
+        device.current_session_id;
+
+      if (!sessionId) {
+        return res.status(409).json({
+          success: false,
+          message: 'No active session found for this device',
+        });
+      }
+
+      const userId =
+        req.user?.uid ||
+        req.user?.userId ||
+        req.user?._id ||
+        'ADMIN';
+
+      const mqttResult = await publishStopSession({
+        deviceId: device.device_id,
+        sessionId: String(sessionId),
+        userId: String(userId),
+      });
+
+      // Do not clear the session optimistically.
+      // Clear it only after device stop acknowledgement/telemetry.
+
+      return res.status(202).json({
+        success: true,
+        message: 'Stop-session command published to device',
+        commandAccepted: true,
+        acknowledgedByDevice: false,
+        data: {
+          deviceId: device.device_id,
+          sessionId: String(sessionId),
+          userId: String(userId),
+          topic: mqttResult.topic,
+          publishedAt: mqttResult.publishedAt,
+        },
+      });
+    } catch (error) {
+      console.error('[ADMIN STOP SESSION]', error);
+
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to publish stop-session command',
+        error: error.message,
+      });
+    }
+  }
+);
+
 
 router.get('/:deviceId', authMiddleware, authorizeRoles('admin', 'owner', 'customer'), async (req, res) => {
   try {
