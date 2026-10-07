@@ -72,6 +72,255 @@ function assertFiniteNumber(value, fieldName) {
   }
 }
 
+// ============================================
+// NEW: Admin Devices Dashboard Routes
+// MUST BE BEFORE other /admin routes
+// ============================================
+
+/**
+ * GET /api/devices/admin/devices/summary
+ * Get aggregated summary stats for devices dashboard
+ */
+router.get('/admin/devices/summary', 
+  authMiddleware,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      const { project, city, state } = req.query;
+      
+      // Build filter object
+      const filter = {};
+      if (project) filter.project = project;
+      if (city) filter.city = city;
+      if (state) filter.state = state;
+
+      // Aggregation pipeline for summary stats
+      const summary = await Device.aggregate([
+        { $match: filter },
+        {
+          $facet: {
+            total: [{ $count: 'count' }],
+            available: [{ $match: { status: 'Available' } }, { $count: 'count' }],
+            occupied: [{ $match: { status: 'Occupied' } }, { $count: 'count' }],
+            offline: [{ $match: { status: 'Offline' } }, { $count: 'count' }],
+            faulty: [{ $match: { status: 'Faulty' } }, { $count: 'count' }],
+            withSession: [{ $match: { current_session_id: { $ne: null } } }, { $count: 'count' }],
+            relayOn: [{ $match: { relayOn: true } }, { $count: 'count' }]
+          }
+        }
+      ]);
+
+      const result = {
+        total: summary[0].total[0]?.count || 0,
+        available: summary[0].available[0]?.count || 0,
+        occupied: summary[0].occupied[0]?.count || 0,
+        offline: summary[0].offline[0]?.count || 0,
+        faulty: summary[0].faulty[0]?.count || 0,
+        withActiveSession: summary[0].withSession[0]?.count || 0,
+        relayOn: summary[0].relayOn[0]?.count || 0,
+        lastUpdated: new Date().toISOString()
+      };
+
+      res.json({
+        success: true,
+        data: result
+      });
+    } catch (error) {
+      console.error('Error fetching device summary:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch device summary',
+        error: error.message
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/devices/admin/devices/table
+ * Get paginated device list with filters for table display
+ */
+router.get('/admin/devices/table',
+  authMiddleware,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      const {
+        page = 1,
+        limit = 50,
+        project,
+        status,
+        state,
+        city,
+        ownerId,
+        search,
+        sortBy = 'updatedAt',
+        sortOrder = 'desc'
+      } = req.query;
+
+      // Build filter object
+      const filter = {};
+      
+      if (project) filter.project = project;
+      if (status) filter.status = status;
+      if (state) filter.state = state;
+      if (city) filter.city = city;
+      if (ownerId) filter.ownerId = { $in: [ownerId] };
+      
+      // Search across multiple fields
+      if (search) {
+        filter.$or = [
+          { device_id: { $regex: search, $options: 'i' } },
+          { serialNumber: { $regex: search, $options: 'i' } },
+          { project: { $regex: search, $options: 'i' } },
+          { location: { $regex: search, $options: 'i' } }
+        ];
+      }
+
+      // Calculate pagination
+      const skip = (parseInt(page) - 1) * parseInt(limit);
+      const sortField = sortBy || 'updatedAt';
+      const sortDirection = sortOrder === 'asc' ? 1 : -1;
+
+      // Get total count
+      const total = await Device.countDocuments(filter);
+
+      // Get paginated data with only required fields
+      const devices = await Device.find(filter)
+        .select(`
+          device_id serialNumber project status relayOn 
+          lastKnownVoltage lastKnownCurrent 
+          updatedAt city state ownerId current_session_id
+        `)
+        .sort({ [sortField]: sortDirection })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean();
+
+      // Transform data for frontend
+      const tableData = devices.map(device => ({
+        deviceId: device.device_id,
+        serialNumber: device.serialNumber,
+        status: device.status || 'Offline',
+        project: device.project || 'N/A',
+        relayOn: device.relayOn || false,
+        voltage: device.lastKnownVoltage || 0,
+        current: device.lastKnownCurrent || 0,
+        updatedAt: device.updatedAt,
+        city: device.city || 'N/A',
+        state: device.state || 'N/A',
+        hasActiveSession: !!device.current_session_id
+      }));
+
+      res.json({
+        success: true,
+        data: tableData,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          totalPages: Math.ceil(total / parseInt(limit)),
+          hasMore: skip + parseInt(limit) < total
+        },
+        lastUpdated: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Error fetching device table data:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch device table data',
+        error: error.message
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/devices/admin/devices/:id
+ * Get complete device details
+ */
+router.get('/admin/devices/:id',
+  authMiddleware,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      const device = await Device.findOne({
+        $or: [
+          { device_id: id },
+          { serialNumber: id },
+          { _id: id }
+        ]
+      }).lean();
+
+      if (!device) {
+        return res.status(404).json({
+          success: false,
+          message: 'Device not found'
+        });
+      }
+
+      res.json({
+        success: true,
+        data: device
+      });
+    } catch (error) {
+      console.error('Error fetching device details:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch device details',
+        error: error.message
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/devices/admin/devices/filters/options
+ * Get unique values for filter dropdowns
+ */
+router.get('/admin/devices/filters/options',
+  authMiddleware,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      // Get unique projects
+      const projects = await Device.distinct('project', { project: { $ne: null, $ne: '' } });
+      
+      // Get unique cities
+      const cities = await Device.distinct('city', { city: { $ne: null, $ne: '' } });
+      
+      // Get unique states
+      const states = await Device.distinct('state', { state: { $ne: null, $ne: '' } });
+      
+      // Get unique status values
+      const statuses = await Device.distinct('status');
+
+      res.json({
+        success: true,
+        data: {
+          projects: projects.sort(),
+          cities: cities.sort(),
+          states: states.sort(),
+          statuses: statuses.sort()
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching filter options:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch filter options',
+        error: error.message
+      });
+    }
+  }
+);
+
+// ============================================
+// EXISTING ROUTES BELOW
+// ============================================
+
 // Public route: Get all devices (any authenticated user)
 router.get('/', async (req, res) => {
   try {
@@ -151,17 +400,16 @@ router.post(
 // Check if a device exists
 router.get("/check-device/:device_id", async (req, res) => {
   try {
-    const { device_id } = req.params; // Get device ID from URL
+    const { device_id } = req.params;
 
-    if (!device_id) { // Fix: Use device_id instead of deviceId
+    if (!device_id) {
       return res.status(400).json({ error: "Device ID is required" });
     }
 
-    // Check if device exists in MongoDB
     const device = await Device.findOne({ device_id: req.params.device_id });
 
     if (device) {
-      return res.json({  exists: !!device, device });
+      return res.json({ exists: !!device, device });
     } else {
       return res.json({ exists: false });
     }
@@ -171,7 +419,7 @@ router.get("/check-device/:device_id", async (req, res) => {
   }
 });
 
-// 3) Owner’s devices (auth, scoped) for dashboards
+// 3) Owner's devices (auth, scoped) for dashboards
 router.get('/mine', authMiddleware, async (req, res) => {
   try {
     const q = {};
@@ -192,7 +440,7 @@ router.get('/admin-dashboard',
   authorizeRoles('admin'),
   async (req, res) => {
     try {
-      const { area, city, state, status, project  } = req.query;
+      const { area, city, state, status, project } = req.query;
       const query = {};
       if (area) query.area = area;
       if (city) query.city = city;
@@ -200,7 +448,6 @@ router.get('/admin-dashboard',
       if (status) query.status = status;
       if (project) query.project = project;
 
-      // projection - include commercial + ownerId + onboarding + meta fields
       const projection = {
         _id: 1,
         device_id: 1,
@@ -226,16 +473,14 @@ router.get('/admin-dashboard',
       };
 
       const devices = await Device.find(query)
-  .populate({
-    path: 'ownerId',
-    select: 'name email phone role',
-  })
-  .sort({ updatedAt: -1 });
+        .populate({
+          path: 'ownerId',
+          select: 'name email phone role',
+        })
+        .sort({ updatedAt: -1 });
 
-
-      // compute useful flags & summary
       const now = Date.now();
-      const STALE_MS = 3000 * 1000; // 3000 seconds threshold for "stale" (tune as needed)
+      const STALE_MS = 3000 * 1000;
 
       let summary = {
         total: devices.length,
@@ -256,16 +501,13 @@ router.get('/admin-dashboard',
         if (st === 'faulty' || st === 'error') summary.faulty += 1;
         if (d.onboardingStatus === 'pending') summary.pendingOnboard += 1;
 
-        // stale: lastSeen missing or older than threshold
         const last = d.lastSeen ? new Date(d.lastSeen).getTime() : 0;
         d.isStale = !last || (now - last) > STALE_MS;
         if (d.isStale) summary.stale += 1;
 
-        // relay without session
         d.relayOnWithoutSession = !!(d.relayOn && !d.current_session_id);
         if (d.relayOnWithoutSession) summary.relayWithoutSession += 1;
 
-        // convenience default for commercial if missing (so frontend doesn't crash)
         if (!d.commercial) d.commercial = {};
       }
 
@@ -276,7 +518,6 @@ router.get('/admin-dashboard',
     }
   }
 );
-
 
 // GET live monitoring data
 router.get(
@@ -310,8 +551,6 @@ router.get(
 );
 
 // GET latest voltage/current for one selected device
-// Final URL:
-// GET /api/devices/admin/telemetry/:deviceId
 router.get(
   "/admin/telemetry/:deviceId",
   authMiddleware,
@@ -338,9 +577,7 @@ router.get(
             current: 1,
             timestamp: 1,
           }
-        )
-          .sort({ timestamp: -1 })
-          .lean();
+        ).sort({ timestamp: -1 }).lean();
 
       if (!latestTelemetry) {
         return res.status(404).json({
@@ -369,7 +606,6 @@ router.get(
 );
 
 // GET /api/devices/admin/live-devices/filter-options
-// Returns distinct project/area/status values from devices that have recent telemetry
 router.get(
   "/admin/live-devices/filter-options",
   authMiddleware,
@@ -386,8 +622,8 @@ router.get(
 
       const [projects, areas, statuses] = await Promise.all([
         Device.distinct('project', { device_id: { $in: deviceIds }, project: { $ne: null, $ne: '' } }),
-        Device.distinct('area',    { device_id: { $in: deviceIds }, area:    { $ne: null, $ne: '' } }),
-        Device.distinct('status',  { device_id: { $in: deviceIds }, status:  { $ne: null, $ne: '' } }),
+        Device.distinct('area', { device_id: { $in: deviceIds }, area: { $ne: null, $ne: '' } }),
+        Device.distinct('status', { device_id: { $in: deviceIds }, status: { $ne: null, $ne: '' } }),
       ]);
 
       res.json({ projects, areas, statuses });
@@ -399,7 +635,6 @@ router.get(
 );
 
 // GET /api/devices/admin/live-devices
-// Query params: project, area, status
 router.get(
   "/admin/live-devices",
   authMiddleware,
@@ -409,14 +644,12 @@ router.get(
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
       const { project, area, status } = req.query;
 
-      // Step 1: get all deviceIds that have telemetry in last 24h
       const telemetryDocs = await DeviceTelemetry.aggregate([
         { $match: { timestamp: { $gte: since } } },
         { $group: { _id: "$deviceId" } },
       ]);
       const deviceIdsWithTelemetry = telemetryDocs.map(d => d._id);
 
-      // Step 2: build Device query — scope to those IDs + optional filters
       const deviceQuery = { device_id: { $in: deviceIdsWithTelemetry } };
       if (project) deviceQuery.project = project;
       if (area) deviceQuery.area = area;
@@ -427,7 +660,6 @@ router.get(
         'device_id status area project city state location lastSeen'
       ).lean();
 
-      // Step 3: return enriched device objects
       res.json(devices);
 
     } catch (err) {
@@ -437,35 +669,24 @@ router.get(
   }
 );
 
-
-
-
-
-
 // Create new device
 router.post(
   '/',
   authMiddleware,
   authorizeRoles('admin'),
   async (req, res) => {
-  try {
-    const deviceData = req.body;
-    const newDevice = new Device(deviceData);
-    await newDevice.save();
-    res.status(201).json(newDevice);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
+    try {
+      const deviceData = req.body;
+      const newDevice = new Device(deviceData);
+      await newDevice.save();
+      res.status(201).json(newDevice);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
   }
-});
-
-
-
-
+);
 
 // PUT /api/devices/:id
-// Legacy PUT endpoint.
-// Keep the endpoint for compatibility, but prevent unsafe
-// arbitrary document updates.
 router.put(
   '/:id',
   authMiddleware,
@@ -499,25 +720,6 @@ router.post('/add', authMiddleware, authorizeRoles('admin'), async (req, res) =>
 });
 
 // PATCH /api/devices/admin/config/:deviceId
-//
-// Admin-only configuration update.
-//
-// Allowed:
-// - WiFi credentials
-// - Calibration values
-// - Rate
-// - Location
-// - Meter details
-// - Commercial configuration
-// - Target firmware version
-//
-// Not allowed here:
-// - device_id
-// - serialNumber
-// - ownerId
-// - onboardingStatus
-//
-// Device ID changes must use the dedicated identity route below.
 router.patch(
   '/admin/config/:deviceId',
   authMiddleware,
@@ -584,81 +786,81 @@ router.patch(
             error: `${field} must be numeric`,
           });
         }
-      }
 
-      if (cf !== undefined) {
-        device.cf = Number(cf);
-      }
+        if (cf !== undefined) {
+          device.cf = Number(cf);
+        }
 
-      if (vf !== undefined) {
-        device.vf = Number(vf);
-      }
+        if (vf !== undefined) {
+          device.vf = Number(vf);
+        }
 
-      if (currentRF !== undefined) {
-        device.currentRF = Number(currentRF);
-      }
+        if (currentRF !== undefined) {
+          device.currentRF = Number(currentRF);
+        }
 
-      if (wifiSSID !== undefined) {
-        device.wifiSSID = String(wifiSSID).trim();
-      }
+        if (wifiSSID !== undefined) {
+          device.wifiSSID = String(wifiSSID).trim();
+        }
 
-      if (wifiPassword !== undefined) {
-        device.wifiPassword = String(wifiPassword);
-      }
+        if (wifiPassword !== undefined) {
+          device.wifiPassword = String(wifiPassword);
+        }
 
-      if (rate !== undefined) {
-        device.setRate(
-          Number(rate),
-          getActorId(req) || 'admin',
-          'admin'
-        );
-      }
+        if (rate !== undefined) {
+          device.setRate(
+            Number(rate),
+            getActorId(req) || 'admin',
+            'admin'
+          );
+        }
 
-      if (location !== undefined) {
-        device.location = location;
-      }
+        if (location !== undefined) {
+          device.location = location;
+        }
 
-      if (lat !== undefined) {
-        device.lat = Number(lat);
-      }
+        if (lat !== undefined) {
+          device.lat = Number(lat);
+        }
 
-      if (lng !== undefined) {
-        device.lng = Number(lng);
-      }
+        if (lng !== undefined) {
+          device.lng = Number(lng);
+        }
 
-      if (area !== undefined) {
-        device.area = area;
-      }
+        if (area !== undefined) {
+          device.area = area;
+        }
 
-      if (city !== undefined) {
-        device.city = city;
-      }
+        if (city !== undefined) {
+          device.city = city;
+        }
 
-      if (state !== undefined) {
-        device.state = state;
-      }
+        if (state !== undefined) {
+          device.state = state;
+        }
 
-      if (meterType !== undefined) {
-        device.meterType = meterType;
-      }
+        if (meterType !== undefined) {
+          device.meterType = meterType;
+        }
 
-      if (meterConsumerNumber !== undefined) {
-        device.meterConsumerNumber =
-          meterConsumerNumber;
-      }
+        if (meterConsumerNumber !== undefined) {
+          device.meterConsumerNumber =
+            meterConsumerNumber;
+        }
 
-      if (commercial !== undefined) {
-        device.commercial = {
-          ...(device.commercial?.toObject
-            ? device.commercial.toObject()
-            : device.commercial || {}),
-          ...commercial,
-        };
-      }
+        if (commercial !== undefined) {
+          device.commercial = {
+            ...(device.commercial?.toObject
+              ? device.commercial.toObject()
+              : device.commercial || {}),
+            ...commercial,
+          };
+        }
 
-      if (targetFirmwareVersion !== undefined) {
-        device.targetFirmwareVersion =
-          targetFirmwareVersion;
+        if (targetFirmwareVersion !== undefined) {
+          device.targetFirmwareVersion =
+            targetFirmwareVersion;
+        }
       }
 
       await device.save();
@@ -692,12 +894,6 @@ router.patch(
 );
 
 // PATCH /api/devices/owner/wifi/:deviceId
-//
-// Owner can change WiFi credentials only for a device
-// already assigned to that owner.
-//
-// Admin can change WiFi for any device through this route,
-// although the admin configuration route is preferred for admin use.
 router.patch(
   '/owner/wifi/:deviceId',
   authMiddleware,
@@ -796,18 +992,7 @@ router.patch(
   }
 );
 
-
 // PATCH /api/devices/admin/:deviceId/identity
-//
-// Admin-only controlled device ID migration.
-//
-// This updates:
-// 1. Device.device_id
-// 2. DeviceProvision.deviceId
-// 3. Firmware configuration through publishDeviceConfig()
-//
-// serialNumber remains unchanged and is the stable identity
-// used for the configuration and ACK topics.
 router.patch(
   '/admin/:deviceId/identity',
   authMiddleware,
@@ -857,8 +1042,8 @@ router.patch(
             device_id: newDeviceId,
             _id: { $ne: device._id },
           })
-            .session(session)
-            .lean();
+          .session(session)
+          .lean();
 
         if (duplicate) {
           const error = new Error(
@@ -927,8 +1112,6 @@ router.patch(
 );
 
 // POST /api/devices/:deviceId/claim
-// Owner self-claim flow: move onboardingStatus from 'pending' -> 'approved',
-// add ownerId[] entry, and stamp onboardedAt / onboardedBy.
 router.post(
   '/:deviceId/claim',
   authMiddleware,
@@ -936,14 +1119,13 @@ router.post(
   async (req, res) => {
     try {
       const deviceId = req.params.deviceId.toUpperCase();
-      const userId   = req.user.userId;  // from authMiddleware
+      const userId = req.user.userId;
 
       const device = await Device.findOne({ device_id: deviceId });
       if (!device) {
         return res.status(404).json({ error: 'Device not found' });
       }
 
-      // Only allow claim when onboardingStatus is 'pending'
       if (device.onboardingStatus !== 'pending') {
         return res.status(400).json({
           error: 'Device is not in a claimable state',
@@ -951,30 +1133,28 @@ router.post(
         });
       }
 
-      // Prevent duplicate owner entries
       const alreadyOwner = Array.isArray(device.ownerId)
         ? device.ownerId.some(id => id.toString() === userId.toString())
         : device.ownerId && device.ownerId.toString() === userId.toString();
 
       if (!alreadyOwner) {
-        // Append ownerId into array (create array if missing)
         if (!Array.isArray(device.ownerId)) {
           device.ownerId = [];
         }
+
         device.ownerId.push(userId);
+
+        device.onboardingStatus = 'approved';
+        device.onboardedAt = new Date();
+        device.onboardedBy = userId;
+
+        await device.save();
+
+        return res.status(200).json({
+          device,
+          message: 'Device claimed successfully',
+        });
       }
-
-      // Mark onboarding as approved
-      device.onboardingStatus = 'approved';
-      device.onboardedAt      = new Date();
-      device.onboardedBy      = userId;
-
-      await device.save();
-
-      return res.status(200).json({
-        device,
-        message: 'Device claimed successfully',
-      });
     } catch (err) {
       console.error('[OWNER CLAIM] Error:', err);
       return res.status(500).json({ error: 'Failed to claim device', details: err.message });
@@ -982,266 +1162,37 @@ router.post(
   }
 );
 
-// Admin/owner only: Can view details (example, adjust logic as needed)
+// Admin/owner only: Can view details
 router.get('/:deviceId', authMiddleware, authorizeRoles('admin', 'owner', 'customer'), async (req, res) => {
   try {
-const deviceId = getNormalizedDeviceId(
-  req.params.deviceId
-);
+    const deviceId = getNormalizedDeviceId(
+      req.params.deviceId
+    );
 
-const device = await Device.findOne({
-  device_id: deviceId,
-});
-
-        if (!device) {
-      console.warn("❌ Device not found:", req.params.id);
-      return res.status(404).json({ error: "Device not found" });
-        }
-      // console.log("📦 Device Owner ID:", device.ownerId);
-
-if (req.user?.role === 'owner') {
-  const actorId = getActorId(req);
-
-  if (!isOwnerOfDevice(device, actorId)) {
-    return res.status(403).json({
-      error:
-        'You do not have access to this device',
-    });
-  }
-}
-
-      res.json(sanitizeDevice(device));
-    } catch (error) {
-      console.error("Error fetching device:", error);
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
-  // ============================================
-// NEW: Admin Devices Dashboard Routes
-// ============================================
-
-/**
- * GET /api/admin/devices/summary
- * Get aggregated summary stats for devices dashboard
- */
-router.get('/admin/devices/summary', async (req, res) => {
-  try {
-    const { project, city, state } = req.query;
-    
-    // Build filter object
-    const filter = {};
-    if (project) filter.project = project;
-    if (city) filter.city = city;
-    if (state) filter.state = state;
-
-    // Aggregation pipeline for summary stats
-    const summary = await Device.aggregate([
-      { $match: filter },
-      {
-        $facet: {
-          total: [{ $count: 'count' }],
-          available: [{ $match: { status: 'Available' } }, { $count: 'count' }],
-          occupied: [{ $match: { status: 'Occupied' } }, { $count: 'count' }],
-          offline: [{ $match: { status: 'Offline' } }, { $count: 'count' }],
-          faulty: [{ $match: { status: 'Faulty' } }, { $count: 'count' }],
-          withSession: [{ $match: { current_session_id: { $ne: null } } }, { $count: 'count' }],
-          relayOn: [{ $match: { relayOn: true } }, { $count: 'count' }]
-        }
-      }
-    ]);
-
-    const result = {
-      total: summary[0].total[0]?.count || 0,
-      available: summary[0].available[0]?.count || 0,
-      occupied: summary[0].occupied[0]?.count || 0,
-      offline: summary[0].offline[0]?.count || 0,
-      faulty: summary[0].faulty[0]?.count || 0,
-      withActiveSession: summary[0].withSession[0]?.count || 0,
-      relayOn: summary[0].relayOn[0]?.count || 0,
-      lastUpdated: new Date().toISOString()
-    };
-
-    res.json({
-      success: true,
-      data: result
-    });
-  } catch (error) {
-    console.error('Error fetching device summary:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch device summary',
-      error: error.message
-    });
-  }
-});
-
-/**
- * GET /api/admin/devices/table
- * Get paginated device list with filters for table display
- */
-router.get('/admin/devices/table', async (req, res) => {
-  try {
-    const {
-      page = 1,
-      limit = 50,
-      project,
-      status,
-      state,
-      city,
-      ownerId,
-      search,
-      sortBy = 'updatedAt',
-      sortOrder = 'desc'
-    } = req.query;
-
-    // Build filter object
-    const filter = {};
-    
-    if (project) filter.project = project;
-    if (status) filter.status = status;
-    if (state) filter.state = state;
-    if (city) filter.city = city;
-    if (ownerId) filter.ownerId = { $in: [ownerId] };
-    
-    // Search across multiple fields
-    if (search) {
-      filter.$or = [
-        { device_id: { $regex: search, $options: 'i' } },
-        { serialNumber: { $regex: search, $options: 'i' } },
-        { project: { $regex: search, $options: 'i' } },
-        { location: { $regex: search, $options: 'i' } }
-      ];
-    }
-
-    // Calculate pagination
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const sortField = sortBy || 'updatedAt';
-    const sortDirection = sortOrder === 'asc' ? 1 : -1;
-
-    // Get total count
-    const total = await Device.countDocuments(filter);
-
-    // Get paginated data with only required fields
-    const devices = await Device.find(filter)
-      .select(`
-        device_id serialNumber project status relayOn 
-        lastKnownVoltage lastKnownCurrent 
-        updatedAt city state ownerId current_session_id
-      `)
-      .sort({ [sortField]: sortDirection })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
-
-    // Transform data for frontend
-    const tableData = devices.map(device => ({
-      deviceId: device.device_id,
-      serialNumber: device.serialNumber,
-      status: device.status || 'Offline',
-      project: device.project || 'N/A',
-      relayOn: device.relayOn || false,
-      voltage: device.lastKnownVoltage || 0,
-      current: device.lastKnownCurrent || 0,
-      updatedAt: device.updatedAt,
-      city: device.city || 'N/A',
-      state: device.state || 'N/A',
-      hasActiveSession: !!device.current_session_id
-    }));
-
-    res.json({
-      success: true,
-      data: tableData,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        totalPages: Math.ceil(total / parseInt(limit)),
-        hasMore: skip + parseInt(limit) < total
-      },
-      lastUpdated: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error('Error fetching device table data:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch device table data',
-      error: error.message
-    });
-  }
-});
-
-/**
- * GET /api/admin/devices/:id
- * Get complete device details
- */
-router.get('/admin/devices/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    
     const device = await Device.findOne({
-      $or: [
-        { device_id: id },
-        { serialNumber: id },
-        { _id: id }
-      ]
-    }).lean();
+      device_id: deviceId,
+    });
 
     if (!device) {
-      return res.status(404).json({
-        success: false,
-        message: 'Device not found'
-      });
+      console.warn("❌ Device not found:", req.params.id);
+      return res.status(404).json({ error: "Device not found" });
     }
 
-    res.json({
-      success: true,
-      data: device
-    });
-  } catch (error) {
-    console.error('Error fetching device details:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch device details',
-      error: error.message
-    });
-  }
-});
+    if (req.user?.role === 'owner') {
+      const actorId = getActorId(req);
 
-/**
- * GET /api/admin/devices/filters/options
- * Get unique values for filter dropdowns
- */
-router.get('/admin/devices/filters/options', async (req, res) => {
-  try {
-    // Get unique projects
-    const projects = await Device.distinct('project', { project: { $ne: null, $ne: '' } });
-    
-    // Get unique cities
-    const cities = await Device.distinct('city', { city: { $ne: null, $ne: '' } });
-    
-    // Get unique states
-    const states = await Device.distinct('state', { state: { $ne: null, $ne: '' } });
-    
-    // Get unique status values
-    const statuses = await Device.distinct('status');
-
-    res.json({
-      success: true,
-      data: {
-        projects: projects.sort(),
-        cities: cities.sort(),
-        states: states.sort(),
-        statuses: statuses.sort()
+      if (!isOwnerOfDevice(device, actorId)) {
+        return res.status(403).json({
+          error:
+            'You do not have access to this device',
+        });
       }
-    });
+    }
+
+    res.json(sanitizeDevice(device));
   } catch (error) {
-    console.error('Error fetching filter options:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch filter options',
-      error: error.message
-    });
+    console.error("Error fetching device:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
