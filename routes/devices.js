@@ -74,13 +74,8 @@ function assertFiniteNumber(value, fieldName) {
 
 // ============================================
 // NEW: Admin Devices Dashboard Routes
-// MUST BE BEFORE other /admin routes
 // ============================================
 
-/**
- * GET /api/devices/admin/devices/summary
- * Get aggregated summary stats for devices dashboard
- */
 router.get('/admin/devices/summary', 
   authMiddleware,
   authorizeRoles('admin'),
@@ -119,10 +114,7 @@ router.get('/admin/devices/summary',
         lastUpdated: new Date().toISOString()
       };
 
-      res.json({
-        success: true,
-        data: result
-      });
+      res.json({ success: true, data: result });
     } catch (error) {
       console.error('Error fetching device summary:', error);
       res.status(500).json({
@@ -134,10 +126,6 @@ router.get('/admin/devices/summary',
   }
 );
 
-/**
- * GET /api/devices/admin/devices/table
- * Get paginated device list with filters for table display
- */
 router.get('/admin/devices/table',
   authMiddleware,
   authorizeRoles('admin'),
@@ -227,10 +215,6 @@ router.get('/admin/devices/table',
   }
 );
 
-/**
- * GET /api/devices/admin/devices/:id
- * Get complete device details
- */
 router.get('/admin/devices/:id',
   authMiddleware,
   authorizeRoles('admin'),
@@ -252,10 +236,7 @@ router.get('/admin/devices/:id',
         });
       }
 
-      res.json({
-        success: true,
-        data: device
-      });
+      res.json({ success: true, data: device });
     } catch (error) {
       console.error('Error fetching device details:', error);
       res.status(500).json({
@@ -267,10 +248,6 @@ router.get('/admin/devices/:id',
   }
 );
 
-/**
- * GET /api/devices/admin/devices/filters/options
- * Get unique values for filter dropdowns
- */
 router.get('/admin/devices/filters/options',
   authMiddleware,
   authorizeRoles('admin'),
@@ -301,11 +278,7 @@ router.get('/admin/devices/filters/options',
   }
 );
 
-/**
- * GET /api/devices/admin/devices/table-with-telemetry
- * Get paginated device list WITH live voltage/current from telemetry
- */
-router.get('/admin/devices/table-with-telemetry',
+router.get('/admin/devices-table-telemetry',
   authMiddleware,
   authorizeRoles('admin'),
   async (req, res) => {
@@ -428,10 +401,9 @@ router.get('/admin/devices/table-with-telemetry',
 );
 
 // ============================================
-// EXISTING ROUTES BELOW
+// EXISTING ROUTES
 // ============================================
 
-// Public route: Get all devices
 router.get('/', async (req, res) => {
   try {
     const devices = await Device.find(
@@ -445,7 +417,6 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Public single-device view
 router.get('/public/:deviceId', async (req, res) => {
   try {
     const { deviceId } = req.params;
@@ -461,7 +432,6 @@ router.get('/public/:deviceId', async (req, res) => {
   }
 });
 
-// POST /api/devices/admin/calibration/:deviceId
 router.post(
   "/admin/calibration/:deviceId",
   authMiddleware,
@@ -492,7 +462,6 @@ router.post(
   }
 );
 
-// Check if a device exists
 router.get("/check-device/:device_id", async (req, res) => {
   try {
     const { device_id } = req.params;
@@ -514,7 +483,6 @@ router.get("/check-device/:device_id", async (req, res) => {
   }
 });
 
-// Owner's devices
 router.get('/mine', authMiddleware, async (req, res) => {
   try {
     const q = {};
@@ -530,7 +498,6 @@ router.get('/mine', authMiddleware, async (req, res) => {
   }
 });
 
-// Admin dashboard
 router.get('/admin-dashboard',
   authMiddleware,
   authorizeRoles('admin'),
@@ -591,7 +558,6 @@ router.get('/admin-dashboard',
   }
 );
 
-// GET /api/devices/admin/live-devices/filter-options
 router.get(
   "/admin/live-devices/filter-options",
   authMiddleware,
@@ -620,7 +586,6 @@ router.get(
   }
 );
 
-// GET /api/devices/admin/live-devices
 router.get(
   "/admin/live-devices",
   authMiddleware,
@@ -655,7 +620,6 @@ router.get(
   }
 );
 
-// GET live monitoring data
 router.get(
   "/admin/live-monitoring/:deviceId",
   authMiddleware,
@@ -686,7 +650,6 @@ router.get(
   }
 );
 
-// GET latest voltage/current for one selected device
 router.get(
   "/admin/telemetry/:deviceId",
   authMiddleware,
@@ -734,7 +697,6 @@ router.get(
   }
 );
 
-// Create new device
 router.post(
   '/',
   authMiddleware,
@@ -751,7 +713,6 @@ router.post(
   }
 );
 
-// PUT /api/devices/:id
 router.put(
   '/:id',
   authMiddleware,
@@ -768,7 +729,6 @@ router.put(
   }
 );
 
-// Admin only: Add new device
 router.post('/add', authMiddleware, authorizeRoles('admin'), async (req, res) => {
   try {
     const { device_id, location, lat, lng, status, charger_type, rate, current_session_id, area, city, state, totalenergy } = req.body;
@@ -780,7 +740,6 @@ router.post('/add', authMiddleware, authorizeRoles('admin'), async (req, res) =>
   }
 });
 
-// PATCH /api/devices/admin/config/:deviceId
 router.patch(
   '/admin/config/:deviceId',
   authMiddleware,
@@ -906,7 +865,6 @@ router.patch(
   }
 );
 
-// PATCH /api/devices/owner/wifi/:deviceId
 router.patch(
   '/owner/wifi/:deviceId',
   authMiddleware,
@@ -993,7 +951,6 @@ router.patch(
   }
 );
 
-// PATCH /api/devices/admin/:deviceId/identity
 router.patch(
   '/admin/:deviceId/identity',
   authMiddleware,
@@ -1089,7 +1046,6 @@ router.patch(
   }
 );
 
-// POST /api/devices/:deviceId/claim
 router.post(
   '/:deviceId/claim',
   authMiddleware,
@@ -1139,7 +1095,6 @@ router.post(
   }
 );
 
-// Admin/owner only: Can view details
 router.get('/:deviceId', authMiddleware, authorizeRoles('admin', 'owner', 'customer'), async (req, res) => {
   try {
     const deviceId = getNormalizedDeviceId(req.params.deviceId);
