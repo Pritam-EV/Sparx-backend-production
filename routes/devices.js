@@ -276,180 +276,7 @@ router.get('/admin/devices/:id',
   }
 );
 
-/**
- * GET /api/devices/admin/devices/filters/options
- * Get unique values for filter dropdowns
- */
-router.get('/admin/devices/filters/options',
-  authMiddleware,
-  authorizeRoles('admin'),
-  async (req, res) => {
-    try {
-      // Get unique projects
-      const projects = await Device.distinct('project', { project: { $ne: null, $ne: '' } });
-      
-      // Get unique cities
-      const cities = await Device.distinct('city', { city: { $ne: null, $ne: '' } });
-      
-      // Get unique states
-      const states = await Device.distinct('state', { state: { $ne: null, $ne: '' } });
-      
-      // Get unique status values
-      const statuses = await Device.distinct('status');
 
-      res.json({
-        success: true,
-        data: {
-          projects: projects.sort(),
-          cities: cities.sort(),
-          states: states.sort(),
-          statuses: statuses.sort()
-        }
-      });
-    } catch (error) {
-      console.error('Error fetching filter options:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to fetch filter options',
-        error: error.message
-      });
-    }
-  }
-);
-
-/**
- * GET /api/devices/admin/devices/table-with-telemetry
- * Get paginated device list WITH live voltage/current from telemetry
- */
-router.get('/admin/devices/table-with-telemetry',
-  authMiddleware,
-  authorizeRoles('admin'),
-  async (req, res) => {
-    try {
-      const {
-        page = 1,
-        limit = 50,
-        project,
-        status,
-        state,
-        city,
-        ownerId,
-        search,
-        sortBy = 'updatedAt',
-        sortOrder = 'desc'
-      } = req.query;
-
-      // Build filter object
-      const filter = {};
-      
-      if (project) filter.project = project;
-      if (status) filter.status = status;
-      if (state) filter.state = state;
-      if (city) filter.city = city;
-      if (ownerId) filter.ownerId = { $in: [ownerId] };
-      
-      if (search) {
-        filter.$or = [
-          { device_id: { $regex: search, $options: 'i' } },
-          { serialNumber: { $regex: search, $options: 'i' } },
-          { project: { $regex: search, $options: 'i' } },
-          { location: { $regex: search, $options: 'i' } }
-        ];
-      }
-
-      // Calculate pagination
-      const skip = (parseInt(page) - 1) * parseInt(limit);
-      const sortField = sortBy || 'updatedAt';
-      const sortDirection = sortOrder === 'asc' ? 1 : -1;
-
-      // Get paginated devices
-      const devices = await Device.find(filter)
-        .select('device_id serialNumber project status relayOn updatedAt city state ownerId current_session_id totalenergy lastSeen')
-        .sort({ [sortField]: sortDirection })
-        .skip(skip)
-        .limit(parseInt(limit))
-        .lean();
-
-      // Get device IDs for telemetry query
-      const deviceIds = devices.map(d => d.device_id);
-
-      // Get latest telemetry for all devices in one query
-      const latestTelemetry = await DeviceTelemetry.aggregate([
-        {
-          $match: {
-            deviceId: { $in: deviceIds }
-          }
-        },
-        {
-          $sort: { timestamp: -1 }
-        },
-        {
-          $group: {
-            _id: '$deviceId',
-            voltage: { $first: '$voltage' },
-            current: { $first: '$current' },
-            timestamp: { $first: '$timestamp' }
-          }
-        }
-      ]);
-
-      // Create a map for quick lookup
-      const telemetryMap = {};
-      latestTelemetry.forEach(t => {
-        telemetryMap[t._id] = {
-          voltage: t.voltage,
-          current: t.current,
-          timestamp: t.timestamp
-        };
-      });
-
-      // Transform data for frontend
-      const tableData = devices.map(device => {
-        const telemetry = telemetryMap[device.device_id] || { voltage: 0, current: 0 };
-        
-        return {
-          deviceId: device.device_id,
-          serialNumber: device.serialNumber,
-          status: device.status || 'Offline',
-          project: device.project || 'N/A',
-          relayOn: device.relayOn || false,
-          voltage: telemetry.voltage || 0,
-          current: telemetry.current || 0,
-          telemetryTimestamp: telemetry.timestamp,
-          updatedAt: device.updatedAt,
-          city: device.city || 'N/A',
-          state: device.state || 'N/A',
-          hasActiveSession: !!device.current_session_id,
-          totalenergy: device.totalenergy || 0,
-          lastSeen: device.lastSeen
-        };
-      });
-
-      // Get total count
-      const total = await Device.countDocuments(filter);
-
-      res.json({
-        success: true,
-        data: tableData,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total,
-          totalPages: Math.ceil(total / parseInt(limit)),
-          hasMore: skip + parseInt(limit) < total
-        },
-        lastUpdated: new Date().toISOString()
-      });
-    } catch (error) {
-      console.error('Error fetching device table with telemetry:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to fetch device table with telemetry',
-        error: error.message
-      });
-    }
-  }
-);
 // ============================================
 // EXISTING ROUTES BELOW
 // ============================================
@@ -763,6 +590,181 @@ router.get(
     } catch (err) {
       console.error("Filter options error:", err);
       res.status(500).json({ error: "Failed to fetch filter options" });
+    }
+  }
+);
+
+/**
+ * GET /api/devices/admin/devices/filters/options
+ * Get unique values for filter dropdowns
+ */
+router.get('/admin/devices/filters/options',
+  authMiddleware,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      // Get unique projects
+      const projects = await Device.distinct('project', { project: { $ne: null, $ne: '' } });
+      
+      // Get unique cities
+      const cities = await Device.distinct('city', { city: { $ne: null, $ne: '' } });
+      
+      // Get unique states
+      const states = await Device.distinct('state', { state: { $ne: null, $ne: '' } });
+      
+      // Get unique status values
+      const statuses = await Device.distinct('status');
+
+      res.json({
+        success: true,
+        data: {
+          projects: projects.sort(),
+          cities: cities.sort(),
+          states: states.sort(),
+          statuses: statuses.sort()
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching filter options:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch filter options',
+        error: error.message
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/devices/admin/devices/table-with-telemetry
+ * Get paginated device list WITH live voltage/current from telemetry
+ */
+router.get('/admin/devices/table-with-telemetry',
+  authMiddleware,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      const {
+        page = 1,
+        limit = 50,
+        project,
+        status,
+        state,
+        city,
+        ownerId,
+        search,
+        sortBy = 'updatedAt',
+        sortOrder = 'desc'
+      } = req.query;
+
+      // Build filter object
+      const filter = {};
+      
+      if (project) filter.project = project;
+      if (status) filter.status = status;
+      if (state) filter.state = state;
+      if (city) filter.city = city;
+      if (ownerId) filter.ownerId = { $in: [ownerId] };
+      
+      if (search) {
+        filter.$or = [
+          { device_id: { $regex: search, $options: 'i' } },
+          { serialNumber: { $regex: search, $options: 'i' } },
+          { project: { $regex: search, $options: 'i' } },
+          { location: { $regex: search, $options: 'i' } }
+        ];
+      }
+
+      // Calculate pagination
+      const skip = (parseInt(page) - 1) * parseInt(limit);
+      const sortField = sortBy || 'updatedAt';
+      const sortDirection = sortOrder === 'asc' ? 1 : -1;
+
+      // Get paginated devices
+      const devices = await Device.find(filter)
+        .select('device_id serialNumber project status relayOn updatedAt city state ownerId current_session_id totalenergy lastSeen')
+        .sort({ [sortField]: sortDirection })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean();
+
+      // Get device IDs for telemetry query
+      const deviceIds = devices.map(d => d.device_id);
+
+      // Get latest telemetry for all devices in one query
+      const latestTelemetry = await DeviceTelemetry.aggregate([
+        {
+          $match: {
+            deviceId: { $in: deviceIds }
+          }
+        },
+        {
+          $sort: { timestamp: -1 }
+        },
+        {
+          $group: {
+            _id: '$deviceId',
+            voltage: { $first: '$voltage' },
+            current: { $first: '$current' },
+            timestamp: { $first: '$timestamp' }
+          }
+        }
+      ]);
+
+      // Create a map for quick lookup
+      const telemetryMap = {};
+      latestTelemetry.forEach(t => {
+        telemetryMap[t._id] = {
+          voltage: t.voltage,
+          current: t.current,
+          timestamp: t.timestamp
+        };
+      });
+
+      // Transform data for frontend
+      const tableData = devices.map(device => {
+        const telemetry = telemetryMap[device.device_id] || { voltage: 0, current: 0 };
+        
+        return {
+          deviceId: device.device_id,
+          serialNumber: device.serialNumber,
+          status: device.status || 'Offline',
+          project: device.project || 'N/A',
+          relayOn: device.relayOn || false,
+          voltage: telemetry.voltage || 0,
+          current: telemetry.current || 0,
+          telemetryTimestamp: telemetry.timestamp,
+          updatedAt: device.updatedAt,
+          city: device.city || 'N/A',
+          state: device.state || 'N/A',
+          hasActiveSession: !!device.current_session_id,
+          totalenergy: device.totalenergy || 0,
+          lastSeen: device.lastSeen
+        };
+      });
+
+      // Get total count
+      const total = await Device.countDocuments(filter);
+
+      res.json({
+        success: true,
+        data: tableData,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          totalPages: Math.ceil(total / parseInt(limit)),
+          hasMore: skip + parseInt(limit) < total
+        },
+        lastUpdated: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Error fetching device table with telemetry:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch device table with telemetry',
+        error: error.message
+      });
     }
   }
 );
