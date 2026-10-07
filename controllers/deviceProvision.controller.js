@@ -1,4 +1,5 @@
 const DeviceProvision = require('../models/DeviceProvision');
+const Device = require('../models/device');
 
 const {
   MANUFACTURING_STATUS,
@@ -662,6 +663,14 @@ const getFilterOptions = async (req, res) => {
 
 // Export the new functions
 module.exports = {
+  createGroupA,
+  getGroupA,
+  getAllGroupA,
+  updateGroupA,
+  deleteGroupA,
+  promoteToGroupB,
+  getAllProvisionDevices,
+
   getDeviceSummary,
   getDeviceTableData,
   getDeviceDetails,
