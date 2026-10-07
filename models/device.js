@@ -9,6 +9,8 @@ const {
   CONFIG_ACK_STATUS,
 } = require('../config/deviceProtocol');
 
+const { publishStartSession, publishStopSession } = require('../services/sessionCommandService');
+
 // ── Rate history sub-schema (admin or owner change tracked, last 1 entry) ────
 const rateHistorySchema = new mongoose.Schema({
   rate:    { type: Number, required: true },
