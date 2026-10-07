@@ -96,10 +96,10 @@ const deviceSchema = new mongoose.Schema({
   },
   lastSeen:            { type: Date, default: Date.now },
   totalenergy:         { type: Number, default: 0 },
-  current_session_id:  {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Session',
-    default: null
+  current_session_id: {
+    type: String,  // Changed from ObjectId to String
+    default: null,
+    index: true
   },
 
   // ── CALIBRATION (admin-only, can be updated post-dispatch via admin portal) ─
