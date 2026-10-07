@@ -9,7 +9,7 @@ const {
 const { publishProvisionConfig } = require('../services/configPublisher');
 
 // ─── CREATE GROUP A ──────────────────────────────────────────────────────────
-exports.createGroupA = async (req, res) => {
+const createGroupA = async (req, res) => {
   try {
     const {
       serialNumber,
@@ -75,15 +75,15 @@ exports.createGroupA = async (req, res) => {
 };
 
 // ─── GET SINGLE GROUP A BY SERIAL ────────────────────────────────────────────
-exports.getGroupA = async (req, res) => {
+const getGroupA = async (req, res) => {
   try {
-const provision = await DeviceProvision.findOne({
-  serialNumber: normalizeSerialNumber(
-    req.params.serial
-  ),
-  manufacturingStatus:
-    MANUFACTURING_STATUS.GROUP_A,
-});
+    const provision = await DeviceProvision.findOne({
+      serialNumber: normalizeSerialNumber(
+        req.params.serial
+      ),
+      manufacturingStatus:
+        MANUFACTURING_STATUS.GROUP_A,
+    });
     if (!provision) return res.status(404).json({ success: false, message: 'Not found.' });
     return res.json({ success: true, data: provision });
   } catch (err) {
@@ -92,7 +92,7 @@ const provision = await DeviceProvision.findOne({
 };
 
 // ─── GET ALL GROUP A ──────────────────────────────────────────────────────────
-exports.getAllGroupA = async (req, res) => {
+const getAllGroupA = async (req, res) => {
   try {
     const page = Math.max(Number(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
@@ -137,7 +137,7 @@ exports.getAllGroupA = async (req, res) => {
 };
 
 // ─── UPDATE GROUP A ───────────────────────────────────────────────────────────
-exports.updateGroupA = async (req, res) => {
+const updateGroupA = async (req, res) => {
   try {
     const allowedFields = [
       'hardwareRevision',
@@ -200,7 +200,7 @@ exports.updateGroupA = async (req, res) => {
 };
 
 // ─── DELETE GROUP A ───────────────────────────────────────────────────────────
-exports.deleteGroupA = async (req, res) => {
+const deleteGroupA = async (req, res) => {
   try {
     const serialNumber = normalizeSerialNumber(req.params.serial);
 
@@ -233,7 +233,7 @@ exports.deleteGroupA = async (req, res) => {
 };
 
 // ─── PROMOTE GROUP A → GROUP B ────────────────────────────────────────────────
-exports.promoteToGroupB = async (req, res) => {
+const promoteToGroupB = async (req, res) => {
   try {
     const serialNumber =
       normalizeSerialNumber(req.params.serial);
@@ -413,7 +413,7 @@ exports.promoteToGroupB = async (req, res) => {
 //   ?page=1&limit=100
 //
 // This endpoint is intentionally read-only.
-exports.getAllProvisionDevices = async (req, res) => {
+const getAllProvisionDevices = async (req, res) => {
   try {
     const page = Math.max(Number(req.query.page) || 1, 1);
     const limit = Math.min(
@@ -509,10 +509,10 @@ const getDeviceSummary = async (req, res) => {
       lastUpdated: new Date().toISOString()
     };
 
-    res.json({ success: true, data: result });
+    return res.json({ success: true, data: result });
   } catch (error) {
     console.error('Get device summary error:', error);
-    res.status(500).json({ 
+    return res.status(500).json({ 
       success: false, 
       message: error.message 
     });
@@ -578,7 +578,7 @@ const getDeviceTableData = async (req, res) => {
       hasActiveSession: !!device.current_session_id
     }));
 
-    res.json({
+    return res.json({
       success: true,
       data: tableData,
       pagination: {
@@ -592,7 +592,7 @@ const getDeviceTableData = async (req, res) => {
     });
   } catch (error) {
     console.error('Get device table data error:', error);
-    res.status(500).json({ 
+    return res.status(500).json({ 
       success: false, 
       message: error.message 
     });
@@ -621,10 +621,10 @@ const getDeviceDetails = async (req, res) => {
       });
     }
 
-    res.json({ success: true, data: device });
+    return res.json({ success: true, data: device });
   } catch (error) {
     console.error('Get device details error:', error);
-    res.status(500).json({ 
+    return res.status(500).json({ 
       success: false, 
       message: error.message 
     });
@@ -643,7 +643,7 @@ const getFilterOptions = async (req, res) => {
       Device.distinct('status')
     ]);
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         projects: projects.sort(),
@@ -654,14 +654,14 @@ const getFilterOptions = async (req, res) => {
     });
   } catch (error) {
     console.error('Get filter options error:', error);
-    res.status(500).json({ 
+    return res.status(500).json({ 
       success: false, 
       message: error.message 
     });
   }
 };
 
-// Export the new functions
+// Export all functions
 module.exports = {
   createGroupA,
   getGroupA,
@@ -670,7 +670,6 @@ module.exports = {
   deleteGroupA,
   promoteToGroupB,
   getAllProvisionDevices,
-
   getDeviceSummary,
   getDeviceTableData,
   getDeviceDetails,
