@@ -88,13 +88,11 @@ router.get('/admin/devices/summary',
     try {
       const { project, city, state } = req.query;
       
-      // Build filter object
       const filter = {};
       if (project) filter.project = project;
       if (city) filter.city = city;
       if (state) filter.state = state;
 
-      // Aggregation pipeline for summary stats
       const summary = await Device.aggregate([
         { $match: filter },
         {
@@ -158,7 +156,6 @@ router.get('/admin/devices/table',
         sortOrder = 'desc'
       } = req.query;
 
-      // Build filter object
       const filter = {};
       
       if (project) filter.project = project;
@@ -167,7 +164,6 @@ router.get('/admin/devices/table',
       if (city) filter.city = city;
       if (ownerId) filter.ownerId = { $in: [ownerId] };
       
-      // Search across multiple fields
       if (search) {
         filter.$or = [
           { device_id: { $regex: search, $options: 'i' } },
@@ -177,15 +173,12 @@ router.get('/admin/devices/table',
         ];
       }
 
-      // Calculate pagination
       const skip = (parseInt(page) - 1) * parseInt(limit);
       const sortField = sortBy || 'updatedAt';
       const sortDirection = sortOrder === 'asc' ? 1 : -1;
 
-      // Get total count
       const total = await Device.countDocuments(filter);
 
-      // Get paginated data with only required fields
       const devices = await Device.find(filter)
         .select(`
           device_id serialNumber project status relayOn 
@@ -197,7 +190,6 @@ router.get('/admin/devices/table',
         .limit(parseInt(limit))
         .lean();
 
-      // Transform data for frontend
       const tableData = devices.map(device => ({
         deviceId: device.device_id,
         serialNumber: device.serialNumber,
@@ -246,7 +238,6 @@ router.get('/admin/devices/:id',
     try {
       const { id } = req.params;
       
-      // Try multiple fields, avoid casting non-ObjectId strings to _id
       const device = await Device.findOne({
         $or: [
           { device_id: id },
@@ -276,12 +267,171 @@ router.get('/admin/devices/:id',
   }
 );
 
+/**
+ * GET /api/devices/admin/devices/filters/options
+ * Get unique values for filter dropdowns
+ */
+router.get('/admin/devices/filters/options',
+  authMiddleware,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      const projects = await Device.distinct('project', { project: { $ne: null, $ne: '' } });
+      const cities = await Device.distinct('city', { city: { $ne: null, $ne: '' } });
+      const states = await Device.distinct('state', { state: { $ne: null, $ne: '' } });
+      const statuses = await Device.distinct('status');
+
+      res.json({
+        success: true,
+        data: {
+          projects: projects.sort(),
+          cities: cities.sort(),
+          states: states.sort(),
+          statuses: statuses.sort()
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching filter options:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch filter options',
+        error: error.message
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/devices/admin/devices/table-with-telemetry
+ * Get paginated device list WITH live voltage/current from telemetry
+ */
+router.get('/admin/devices/table-with-telemetry',
+  authMiddleware,
+  authorizeRoles('admin'),
+  async (req, res) => {
+    try {
+      const {
+        page = 1,
+        limit = 50,
+        project,
+        status,
+        state,
+        city,
+        ownerId,
+        search,
+        sortBy = 'updatedAt',
+        sortOrder = 'desc'
+      } = req.query;
+
+      const filter = {};
+      
+      if (project) filter.project = project;
+      if (status) filter.status = status;
+      if (state) filter.state = state;
+      if (city) filter.city = city;
+      if (ownerId) filter.ownerId = { $in: [ownerId] };
+      
+      if (search) {
+        filter.$or = [
+          { device_id: { $regex: search, $options: 'i' } },
+          { serialNumber: { $regex: search, $options: 'i' } },
+          { project: { $regex: search, $options: 'i' } },
+          { location: { $regex: search, $options: 'i' } }
+        ];
+      }
+
+      const skip = (parseInt(page) - 1) * parseInt(limit);
+      const sortField = sortBy || 'updatedAt';
+      const sortDirection = sortOrder === 'asc' ? 1 : -1;
+
+      const devices = await Device.find(filter)
+        .select('device_id serialNumber project status relayOn updatedAt city state ownerId current_session_id totalenergy lastSeen')
+        .sort({ [sortField]: sortDirection })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean();
+
+      const deviceIds = devices.map(d => d.device_id);
+
+      const latestTelemetry = await DeviceTelemetry.aggregate([
+        {
+          $match: {
+            deviceId: { $in: deviceIds }
+          }
+        },
+        {
+          $sort: { timestamp: -1 }
+        },
+        {
+          $group: {
+            _id: '$deviceId',
+            voltage: { $first: '$voltage' },
+            current: { $first: '$current' },
+            timestamp: { $first: '$timestamp' }
+          }
+        }
+      ]);
+
+      const telemetryMap = {};
+      latestTelemetry.forEach(t => {
+        telemetryMap[t._id] = {
+          voltage: t.voltage,
+          current: t.current,
+          timestamp: t.timestamp
+        };
+      });
+
+      const tableData = devices.map(device => {
+        const telemetry = telemetryMap[device.device_id] || { voltage: 0, current: 0 };
+        
+        return {
+          deviceId: device.device_id,
+          serialNumber: device.serialNumber,
+          status: device.status || 'Offline',
+          project: device.project || 'N/A',
+          relayOn: device.relayOn || false,
+          voltage: telemetry.voltage || 0,
+          current: telemetry.current || 0,
+          telemetryTimestamp: telemetry.timestamp,
+          updatedAt: device.updatedAt,
+          city: device.city || 'N/A',
+          state: device.state || 'N/A',
+          hasActiveSession: !!device.current_session_id,
+          totalenergy: device.totalenergy || 0,
+          lastSeen: device.lastSeen
+        };
+      });
+
+      const total = await Device.countDocuments(filter);
+
+      res.json({
+        success: true,
+        data: tableData,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          totalPages: Math.ceil(total / parseInt(limit)),
+          hasMore: skip + parseInt(limit) < total
+        },
+        lastUpdated: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Error fetching device table with telemetry:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch device table with telemetry',
+        error: error.message
+      });
+    }
+  }
+);
 
 // ============================================
 // EXISTING ROUTES BELOW
 // ============================================
 
-// Public route: Get all devices (any authenticated user)
+// Public route: Get all devices
 router.get('/', async (req, res) => {
   try {
     const devices = await Device.find(
@@ -295,7 +445,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// 2) Public single-device view (no auth)
+// Public single-device view
 router.get('/public/:deviceId', async (req, res) => {
   try {
     const { deviceId } = req.params;
@@ -320,21 +470,12 @@ router.post(
     try {
       const result = await createCalibration({
         deviceId: req.params.deviceId,
-        referenceVoltage:
-          req.body.referenceVoltage,
-        referenceCurrent:
-          req.body.referenceCurrent,
-        liveVoltage:
-          req.body.liveVoltage,
-        liveCurrent:
-          req.body.liveCurrent,
-        expectedNvsVersion:
-          req.body.expectedNvsVersion,
-        createdBy:
-          req.user?.uid ||
-          req.user?.userId ||
-          req.user?._id ||
-          null,
+        referenceVoltage: req.body.referenceVoltage,
+        referenceCurrent: req.body.referenceCurrent,
+        liveVoltage: req.body.liveVoltage,
+        liveCurrent: req.body.liveCurrent,
+        expectedNvsVersion: req.body.expectedNvsVersion,
+        createdBy: req.user?.uid || req.user?.userId || req.user?._id || null,
       });
 
       return res.status(202).json({
@@ -342,14 +483,8 @@ router.post(
         calibration: result,
       });
     } catch (error) {
-      console.error(
-        "[ADMIN CALIBRATION]",
-        error
-      );
-
-      return res.status(
-        error.statusCode || 500
-      ).json({
+      console.error("[ADMIN CALIBRATION]", error);
+      return res.status(error.statusCode || 500).json({
         success: false,
         error: error.message,
       });
@@ -379,7 +514,7 @@ router.get("/check-device/:device_id", async (req, res) => {
   }
 });
 
-// 3) Owner's devices (auth, scoped) for dashboards
+// Owner's devices
 router.get('/mine', authMiddleware, async (req, res) => {
   try {
     const q = {};
@@ -395,6 +530,7 @@ router.get('/mine', authMiddleware, async (req, res) => {
   }
 });
 
+// Admin dashboard
 router.get('/admin-dashboard',
   authMiddleware,
   authorizeRoles('admin'),
@@ -407,30 +543,6 @@ router.get('/admin-dashboard',
       if (state) query.state = state;
       if (status) query.status = status;
       if (project) query.project = project;
-
-      const projection = {
-        _id: 1,
-        device_id: 1,
-        serialNumber: 1,
-        ownerId: 1,
-        location: 1,
-        status: 1,
-        current_session_id: 1,
-        charger_type: 1,
-        lat: 1,
-        lng: 1,
-        rate: 1,
-        area: 1,
-        city: 1,
-        state: 1,
-        project: 1,
-        totalenergy: 1,
-        lastSeen: 1,
-        relayOn: 1,
-        updatedAt: 1,
-        onboardingStatus: 1,
-        commercial: 1,
-      };
 
       const devices = await Device.find(query)
         .populate({
@@ -479,9 +591,6 @@ router.get('/admin-dashboard',
   }
 );
 
-
-
-
 // GET /api/devices/admin/live-devices/filter-options
 router.get(
   "/admin/live-devices/filter-options",
@@ -507,181 +616,6 @@ router.get(
     } catch (err) {
       console.error("Filter options error:", err);
       res.status(500).json({ error: "Failed to fetch filter options" });
-    }
-  }
-);
-
-/**
- * GET /api/devices/admin/devices/filters/options
- * Get unique values for filter dropdowns
- */
-router.get('/admin/devices/filters/options',
-  authMiddleware,
-  authorizeRoles('admin'),
-  async (req, res) => {
-    try {
-      // Get unique projects
-      const projects = await Device.distinct('project', { project: { $ne: null, $ne: '' } });
-      
-      // Get unique cities
-      const cities = await Device.distinct('city', { city: { $ne: null, $ne: '' } });
-      
-      // Get unique states
-      const states = await Device.distinct('state', { state: { $ne: null, $ne: '' } });
-      
-      // Get unique status values
-      const statuses = await Device.distinct('status');
-
-      res.json({
-        success: true,
-        data: {
-          projects: projects.sort(),
-          cities: cities.sort(),
-          states: states.sort(),
-          statuses: statuses.sort()
-        }
-      });
-    } catch (error) {
-      console.error('Error fetching filter options:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to fetch filter options',
-        error: error.message
-      });
-    }
-  }
-);
-
-/**
- * GET /api/devices/admin/devices/table-with-telemetry
- * Get paginated device list WITH live voltage/current from telemetry
- */
-router.get('/admin/devices/table-with-telemetry',
-  authMiddleware,
-  authorizeRoles('admin'),
-  async (req, res) => {
-    try {
-      const {
-        page = 1,
-        limit = 50,
-        project,
-        status,
-        state,
-        city,
-        ownerId,
-        search,
-        sortBy = 'updatedAt',
-        sortOrder = 'desc'
-      } = req.query;
-
-      // Build filter object
-      const filter = {};
-      
-      if (project) filter.project = project;
-      if (status) filter.status = status;
-      if (state) filter.state = state;
-      if (city) filter.city = city;
-      if (ownerId) filter.ownerId = { $in: [ownerId] };
-      
-      if (search) {
-        filter.$or = [
-          { device_id: { $regex: search, $options: 'i' } },
-          { serialNumber: { $regex: search, $options: 'i' } },
-          { project: { $regex: search, $options: 'i' } },
-          { location: { $regex: search, $options: 'i' } }
-        ];
-      }
-
-      // Calculate pagination
-      const skip = (parseInt(page) - 1) * parseInt(limit);
-      const sortField = sortBy || 'updatedAt';
-      const sortDirection = sortOrder === 'asc' ? 1 : -1;
-
-      // Get paginated devices
-      const devices = await Device.find(filter)
-        .select('device_id serialNumber project status relayOn updatedAt city state ownerId current_session_id totalenergy lastSeen')
-        .sort({ [sortField]: sortDirection })
-        .skip(skip)
-        .limit(parseInt(limit))
-        .lean();
-
-      // Get device IDs for telemetry query
-      const deviceIds = devices.map(d => d.device_id);
-
-      // Get latest telemetry for all devices in one query
-      const latestTelemetry = await DeviceTelemetry.aggregate([
-        {
-          $match: {
-            deviceId: { $in: deviceIds }
-          }
-        },
-        {
-          $sort: { timestamp: -1 }
-        },
-        {
-          $group: {
-            _id: '$deviceId',
-            voltage: { $first: '$voltage' },
-            current: { $first: '$current' },
-            timestamp: { $first: '$timestamp' }
-          }
-        }
-      ]);
-
-      // Create a map for quick lookup
-      const telemetryMap = {};
-      latestTelemetry.forEach(t => {
-        telemetryMap[t._id] = {
-          voltage: t.voltage,
-          current: t.current,
-          timestamp: t.timestamp
-        };
-      });
-
-      // Transform data for frontend
-      const tableData = devices.map(device => {
-        const telemetry = telemetryMap[device.device_id] || { voltage: 0, current: 0 };
-        
-        return {
-          deviceId: device.device_id,
-          serialNumber: device.serialNumber,
-          status: device.status || 'Offline',
-          project: device.project || 'N/A',
-          relayOn: device.relayOn || false,
-          voltage: telemetry.voltage || 0,
-          current: telemetry.current || 0,
-          telemetryTimestamp: telemetry.timestamp,
-          updatedAt: device.updatedAt,
-          city: device.city || 'N/A',
-          state: device.state || 'N/A',
-          hasActiveSession: !!device.current_session_id,
-          totalenergy: device.totalenergy || 0,
-          lastSeen: device.lastSeen
-        };
-      });
-
-      // Get total count
-      const total = await Device.countDocuments(filter);
-
-      res.json({
-        success: true,
-        data: tableData,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total,
-          totalPages: Math.ceil(total / parseInt(limit)),
-          hasMore: skip + parseInt(limit) < total
-        },
-        lastUpdated: new Date().toISOString()
-      });
-    } catch (error) {
-      console.error('Error fetching device table with telemetry:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to fetch device table with telemetry',
-        error: error.message
-      });
     }
   }
 );
@@ -721,8 +655,6 @@ router.get(
   }
 );
 
-
-
 // GET live monitoring data
 router.get(
   "/admin/live-monitoring/:deviceId",
@@ -761,9 +693,7 @@ router.get(
   authorizeRoles("admin"),
   async (req, res) => {
     try {
-      const deviceId = getNormalizedDeviceId(
-        req.params.deviceId
-      );
+      const deviceId = getNormalizedDeviceId(req.params.deviceId);
 
       if (!deviceId) {
         return res.status(400).json({
@@ -771,17 +701,16 @@ router.get(
         });
       }
 
-      const latestTelemetry =
-        await DeviceTelemetry.findOne(
-          { deviceId },
-          {
-            _id: 0,
-            deviceId: 1,
-            voltage: 1,
-            current: 1,
-            timestamp: 1,
-          }
-        ).sort({ timestamp: -1 }).lean();
+      const latestTelemetry = await DeviceTelemetry.findOne(
+        { deviceId },
+        {
+          _id: 0,
+          deviceId: 1,
+          voltage: 1,
+          current: 1,
+          timestamp: 1,
+        }
+      ).sort({ timestamp: -1 }).lean();
 
       if (!latestTelemetry) {
         return res.status(404).json({
@@ -797,11 +726,7 @@ router.get(
         timestamp: latestTelemetry.timestamp ?? null,
       });
     } catch (error) {
-      console.error(
-        "[ADMIN DEVICE TELEMETRY]",
-        error
-      );
-
+      console.error("[ADMIN DEVICE TELEMETRY]", error);
       return res.status(500).json({
         error: "Failed to fetch latest telemetry",
       });
@@ -833,21 +758,17 @@ router.put(
   authorizeRoles('admin'),
   async (req, res) => {
     return res.status(410).json({
-      error:
-        'Generic device updates are disabled. Use the dedicated configuration or identity endpoints.',
+      error: 'Generic device updates are disabled. Use the dedicated configuration or identity endpoints.',
       endpoints: {
-        config:
-          'PATCH /api/devices/admin/config/:deviceId',
-        identity:
-          'PATCH /api/devices/admin/:deviceId/identity',
-        ownerWifi:
-          'PATCH /api/devices/owner/wifi/:deviceId',
+        config: 'PATCH /api/devices/admin/config/:deviceId',
+        identity: 'PATCH /api/devices/admin/:deviceId/identity',
+        ownerWifi: 'PATCH /api/devices/owner/wifi/:deviceId',
       },
     });
   }
 );
 
-// Admin only: Add new device (example)
+// Admin only: Add new device
 router.post('/add', authMiddleware, authorizeRoles('admin'), async (req, res) => {
   try {
     const { device_id, location, lat, lng, status, charger_type, rate, current_session_id, area, city, state, totalenergy } = req.body;
@@ -866,9 +787,7 @@ router.patch(
   authorizeRoles('admin'),
   async (req, res) => {
     try {
-      const deviceId = normalizeDeviceId(
-        req.params.deviceId
-      );
+      const deviceId = normalizeDeviceId(req.params.deviceId);
 
       if (
         req.body.device_id !== undefined ||
@@ -876,8 +795,7 @@ router.patch(
         req.body.serialNumber !== undefined
       ) {
         return res.status(400).json({
-          error:
-            'Use the dedicated identity endpoint for device ID changes',
+          error: 'Use the dedicated identity endpoint for device ID changes',
         });
       }
 
@@ -927,25 +845,11 @@ router.patch(
           });
         }
 
-        if (cf !== undefined) {
-          device.cf = Number(cf);
-        }
-
-        if (vf !== undefined) {
-          device.vf = Number(vf);
-        }
-
-        if (currentRF !== undefined) {
-          device.currentRF = Number(currentRF);
-        }
-
-        if (wifiSSID !== undefined) {
-          device.wifiSSID = String(wifiSSID).trim();
-        }
-
-        if (wifiPassword !== undefined) {
-          device.wifiPassword = String(wifiPassword);
-        }
+        if (cf !== undefined) device.cf = Number(cf);
+        if (vf !== undefined) device.vf = Number(vf);
+        if (currentRF !== undefined) device.currentRF = Number(currentRF);
+        if (wifiSSID !== undefined) device.wifiSSID = String(wifiSSID).trim();
+        if (wifiPassword !== undefined) device.wifiPassword = String(wifiPassword);
 
         if (rate !== undefined) {
           device.setRate(
@@ -955,38 +859,14 @@ router.patch(
           );
         }
 
-        if (location !== undefined) {
-          device.location = location;
-        }
-
-        if (lat !== undefined) {
-          device.lat = Number(lat);
-        }
-
-        if (lng !== undefined) {
-          device.lng = Number(lng);
-        }
-
-        if (area !== undefined) {
-          device.area = area;
-        }
-
-        if (city !== undefined) {
-          device.city = city;
-        }
-
-        if (state !== undefined) {
-          device.state = state;
-        }
-
-        if (meterType !== undefined) {
-          device.meterType = meterType;
-        }
-
-        if (meterConsumerNumber !== undefined) {
-          device.meterConsumerNumber =
-            meterConsumerNumber;
-        }
+        if (location !== undefined) device.location = location;
+        if (lat !== undefined) device.lat = Number(lat);
+        if (lng !== undefined) device.lng = Number(lng);
+        if (area !== undefined) device.area = area;
+        if (city !== undefined) device.city = city;
+        if (state !== undefined) device.state = state;
+        if (meterType !== undefined) device.meterType = meterType;
+        if (meterConsumerNumber !== undefined) device.meterConsumerNumber = meterConsumerNumber;
 
         if (commercial !== undefined) {
           device.commercial = {
@@ -998,22 +878,17 @@ router.patch(
         }
 
         if (targetFirmwareVersion !== undefined) {
-          device.targetFirmwareVersion =
-            targetFirmwareVersion;
+          device.targetFirmwareVersion = targetFirmwareVersion;
         }
       }
 
       await device.save();
 
-      const publishResult =
-        await publishDeviceConfig(
-          device.device_id
-        );
+      const publishResult = await publishDeviceConfig(device.device_id);
 
       return res.json({
         success: true,
-        message:
-          'Device configuration updated and published',
+        message: 'Device configuration updated and published',
         device: sanitizeDevice(device),
         config: {
           topic: publishResult.topic,
@@ -1022,11 +897,9 @@ router.patch(
       });
     } catch (error) {
       console.error('[ADMIN CONFIG]', error);
-
       return res.status(502).json({
         success: false,
-        error:
-          'Database update succeeded or partially succeeded, but configuration publish failed',
+        error: 'Database update succeeded or partially succeeded, but configuration publish failed',
         details: error.message,
       });
     }
@@ -1040,9 +913,7 @@ router.patch(
   authorizeRoles('owner', 'admin'),
   async (req, res) => {
     try {
-      const deviceId = normalizeDeviceId(
-        req.params.deviceId
-      );
+      const deviceId = normalizeDeviceId(req.params.deviceId);
 
       const {
         wifiSSID,
@@ -1054,8 +925,7 @@ router.patch(
         wifiSSID.trim() === ''
       ) {
         return res.status(400).json({
-          error:
-            'wifiSSID must be a non-empty string',
+          error: 'wifiSSID must be a non-empty string',
         });
       }
 
@@ -1064,8 +934,7 @@ router.patch(
         wifiPassword.length === 0
       ) {
         return res.status(400).json({
-          error:
-            'wifiPassword must be a non-empty string',
+          error: 'wifiPassword must be a non-empty string',
         });
       }
 
@@ -1086,15 +955,13 @@ router.patch(
           device.onboardingStatus !== 'approved'
         ) {
           return res.status(403).json({
-            error:
-              'Device must be approved before owner configuration',
+            error: 'Device must be approved before owner configuration',
           });
         }
 
         if (!isOwnerOfDevice(device, actorId)) {
           return res.status(403).json({
-            error:
-              'You do not have access to this device',
+            error: 'You do not have access to this device',
           });
         }
       }
@@ -1104,15 +971,11 @@ router.patch(
 
       await device.save();
 
-      const publishResult =
-        await publishDeviceConfig(
-          device.device_id
-        );
+      const publishResult = await publishDeviceConfig(device.device_id);
 
       return res.json({
         success: true,
-        message:
-          'WiFi credentials updated and published',
+        message: 'WiFi credentials updated and published',
         device: sanitizeDevice(device),
         config: {
           topic: publishResult.topic,
@@ -1121,11 +984,9 @@ router.patch(
       });
     } catch (error) {
       console.error('[OWNER WIFI]', error);
-
       return res.status(502).json({
         success: false,
-        error:
-          'WiFi database update or MQTT publish failed',
+        error: 'WiFi database update or MQTT publish failed',
         details: error.message,
       });
     }
@@ -1141,13 +1002,8 @@ router.patch(
     const session = await mongoose.startSession();
 
     try {
-      const oldDeviceId = normalizeDeviceId(
-        req.params.deviceId
-      );
-
-      const newDeviceId = normalizeDeviceId(
-        req.body.newDeviceId
-      );
+      const oldDeviceId = normalizeDeviceId(req.params.deviceId);
+      const newDeviceId = normalizeDeviceId(req.body.newDeviceId);
 
       if (!newDeviceId) {
         return res.status(400).json({
@@ -1157,8 +1013,7 @@ router.patch(
 
       if (oldDeviceId === newDeviceId) {
         return res.status(400).json({
-          error:
-            'newDeviceId must be different from current device ID',
+          error: 'newDeviceId must be different from current device ID',
         });
       }
 
@@ -1170,33 +1025,25 @@ router.patch(
         }).session(session);
 
         if (!device) {
-          const error = new Error(
-            'Device not found'
-          );
+          const error = new Error('Device not found');
           error.statusCode = 404;
           throw error;
         }
 
-        const duplicate =
-          await Device.findOne({
-            device_id: newDeviceId,
-            _id: { $ne: device._id },
-          })
-          .session(session)
-          .lean();
+        const duplicate = await Device.findOne({
+          device_id: newDeviceId,
+          _id: { $ne: device._id },
+        }).session(session).lean();
 
         if (duplicate) {
-          const error = new Error(
-            'New device ID is already in use'
-          );
+          const error = new Error('New device ID is already in use');
           error.statusCode = 409;
           throw error;
         }
 
-        const provision =
-          await DeviceProvision.findOne({
-            serialNumber: device.serialNumber,
-          }).session(session);
+        const provision = await DeviceProvision.findOne({
+          serialNumber: device.serialNumber,
+        }).session(session);
 
         device.device_id = newDeviceId;
 
@@ -1216,17 +1063,14 @@ router.patch(
         updatedDevice = device;
       });
 
-      const publishResult =
-        await publishDeviceConfig(newDeviceId);
+      const publishResult = await publishDeviceConfig(newDeviceId);
 
       return res.json({
         success: true,
-        message:
-          'Device ID updated and configuration published',
+        message: 'Device ID updated and configuration published',
         previousDeviceId: oldDeviceId,
         deviceId: newDeviceId,
-        serialNumber:
-          updatedDevice.serialNumber,
+        serialNumber: updatedDevice.serialNumber,
         device: sanitizeDevice(updatedDevice),
         config: {
           topic: publishResult.topic,
@@ -1234,14 +1078,8 @@ router.patch(
         },
       });
     } catch (error) {
-      console.error(
-        '[DEVICE ID MIGRATION]',
-        error
-      );
-
-      return res.status(
-        error.statusCode || 502
-      ).json({
+      console.error('[DEVICE ID MIGRATION]', error);
+      return res.status(error.statusCode || 502).json({
         success: false,
         error: error.message,
       });
@@ -1283,7 +1121,6 @@ router.post(
         }
 
         device.ownerId.push(userId);
-
         device.onboardingStatus = 'approved';
         device.onboardedAt = new Date();
         device.onboardedBy = userId;
@@ -1305,9 +1142,7 @@ router.post(
 // Admin/owner only: Can view details
 router.get('/:deviceId', authMiddleware, authorizeRoles('admin', 'owner', 'customer'), async (req, res) => {
   try {
-    const deviceId = getNormalizedDeviceId(
-      req.params.deviceId
-    );
+    const deviceId = getNormalizedDeviceId(req.params.deviceId);
 
     const device = await Device.findOne({
       device_id: deviceId,
@@ -1323,8 +1158,7 @@ router.get('/:deviceId', authMiddleware, authorizeRoles('admin', 'owner', 'custo
 
       if (!isOwnerOfDevice(device, actorId)) {
         return res.status(403).json({
-          error:
-            'You do not have access to this device',
+          error: 'You do not have access to this device',
         });
       }
     }
