@@ -95,8 +95,8 @@ router.post("/order", authMiddleware, async (req, res) => {
     // });
 
     return res.status(200).json({
-      success:          true,
-      order:            response.data,
+      success: true,
+      orderId,
       paymentSessionId: response.data?.payment_session_id,
     });
   } catch (error) {

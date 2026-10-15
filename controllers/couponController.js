@@ -47,19 +47,20 @@ async function applyCoupon(req, res) {
       newAmount = Math.max(amount * (1 - coupon.discountAmount / 100), 0);
     }
 
-    return res.json({
-      success: true,
-      newAmount,
-      coupon: {
-        code: coupon.code,
-        discountAmount: coupon.discountAmount,
-        discountType: coupon.discountType,
-      },
-    });
-  } catch (err) {
-    console.error("applyCoupon error", err);
-    res.status(500).json({ error: "Server error", debug: err.message });
-  }
+return res.json({
+  success: true,
+  newAmount,
+  coupon: {
+    code: coupon.code,
+  },
+});
+} catch (err) {
+  console.error("applyCoupon error", err);
+
+  return res.status(500).json({
+    error: "Server error",
+  });
+}
 }
 
 // controllers/couponController.js
@@ -87,10 +88,13 @@ await Coupon.updateOne(
 
 
     return res.json({ success: true, message: "Coupon consumed" });
-  } catch (err) {
-    console.error("consumeCoupon error", err);
-    res.status(500).json({ error: "Server error", debug: err.message });
-  }
+} catch (err) {
+  console.error("consumeCoupon error", err);
+
+  return res.status(500).json({
+    error: "Server error",
+  });
+}
 }
 
 

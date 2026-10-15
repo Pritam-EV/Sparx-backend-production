@@ -14,20 +14,29 @@ const CASHFREE_BASE_URL = process.env.CASHFREE_ENV === "PROD"
   : "https://sandbox.cashfree.com";
 
 // GET /api/wallet/balance  — returns current balance only (no history)
+// GET /api/wallet/balance
+// Return only the wallet balance needed by the frontend.
 router.get("/balance", authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.user.userId)
-      .select("walletBalance walletKycLevel walletFrozen walletMonthlyLoaded")
+      .select("walletBalance -_id")
       .lean();
-    if (!user) return res.status(404).json({ message: "User not found" });
-    return res.json({
-      balance: user.walletBalance,
-      kycLevel: user.walletKycLevel,
-      frozen: user.walletFrozen,
-      monthlyLoaded: user.walletMonthlyLoaded,
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    return res.status(200).json({
+      balance: user.walletBalance ?? 0,
     });
-  } catch (err) {
-    return res.status(500).json({ message: "Server error" });
+  } catch (error) {
+    console.error("Wallet balance lookup failed:", error);
+
+    return res.status(500).json({
+      message: "Failed to fetch wallet balance",
+    });
   }
 });
 
@@ -317,16 +326,17 @@ router.post("/pay", authMiddleware, async (req, res) => {
       { $set: { status: "SUCCESS", paidAt: new Date(), paymentMethod: "wallet" } }
     );
 
-    return res.json({
+    return res.status(200).json({
       success: true,
       orderId: walletOrderId,
-      newBalance: result.newBalance,
     });
-  } catch (err) {
-    // On error, mark payment FAILED
-    console.error("Wallet pay error:", err.message);
-    return res.status(500).json({ message: err.message || "Payment failed" });
-  }
+} catch (err) {
+  console.error("Wallet pay error:", err);
+
+  return res.status(500).json({
+    message: "Payment failed. Please try again.",
+  });
+}
 });
 
 // POST /api/wallet/admin/pay

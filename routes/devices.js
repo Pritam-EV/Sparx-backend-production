@@ -441,6 +441,54 @@ router.get('/map', async (req, res) => {
   }
 });
 
+// GET /api/devices/charging-options/:deviceId
+// Minimal public device data required by ChargingOptions.js.
+router.get('/charging-options/:deviceId', async (req, res) => {
+  try {
+    let deviceId;
+
+    try {
+      deviceId = getNormalizedDeviceId(req.params.deviceId);
+    } catch {
+      return res.status(400).json({
+        message: "Invalid device ID",
+      });
+    }
+
+    if (!deviceId) {
+      return res.status(400).json({
+        message: "Device ID is required",
+      });
+    }
+
+    const device = await Device.findOne({
+      device_id: deviceId,
+    })
+      .select("device_id status location rate -_id")
+      .lean();
+
+    if (!device) {
+      return res.status(404).json({
+        message: "Device not found",
+      });
+    }
+
+    // Explicit allowlist for the charging-options page.
+    return res.status(200).json({
+      device_id: device.device_id,
+      status: device.status || "Offline",
+      location: device.location || "",
+      rate: Number(device.rate ?? 20),
+    });
+  } catch (error) {
+    console.error("Charging options device lookup failed:", error);
+
+    return res.status(500).json({
+      message: "Failed to load charger details",
+    });
+  }
+});
+
 router.get('/', async (req, res) => {
   try {
     const devices = await Device.find(

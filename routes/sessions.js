@@ -411,6 +411,49 @@ router.get('/device-eta/:deviceId', authMiddleware, async (req, res) => {
     return res.status(500).json({ error: 'Server error' });
   }
 });
+
+// GET /api/sessions/device-eta-summary/:deviceId
+// Returns only the estimated finish time for ChargingOptions.js.
+router.get(
+  "/device-eta-summary/:deviceId",
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const { deviceId } = req.params;
+
+      if (!deviceId) {
+        return res.status(400).json({
+          error: "Device ID is required",
+        });
+      }
+
+      const session = await Session.findOne({
+        deviceId,
+        status: "active",
+      })
+        .select("estimatedEndTime -_id")
+        .lean();
+
+      if (!session) {
+        return res.status(404).json({
+          error: "No active session on this device",
+        });
+      }
+
+      return res.status(200).json({
+        estimatedEndTime: session.estimatedEndTime || null,
+      });
+    } catch (error) {
+      console.error("Device ETA summary error:", error);
+
+      return res.status(500).json({
+        error: "Failed to fetch charger availability estimate",
+      });
+    }
+  }
+);
+
+
 // 2. Fetch session by session ID (for LiveSession page)
 router.get("/:sessionId", authMiddleware, getSessionById);
 
