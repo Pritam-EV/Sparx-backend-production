@@ -224,6 +224,81 @@ router.get("/user-sessions", authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/sessions/user-sessions-summary
+// Returns only fields required by the customer SessionPage.
+router.get(
+  "/user-sessions-summary",
+  authMiddleware,
+  async (req, res) => {
+    try {
+      // 1. Read the authenticated user's ID from the verified JWT.
+      const userIdString = req.user?.userId;
+
+      if (!mongoose.Types.ObjectId.isValid(userIdString)) {
+        return res.status(400).json({
+          message: "Invalid userId in token.",
+        });
+      }
+
+      const userId = new mongoose.Types.ObjectId(userIdString);
+
+      // 2. Fetch only fields required by the session cards.
+      // Exclude MongoDB's default _id as the UI uses sessionId.
+      const fields =
+        "sessionId deviceId energyConsumed amountPaid amountUsed " +
+        "estimatedEndTime status startTime endTime -_id";
+
+      // 3. Fetch active and past sessions in parallel.
+      // These filters preserve the existing endpoint's endTime-based logic.
+      const [activeDocs, pastDocs] = await Promise.all([
+        Session.find({
+          userId,
+          endTime: null,
+        })
+          .select(fields)
+          .sort({ startTime: -1 })
+          .lean(),
+
+        Session.find({
+          userId,
+          endTime: { $ne: null },
+        })
+          .select(fields)
+          .sort({ startTime: -1 })
+          .lean(),
+      ]);
+
+      // 4. Explicitly allowlist the fields returned to the frontend.
+      const shapeSession = (session) => ({
+        sessionId: session.sessionId,
+        deviceId: session.deviceId,
+        energyConsumed: session.energyConsumed ?? 0,
+        amountPaid: session.amountPaid ?? 0,
+        amountUsed: session.amountUsed ?? 0,
+        estimatedEndTime: session.estimatedEndTime ?? null,
+        status: session.status ?? null,
+        startTime: session.startTime ?? null,
+        endTime: session.endTime ?? null,
+      });
+
+      const activeSessions = activeDocs.map(shapeSession);
+      const pastSessions = pastDocs.map(shapeSession);
+
+      // 5. Keep the response structure compatible with the current page.
+      return res.status(200).json({
+        activeSessions,
+        pastSessions,
+      });
+    } catch (error) {
+      console.error("Error fetching session summary:", error);
+
+      return res.status(500).json({
+        message: "Could not fetch session summary.",
+      });
+    }
+  }
+);
+
 // 3. Active session lookup (unchanged)
 // Add this route for getting the active session of the authenticated user
 router.get('/active', authMiddleware, getActiveSession);
