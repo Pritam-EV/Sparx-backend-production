@@ -7,6 +7,7 @@ const Session = require("../models/session");
 const { body } = require('express-validator');
 const Coupon = require('../models/Coupon');
 const Device = require('../models/device');
+const Receipt = require("../models/Receipt");
 const {
   startSession,
   endSession,
@@ -453,9 +454,115 @@ router.get(
   }
 );
 
+// GET /api/sessions/summary/:sessionId
+// Customer-facing session summary and receipt.
+// Returns only fields required by SessionSummary.js.
+router.get(
+  "/summary/:sessionId",
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      const userId = req.user?.userId;
+
+      if (!userId) {
+        return res.status(401).json({
+          error: "Unauthorized.",
+        });
+      }
+
+      if (!sessionId) {
+        return res.status(400).json({
+          error: "Session ID is required.",
+        });
+      }
+
+      // Fetch only the session end time used by the summary screen.
+      const session = await Session.findOne({
+        sessionId,
+        userId,
+      })
+        .select("endTime -_id")
+        .lean();
+
+      if (!session) {
+        return res.status(404).json({
+          error: "Session not found.",
+        });
+      }
+
+      // Fetch only customer-facing receipt fields.
+      const receipt = await Receipt.findOne({
+        sessionId,
+        userId,
+      })
+        .select(
+          "receiptId deviceId amountPaid amountUtilized " +
+          "discountApplied refundAmount userName userMobile userGstin " +
+          "createdAt energyConsumed userRatePerKwh gstAmount " +
+          "taxableAmount totalAmount rating suggestion -_id"
+        )
+        .lean();
+
+      const sessionSummary = {
+        endTime: session.endTime || null,
+      };
+
+      // Receipt generation may still be finishing immediately after a stop.
+      // The frontend can retry without downloading a full session each time.
+      if (!receipt) {
+        return res.status(202).json({
+          session: sessionSummary,
+          receipt: null,
+          receiptStatus: "pending",
+        });
+      }
+
+      // Explicit allowlist: do not return the complete MongoDB document.
+      const receiptSummary = {
+        receiptId: receipt.receiptId,
+        deviceId: receipt.deviceId,
+
+        userName: receipt.userName || "",
+        userMobile: receipt.userMobile || "",
+        userGstin: receipt.userGstin || "",
+
+        createdAt: receipt.createdAt || null,
+
+        energyConsumed: receipt.energyConsumed ?? 0,
+        userRatePerKwh: receipt.userRatePerKwh ?? 0,
+
+        taxableAmount: receipt.taxableAmount ?? 0,
+        gstAmount: receipt.gstAmount ?? 0,
+        totalAmount: receipt.totalAmount ?? 0,
+
+        amountPaid: receipt.amountPaid ?? 0,
+        amountUtilized: receipt.amountUtilized ?? 0,
+        discountApplied: receipt.discountApplied ?? 0,
+        refundAmount: receipt.refundAmount ?? 0,
+
+        rating: receipt.rating ?? null,
+        suggestion: receipt.suggestion || "",
+      };
+
+      return res.status(200).json({
+        session: sessionSummary,
+        receipt: receiptSummary,
+      });
+    } catch (error) {
+      console.error("Session summary fetch error:", error);
+
+      return res.status(500).json({
+        error: "Failed to fetch session summary.",
+      });
+    }
+  }
+);
 
 // 2. Fetch session by session ID (for LiveSession page)
 router.get("/:sessionId", authMiddleware, getSessionById);
+
+
 
 // Protected route: authenticate user (e.g. via JWT or session)
 router.post('/api/coupons/apply', authMiddleware, [

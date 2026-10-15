@@ -638,15 +638,67 @@ router.get("/admin/export", auth, authorizeRoles("admin"), async (req, res) => {
 
 
 
-router.get('/:sessionId', auth, async (req, res) => {
+router.get("/:sessionId", auth, async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const receipt = await Receipt.findOne({ sessionId, userId: req.user.userId });
-    if (!receipt) return res.status(404).json({ error: 'Receipt not found' });
-    res.json(receipt);
+    const userId = req.user?.userId;
+
+    if (!userId) {
+      return res.status(401).json({
+        error: "Unauthorized.",
+      });
+    }
+
+    const receipt = await Receipt.findOne({
+      sessionId,
+      userId,
+    })
+      .select(
+        "receiptId deviceId amountPaid amountUtilized " +
+        "discountApplied refundAmount userName userMobile userGstin " +
+        "createdAt energyConsumed userRatePerKwh gstAmount " +
+        "taxableAmount totalAmount rating suggestion -_id"
+      )
+      .lean();
+
+    if (!receipt) {
+      return res.status(404).json({
+        error: "Receipt not found.",
+      });
+    }
+
+    // Explicit allowlist of customer-facing receipt data.
+    return res.status(200).json({
+      receiptId: receipt.receiptId,
+      deviceId: receipt.deviceId,
+
+      userName: receipt.userName || "",
+      userMobile: receipt.userMobile || "",
+      userGstin: receipt.userGstin || "",
+
+      createdAt: receipt.createdAt || null,
+
+      energyConsumed: receipt.energyConsumed ?? 0,
+      userRatePerKwh: receipt.userRatePerKwh ?? 0,
+
+      taxableAmount: receipt.taxableAmount ?? 0,
+      gstAmount: receipt.gstAmount ?? 0,
+      totalAmount: receipt.totalAmount ?? 0,
+
+      amountPaid: receipt.amountPaid ?? 0,
+      amountUtilized: receipt.amountUtilized ?? 0,
+      discountApplied: receipt.discountApplied ?? 0,
+      refundAmount: receipt.refundAmount ?? 0,
+
+      rating: receipt.rating ?? null,
+      suggestion: receipt.suggestion || "",
+    });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    console.error("Customer receipt fetch error:", err);
+
+    return res.status(500).json({
+      error: "Failed to fetch receipt.",
+    });
   }
 });
 

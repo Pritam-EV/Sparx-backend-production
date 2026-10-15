@@ -749,14 +749,48 @@ if (refundAmount > 0 && isWalletPay) {
 
 // ✅ POST /api/sessions/stop
 const endSession = async (req, res) => {
-  // console.log("Stop request received:", req.body);
   try {
-    const { sessionId, endTime, endTrigger, currentEnergy, deltaEnergy, amountUsed, deviceId } = req.body;
+    const {
+      sessionId,
+      endTime,
+      endTrigger,
+      currentEnergy,
+      deltaEnergy,
+      amountUsed,
+      deviceId,
+    } = req.body;
+
     if (!sessionId || !endTime || !endTrigger) {
-      return res.status(400).json({ error: "Missing required fields." });
+      return res.status(400).json({
+        error: "Missing required fields.",
+      });
     }
 
-    const { session, receipt } = await completeSessionInternal({
+    // Verify that the session exists.
+    const existingSession = await Session.findOne({ sessionId })
+      .select("userId")
+      .lean();
+
+    if (!existingSession) {
+      return res.status(404).json({
+        error: "Session not found.",
+      });
+    }
+
+    // A customer can only stop their own session.
+    // Admins can stop sessions when required.
+    const isAdmin = req.user?.role === "admin";
+
+    if (
+      !isAdmin &&
+      String(existingSession.userId) !== String(req.user?.userId)
+    ) {
+      return res.status(403).json({
+        error: "You are not authorized to stop this session.",
+      });
+    }
+
+    const { session } = await completeSessionInternal({
       sessionId,
       endTime,
       endTrigger,
@@ -764,13 +798,27 @@ const endSession = async (req, res) => {
       deltaEnergy,
       amountUsed,
       deviceIdOverride: deviceId,
-      sendStopMqtt: true
+      sendStopMqtt: true,
     });
 
-    return res.status(200).json({ message: "Session ended successfully.", session, receipt });
+    if (!session) {
+      return res.status(404).json({
+        error: "Session not found.",
+      });
+    }
+
+    // Do not return full session or receipt documents here.
+    // The frontend fetches the customer summary separately.
+    return res.status(200).json({
+      message: "Session ended successfully.",
+      sessionId,
+    });
   } catch (err) {
     console.error("Error ending session:", err);
-    return res.status(500).json({ error: "Failed to end session." });
+
+    return res.status(500).json({
+      error: "Failed to end session.",
+    });
   }
 };
 
@@ -784,14 +832,41 @@ const endSession = async (req, res) => {
 const getSessionById = async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const session = await Session.findOne({ sessionId });
-    if (!session) {
-      return res.status(404).json({ error: "Session not found." });
+    const userId = req.user?.userId;
+
+    if (!userId && req.user?.role !== "admin") {
+      return res.status(401).json({
+        error: "Unauthorized.",
+      });
     }
-    res.status(200).json(session);
+
+    // Customers can fetch only their own sessions.
+    const filter = { sessionId };
+
+    if (req.user?.role !== "admin") {
+      filter.userId = userId;
+    }
+
+    const session = await Session.findOne(filter)
+      .select(
+        "sessionId deviceId status startTime endTime " +
+        "energyConsumed energySelected amountPaid amountUsed -_id"
+      )
+      .lean();
+
+    if (!session) {
+      return res.status(404).json({
+        error: "Session not found.",
+      });
+    }
+
+    return res.status(200).json(session);
   } catch (err) {
     console.error("Error fetching session by ID:", err);
-    res.status(500).json({ error: "Server error." });
+
+    return res.status(500).json({
+      error: "Server error.",
+    });
   }
 };
 
