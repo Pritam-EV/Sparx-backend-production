@@ -17,6 +17,7 @@ const ALLOWED_ORIGINS = [
 const authRoutes              = require("./routes/auth");
 const deviceRoutes            = require("./routes/devices");
 const sessionRoutes           = require("./routes/sessions");
+const dashboardRoutes         = require("./routes/dashboard");
 const userRoutes              = require("./routes/users");
 const analyticsRoutes         = require("./routes/analytics");
 const receiptsRoutes          = require("./routes/receipts");
@@ -120,6 +121,7 @@ app.use("/api/auth",               authRoutes);
 app.use("/auth",                   authRoutes);
 app.use("/api/devices",            deviceRoutes);
 app.use("/api/sessions",           sessionRoutes);
+app.use("/api/dashboard",          dashboardRoutes);
 app.use("/api/users",              userRoutes);
 app.use("/api/analytics",          analyticsRoutes);
 app.use("/api/admin/transactions", adminTransactionsRoutes);
