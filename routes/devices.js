@@ -547,24 +547,31 @@ router.post(
   }
 );
 
+// GET /api/devices/check-device/:device_id
+// Public endpoint: returns only whether a charger ID exists.
 router.get("/check-device/:device_id", async (req, res) => {
   try {
-    const { device_id } = req.params;
+    const device_id = String(req.params.device_id || "").trim();
 
     if (!device_id) {
-      return res.status(400).json({ error: "Device ID is required" });
+      return res.status(400).json({
+        error: "Device ID is required",
+      });
     }
 
-    const device = await Device.findOne({ device_id: req.params.device_id });
+    // Check existence without retrieving the full device document.
+    const deviceExists = await Device.exists({ device_id });
 
-    if (device) {
-      return res.json({ exists: !!device, device });
-    } else {
-      return res.json({ exists: false });
-    }
+    // Preserve the existing response contract used by QRScanner.js.
+    return res.status(200).json({
+      exists: Boolean(deviceExists),
+    });
   } catch (error) {
-    console.error("Error checking device:", error);
-    res.status(500).json({ error: "Internal server error" });
+    console.error("Error checking device existence:", error);
+
+    return res.status(500).json({
+      error: "Internal server error",
+    });
   }
 });
 
