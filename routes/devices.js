@@ -403,6 +403,43 @@ router.get('/admin/devices-table-telemetry',
 // ============================================
 // EXISTING ROUTES
 // ============================================
+// ============================================
+// PUBLIC MAP — MINIMAL CHARGER DATA
+// GET /api/devices/map
+// ============================================
+
+router.get('/map', async (req, res) => {
+  try {
+    // Fetch only devices with valid numeric map coordinates.
+    const devices = await Device.find({
+      lat: { $type: 'number' },
+      lng: { $type: 'number' },
+    })
+      .select(
+        'device_id location status charger_type lat lng rate -_id'
+      )
+      .lean();
+
+    // Explicit allowlist: return only the fields required by the map.
+    const mapDevices = devices.map((device) => ({
+      device_id: device.device_id,
+      location: device.location || 'Unknown',
+      status: device.status || 'Offline',
+      charger_type: device.charger_type || 'N/A',
+      lat: device.lat,
+      lng: device.lng,
+      rate: device.rate ?? 0,
+    }));
+
+    return res.status(200).json(mapDevices);
+  } catch (error) {
+    console.error('Error fetching map devices:', error);
+
+    return res.status(500).json({
+      message: 'Error fetching map devices',
+    });
+  }
+});
 
 router.get('/', async (req, res) => {
   try {
