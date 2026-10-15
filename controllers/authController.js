@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const { OAuth2Client } = require("google-auth-library");
 const crypto = require("crypto");
 const admin = require('firebase-admin');
+const sanitizeUser = require("../utils/sanitizeUser");
 require("dotenv").config(); // Load environment variables
 
 // ✅ Use environment variable for JWT secret
@@ -72,7 +73,11 @@ exports.verifyPhoneCode = async (req, res) => {
         { expiresIn: "7d" }
       );
 
-      return res.json({ token, user, isNewUser: false });
+      return res.json({
+      token,
+      user: sanitizeUser(user),
+      isNewUser: false,
+    });
     }
 
     return res.json({ isNewUser: true, mobile });
@@ -84,7 +89,15 @@ exports.verifyPhoneCode = async (req, res) => {
 
 exports.signup = async (req, res) => {
   try {
-    const { name, email, mobile, vehicleType, vehicleNumber, vehicleModel, gstin, role } = req.body;
+    const {
+  name,
+  email,
+  mobile,
+  vehicleType,
+  vehicleNumber,
+  vehicleModel,
+  gstin,
+} = req.body;
     if (!name || !email || !vehicleType || !vehicleNumber) {
       return res.status(400).json({ message: "All fields are required" });
     }
@@ -124,7 +137,7 @@ exports.signup = async (req, res) => {
         vehicleType,
         vehicleModel: vehicleModel || "",
         gstin: gstin ? gstin.toUpperCase() : "",
-        role: role?.trim() || "customer",
+        role: "customer",
         phoneVerified: true, // trust Firebase phone
       });
     } else {
@@ -134,7 +147,8 @@ exports.signup = async (req, res) => {
       user.vehicleModel = vehicleModel || user.vehicleModel || "";
       user.gstin = gstin ? gstin.toUpperCase() : (user.gstin || "");
       user.vehicleNumber = vehicleNumber;
-      user.role = role?.trim() || user.role || "customer";
+      // Never assign account privileges from signup request data.
+      user.role = user.role || "customer";
       user.phoneVerified = true; // ensure true for existing
     }
     await user.save();
@@ -146,7 +160,10 @@ exports.signup = async (req, res) => {
       { expiresIn: "30d" }
     );
 
-    return res.status(201).json({ token, user });
+    return res.status(201).json({
+  token,
+  user: sanitizeUser(user),
+});
   } catch (error) {
     console.error("Signup Error:", error);
     return res.status(500).json({ message: "Signup failed" });
@@ -174,7 +191,10 @@ exports.updateProfile = async (req, res) => {
     if (gstin !== undefined) user.gstin = gstin ? gstin.toUpperCase() : "";
 
     await user.save();
-    return res.json({ message: "Profile updated", user });
+    return res.json({
+  message: "Profile updated",
+  user: sanitizeUser(user),
+});
   } catch (error) {
     console.error("updateProfile Error:", error);
     return res.status(500).json({ message: "Failed to update profile" });

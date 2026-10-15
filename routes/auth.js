@@ -6,8 +6,12 @@ const { OAuth2Client } = require("google-auth-library");
 const authMiddleware = require("../middleware/authMiddleware");
 const { sendPhoneCode, verifyPhoneCode, signup } = require("../controllers/authController");
 const admin = require('firebase-admin');
+const sanitizeUser = require("../utils/sanitizeUser");
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const SAFE_PROFILE_SELECT =
+  "_id name email mobile vehicleType vehicleModel " +
+  "vehicleNumber gstin role phoneVerified";
 //123//
 // routes/auth.js
 router.post("/phone/send-code", sendPhoneCode);
@@ -57,8 +61,8 @@ router.post("/google", async (req, res) => {
 
     res.json({
       token: jwtToken,
-      user,
-      isNewUser: false, // Existing user
+      user: sanitizeUser(user),
+      isNewUser: false,
     });
   } catch (error) {
     console.error("Google Login Error:", error);
@@ -99,9 +103,10 @@ router.get('/me', async (req, res) => {
     const strippedPlus = phone.replace(/^\+/, '');
     const last10 = strippedPlus.slice(-10);
 
-    let user = await User.findOne({ mobile: phone }).select('-password -__v');
-    if (!user) user = await User.findOne({ mobile: strippedPlus }).select('-password -__v');
-    if (!user) user = await User.findOne({ mobile: last10 }).select('-password -__v');
+    let user = await User.findOne({ mobile: phone })
+  .select(SAFE_PROFILE_SELECT);
+    if (!user) user = await User.findOne({ mobile: strippedPlus }).select(SAFE_PROFILE_SELECT);
+    if (!user) user = await User.findOne({ mobile: last10 }).select(SAFE_PROFILE_SELECT);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -115,10 +120,15 @@ const token = jwt.sign(
 );
 
     // return both user and server JWT
-    return res.json({ user, token });
+    return res.json({
+  user: sanitizeUser(user),
+  token,
+});
   } catch (err) {
     console.error('GET /auth/me error:', err && err.message ? err.message : err);
-    return res.status(401).json({ message: 'Invalid/expired auth token', details: err?.message });
+    return res.status(401).json({
+  message: "Invalid or expired authentication token.",
+});
   }
 });
 
@@ -167,10 +177,16 @@ router.put("/updateProfile", authMiddleware, async (req, res) => {
       update.gstin = gstin ? gstin.toString().toUpperCase().trim() : "";
 
     // 4) Update and return
-    const updatedUser = await User.findByIdAndUpdate(userId, update, { new: true }).select("-password -__v");
+    const updatedUser = await User.findByIdAndUpdate(
+  userId,
+  update,
+  { new: true, runValidators: true }
+).select(SAFE_PROFILE_SELECT);
     if (!updatedUser) return res.status(404).json({ message: "User not found" });
 
-    return res.json({ user: updatedUser });
+    return res.json({
+  user: sanitizeUser(updatedUser),
+});
   } catch (err) {
     console.error("Profile update error:", err);
     return res.status(500).json({ message: "Server error" });
