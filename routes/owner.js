@@ -2359,8 +2359,9 @@ router.get("/finance/monthly", async (req, res) => {
         gstAmount: allReceiptTotals.gstAmount,
         vjraMarginAmount: allReceiptTotals.vjraMarginAmount,
         energyConsumed: allReceiptTotals.energyConsumed,
-        // This field now means the unchanged payout for OWNER-borne devices only.
-        ownerPayout: ownerBearerPayout,
+        // Match Owner Overview: total Receipt.ownerPayout across all owner-owned devices for this month.
+        ownerPayout: allReceiptTotals.ownerPayout,
+        // Keep the OWNER-borne-only value separately for the existing settlement-status logic.
         ownerBearerPayout,
         ownerBearerDeviceCount: ownerBearerDevices.length,
         vjraGrossOwnerPayout: vjraTotals ? vjraTotals.grossOwnerPayout : null,
@@ -2385,7 +2386,7 @@ router.get("/finance/monthly", async (req, res) => {
         paidReceiptCount: settlementSummary.paidReceiptCount,
         recordedPayoutAmount: round2(settlementSummary.recordedPayoutAmount),
         paidPayoutAmount: round2(settlementSummary.paidPayoutAmount),
-        basis: "Receipt.ownerPayout for OWNER-borne devices only",
+        basis: "OwnerSettlement receipt line items for OWNER-borne devices only",
       },
       metadata: {
         generatedAt: new Date().toISOString(),
