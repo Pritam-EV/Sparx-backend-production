@@ -34,9 +34,10 @@ const ONLINE_THRESHOLD_MS =
   );
 
 const DEVICE_FIELDS =
-  "device_id project location status charger_type rate " +
-  "area city state lat lng relayOn lastSeen onboardingStatus " +
-  "onboardedAt updatedAt totalenergy current_session_id";
+  "device_id serialNumber project location status charger_type rate " +
+  "area city state lat lng totalenergy meterType meterConsumerNumber " +
+  "wifiSSID wifiPassword relayOn lastSeen onboardingStatus " +
+  "onboardedAt updatedAt current_session_id";
 
 function isValidOwnerId(ownerId) {
   return mongoose.Types.ObjectId.isValid(ownerId);
@@ -310,16 +311,29 @@ function shapeDevice(device) {
   const state = getDeviceState(device);
 
   return {
-    deviceId: device.device_id,
+    deviceId: device.device_id || "",
+    serialNumber: device.serialNumber || "",
     project: device.project || "",
     location: device.location || "",
     status: device.status || "Unknown",
     chargerType: device.charger_type || "",
+
     rateInclGst: Number(device.rate || 0),
 
     area: device.area || "",
     city: device.city || "",
     state: device.state || "",
+
+    lat: device.lat ?? null,
+    lng: device.lng ?? null,
+
+    meterConsumerNumber: device.meterConsumerNumber || "",
+    meterType: device.meterType || "",
+
+    totalEnergy: round3(device.totalenergy),
+
+    wifiSSID: device.wifiSSID || "",
+    wifiPassword: device.wifiPassword || "",
 
     relayOn: Boolean(device.relayOn),
     lastSeen: device.lastSeen || null,
@@ -846,6 +860,189 @@ recentReceipts: recentReceipts.map(shapeOwnerReceipt),
 
     return res.status(500).json({
       error: "Could not fetch device details.",
+    });
+  }
+});
+
+// PATCH /api/owner/devices/:deviceId/details
+//
+// Owner-editable fields:
+// meterConsumerNumber, meterType, location, city, state, lat, lng
+//
+// Serial number, device ID, Wi-Fi credentials, rate and runtime state
+// cannot be modified through this endpoint.
+
+router.patch("/devices/:deviceId/details", async (req, res) => {
+  try {
+    const ownerId = req.user.userId;
+
+    if (!isValidOwnerId(ownerId)) {
+      return res.status(400).json({
+        error: "Invalid owner ID in authentication token.",
+      });
+    }
+
+    const deviceId = String(req.params.deviceId || "").trim();
+
+    if (!deviceId) {
+      return res.status(400).json({
+        error: "Device ID is required.",
+      });
+    }
+
+    const ownerObjectId = getOwnerObjectId(req);
+
+    // Ownership is enforced in the database query.
+    const device = await Device.findOne({
+      ownerId: ownerObjectId,
+      device_id: deviceId,
+    });
+
+    if (!device) {
+      return res.status(404).json({
+        error: "Device not found in your account.",
+      });
+    }
+
+    const body = req.body || {};
+    const updates = {};
+
+    // Meter consumer / meter number.
+    if (Object.prototype.hasOwnProperty.call(body, "meterConsumerNumber")) {
+      if (
+        body.meterConsumerNumber !== null &&
+        typeof body.meterConsumerNumber !== "string"
+      ) {
+        return res.status(400).json({
+          error: "Meter number must be text.",
+        });
+      }
+
+      const meterNumber = String(
+        body.meterConsumerNumber ?? ""
+      ).trim();
+
+      if (meterNumber.length > 100) {
+        return res.status(400).json({
+          error: "Meter number cannot exceed 100 characters.",
+        });
+      }
+
+      updates.meterConsumerNumber = meterNumber || null;
+    }
+
+    // Meter type must match the Device schema enum.
+    if (Object.prototype.hasOwnProperty.call(body, "meterType")) {
+      if (typeof body.meterType !== "string") {
+        return res.status(400).json({
+          error: "Meter type must be text.",
+        });
+      }
+
+      const meterType = body.meterType.trim();
+      const validMeterTypes = [
+        "Green Meter",
+        "Commercial",
+        "Residential",
+      ];
+
+      if (meterType && !validMeterTypes.includes(meterType)) {
+        return res.status(400).json({
+          error: "Invalid meter type.",
+          allowedMeterTypes: validMeterTypes,
+        });
+      }
+
+      updates.meterType = meterType || null;
+    }
+
+    // Editable location strings.
+    for (const field of ["location", "city", "state"]) {
+      if (!Object.prototype.hasOwnProperty.call(body, field)) {
+        continue;
+      }
+
+      if (typeof body[field] !== "string") {
+        return res.status(400).json({
+          error: `${field} must be text.`,
+        });
+      }
+
+      const value = body[field].trim();
+      const maxLength = field === "location" ? 300 : 100;
+
+      if (!value || value.length > maxLength) {
+        return res.status(400).json({
+          error:
+            field === "location"
+              ? "Location is required and must not exceed 300 characters."
+              : `${field} is required and must not exceed 100 characters.`,
+        });
+      }
+
+      updates[field] = value;
+    }
+
+    // Latitude and longitude.
+    for (const field of ["lat", "lng"]) {
+      if (!Object.prototype.hasOwnProperty.call(body, field)) {
+        continue;
+      }
+
+      const rawValue = body[field];
+
+      if (
+        rawValue === null ||
+        rawValue === undefined ||
+        (typeof rawValue === "string" && !rawValue.trim())
+      ) {
+        return res.status(400).json({
+          error: `${field} is required and must be a valid number.`,
+        });
+      }
+
+      const value = Number(rawValue);
+
+      if (!Number.isFinite(value)) {
+        return res.status(400).json({
+          error: `${field} must be a valid number.`,
+        });
+      }
+
+      if (field === "lat" && (value < -90 || value > 90)) {
+        return res.status(400).json({
+          error: "Latitude must be between -90 and 90.",
+        });
+      }
+
+      if (field === "lng" && (value < -180 || value > 180)) {
+        return res.status(400).json({
+          error: "Longitude must be between -180 and 180.",
+        });
+      }
+
+      updates[field] = value;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({
+        error: "No editable device fields were supplied.",
+      });
+    }
+
+    Object.assign(device, updates);
+    await device.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Device details updated successfully.",
+      device: shapeDevice(device.toObject()),
+    });
+  } catch (error) {
+    console.error("Owner device-details update error:", error);
+
+    return res.status(500).json({
+      error: "Could not update device details.",
     });
   }
 });
