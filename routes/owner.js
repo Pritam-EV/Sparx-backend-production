@@ -15,6 +15,8 @@ const Payment = require("../models/Payment");
 const Refund = require("../models/Refund");
 const DeviceRateAudit = require("../models/DeviceRateAudit");
 
+const OwnerSettlement = require("../models/OwnerSettlement");
+
 const { escapeRegex } = require("../utils/ownerScope");
 
 const router = express.Router();
@@ -2267,5 +2269,335 @@ router.get("/reports/finance.csv", async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// OWNER SETTLEMENT READ APIs
+// All queries are scoped to the authenticated owner.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /api/owner/finance/settlements
+// Optional: ?page=1&limit=25&status=pending&from=2026-10-01&to=2026-10-17
+
+router.get("/finance/settlements", async (req, res) => {
+  try {
+    const ownerId = req.user.userId;
+
+    if (!isValidOwnerId(ownerId)) {
+      return res.status(400).json({
+        error: "Invalid owner ID in authentication token.",
+      });
+    }
+
+    const ownerObjectId = getOwnerObjectId(req);
+
+    const page = Math.max(
+      1,
+      parseInt(req.query.page, 10) || 1
+    );
+
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit, 10) || 25)
+    );
+
+    const filter = {
+      ownerId: ownerObjectId,
+    };
+
+    const allowedStatuses = [
+      "pending",
+      "processing",
+      "paid",
+      "failed",
+      "on_hold",
+    ];
+
+    if (
+      typeof req.query.status === "string" &&
+      req.query.status.trim()
+    ) {
+      const status = req.query.status.trim().toLowerCase();
+
+      if (!allowedStatuses.includes(status)) {
+        return res.status(400).json({
+          error: "Invalid settlement status.",
+          allowedStatuses,
+        });
+      }
+
+      filter.status = status;
+    }
+
+    const dateFilter = buildOptionalDateFilter(
+      req.query,
+      "createdAt"
+    );
+
+    if (dateFilter.error) {
+      return res.status(400).json({
+        error: dateFilter.error,
+      });
+    }
+
+    Object.assign(filter, dateFilter.filter);
+
+    // Summary totals cover all the owner's settlements, independently
+    // of the pagination/status/date filters on the register.
+    const [
+      documents,
+      total,
+      summaryRows,
+    ] = await Promise.all([
+      OwnerSettlement.find(filter)
+        .select("-lineItems -statusHistory")
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+
+      OwnerSettlement.countDocuments(filter),
+
+      OwnerSettlement.aggregate([
+        {
+          $match: {
+            ownerId: ownerObjectId,
+          },
+        },
+        {
+          $group: {
+            _id: null,
+
+            totalSettlements: {
+              $sum: 1,
+            },
+
+            paidSettlements: {
+              $sum: {
+                $cond: [{ $eq: ["$status", "paid"] }, 1, 0],
+              },
+            },
+
+            paidAmount: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$status", "paid"] },
+                  { $ifNull: ["$amountPaid", 0] },
+                  0,
+                ],
+              },
+            },
+
+            outstandingAmount: {
+              $sum: {
+                $cond: [
+                  { $in: ["$status", [
+                    "pending",
+                    "processing",
+                    "failed",
+                    "on_hold",
+                  ]] },
+                  { $ifNull: ["$payoutAmount", 0] },
+                  0,
+                ],
+              },
+            },
+
+            failedSettlements: {
+              $sum: {
+                $cond: [{ $eq: ["$status", "failed"] }, 1, 0],
+              },
+            },
+
+            onHoldSettlements: {
+              $sum: {
+                $cond: [{ $eq: ["$status", "on_hold"] }, 1, 0],
+              },
+            },
+          },
+        },
+      ]),
+    ]);
+
+    const summary = summaryRows[0] || {};
+
+    return res.status(200).json({
+      items: documents.map((item) => ({
+        settlementId: item.settlementId,
+        periodStart: item.periodStart,
+        periodEnd: item.periodEnd,
+        periodEndIsExclusive: true,
+
+        status: item.status,
+
+        receiptCount: Number(item.receiptCount || 0),
+        totalEnergyKwh: round3(item.totalEnergyKwh),
+        customerBillingsInclGst: round2(
+          item.customerBillingsInclGst
+        ),
+
+        payoutAmount: round2(item.payoutAmount),
+        amountPaid: round2(item.amountPaid),
+
+        payoutMethod: item.payoutMethod || null,
+        paymentReference: item.paymentReference || "",
+        paidAt: item.paidAt || null,
+
+        failureReason: item.failureReason || "",
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      })),
+
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+
+      summary: {
+        totalSettlements: Number(summary.totalSettlements || 0),
+        paidSettlements: Number(summary.paidSettlements || 0),
+        paidAmount: round2(summary.paidAmount),
+        outstandingAmount: round2(summary.outstandingAmount),
+        failedSettlements: Number(summary.failedSettlements || 0),
+        onHoldSettlements: Number(summary.onHoldSettlements || 0),
+      },
+
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Owner settlement list error:", error);
+
+    return res.status(500).json({
+      error: "Could not fetch your settlements.",
+    });
+  }
+});
+
+// GET /api/owner/finance/settlements/:settlementId
+// Optional line pagination: ?page=1&limit=50
+
+router.get(
+  "/finance/settlements/:settlementId",
+  async (req, res) => {
+    try {
+      const ownerId = req.user.userId;
+
+      if (!isValidOwnerId(ownerId)) {
+        return res.status(400).json({
+          error: "Invalid owner ID in authentication token.",
+        });
+      }
+
+      const settlementId = String(
+        req.params.settlementId || ""
+      ).trim();
+
+      const ownerObjectId = getOwnerObjectId(req);
+
+      const page = Math.max(
+        1,
+        parseInt(req.query.page, 10) || 1
+      );
+
+      const limit = Math.min(
+        100,
+        Math.max(1, parseInt(req.query.limit, 10) || 50)
+      );
+
+      const settlement = await OwnerSettlement.findOne({
+        settlementId,
+        ownerId: ownerObjectId,
+      }).lean();
+
+      // The owner scope is applied directly to the lookup.
+      // This does not reveal another owner's settlement.
+      if (!settlement) {
+        return res.status(404).json({
+          error: "Settlement not found in your account.",
+        });
+      }
+
+      const allItems = settlement.lineItems || [];
+      const startIndex = (page - 1) * limit;
+
+      const items = allItems
+        .slice(startIndex, startIndex + limit)
+        .map((item) => ({
+          receiptId: item.receiptId,
+          sessionId: item.sessionId,
+          deviceId: item.deviceId,
+          receiptCreatedAt: item.receiptCreatedAt,
+
+          energyKwh: round3(item.energyKwh),
+          customerBillingsInclGst: round2(
+            item.customerBillingsInclGst
+          ),
+          refundAmountSnapshot: round2(
+            item.refundAmountSnapshot
+          ),
+          payoutAmount: round2(item.payoutAmount),
+        }));
+
+      return res.status(200).json({
+        settlement: {
+          settlementId: settlement.settlementId,
+
+          periodStart: settlement.periodStart,
+          periodEnd: settlement.periodEnd,
+          periodEndIsExclusive: true,
+
+          status: settlement.status,
+
+          receiptCount: Number(settlement.receiptCount || 0),
+          totalEnergyKwh: round3(settlement.totalEnergyKwh),
+          customerBillingsInclGst: round2(
+            settlement.customerBillingsInclGst
+          ),
+          refundAmountSnapshot: round2(
+            settlement.refundAmountSnapshot
+          ),
+
+          payoutAmount: round2(settlement.payoutAmount),
+          amountPaid: round2(settlement.amountPaid),
+
+          payoutMethod: settlement.payoutMethod || null,
+          paymentReference: settlement.paymentReference || "",
+          paidAt: settlement.paidAt || null,
+          failureReason: settlement.failureReason || "",
+
+          notes: settlement.notes || "",
+          createdAt: settlement.createdAt,
+          updatedAt: settlement.updatedAt,
+
+          statusHistory: (settlement.statusHistory || []).map(
+            (entry) => ({
+              fromStatus: entry.fromStatus,
+              toStatus: entry.toStatus,
+              changedByRole: entry.changedByRole,
+              reason: entry.reason || "",
+              paymentReference: entry.paymentReference || "",
+              changedAt: entry.changedAt,
+            })
+          ),
+        },
+
+        items,
+
+        pagination: {
+          page,
+          limit,
+          total: allItems.length,
+          totalPages: Math.ceil(allItems.length / limit),
+        },
+      });
+    } catch (error) {
+      console.error("Owner settlement detail error:", error);
+
+      return res.status(500).json({
+        error: "Could not fetch settlement details.",
+      });
+    }
+  }
+);
 
 module.exports = router;
