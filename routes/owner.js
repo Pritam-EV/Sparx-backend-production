@@ -14,7 +14,7 @@ const DeviceTelemetry = require("../models/deviceTelemetry");
 const DeviceRateAudit = require("../models/DeviceRateAudit");
 
 const OwnerSettlement = require("../models/OwnerSettlement");
-
+const ElectricityBill = require("../models/ElectricityBill");
 const { escapeRegex } = require("../utils/ownerScope");
 
 const router = express.Router();
@@ -1994,6 +1994,606 @@ router.get("/finance/summary", async (req, res) => {
     });
   }
 });
+
+
+// GET /api/owner/finance/monthly?month=YYYY-MM
+//
+// Returns:
+// - Available monthly filters, starting from the owner's first receipt
+// - Receipt-only financial summary for the selected month
+// - VJRA-borne electricity bill reconciliation, only when applicable
+// - Receipt payout settlement status from OwnerSettlement
+//
+// "to" month boundary is exclusive. All month boundaries use Asia/Kolkata.
+
+router.get("/finance/monthly", async (req, res) => {
+  try {
+    const ownerId = req.user.userId;
+
+    if (!isValidOwnerId(ownerId)) {
+      return res.status(400).json({
+        error: "Invalid owner ID in authentication token.",
+      });
+    }
+
+    const ownerObjectId = getOwnerObjectId(req);
+
+    // Find only devices owned by the authenticated owner.
+    const ownedDevices = await Device.find({
+      ownerId: ownerObjectId,
+    })
+      .select(
+        "device_id project commercial.electricityBearer"
+      )
+      .lean();
+
+    const deviceIds = ownedDevices
+      .map((device) => device.device_id)
+      .filter(Boolean);
+
+    // Date helpers use the existing Asia/Kolkata offset in this file.
+    const getIstMonthKey = (date) => {
+      const shifted = new Date(
+        new Date(date).getTime() + IST_OFFSET_MS
+      );
+
+      const year = shifted.getUTCFullYear();
+      const month = String(
+        shifted.getUTCMonth() + 1
+      ).padStart(2, "0");
+
+      return `${year}-${month}`;
+    };
+
+    const getIstNextMonthStart = (date) => {
+      const shifted = new Date(
+        date.getTime() + IST_OFFSET_MS
+      );
+
+      return new Date(
+        Date.UTC(
+          shifted.getUTCFullYear(),
+          shifted.getUTCMonth() + 1,
+          1
+        ) - IST_OFFSET_MS
+      );
+    };
+
+    const monthKeyToRange = (monthKey) => {
+      const match = monthKey.match(
+        /^(\d{4})-(0[1-9]|1[0-2])$/
+      );
+
+      if (!match) return null;
+
+      const year = Number(match[1]);
+      const monthNumber = Number(match[2]);
+
+      return {
+        from: new Date(
+          Date.UTC(year, monthNumber - 1, 1) - IST_OFFSET_MS
+        ),
+        to: new Date(
+          Date.UTC(year, monthNumber, 1) - IST_OFFSET_MS
+        ),
+      };
+    };
+
+    const currentMonthStart = getIstMonthStart(new Date());
+    const currentMonthKey = getIstMonthKey(currentMonthStart);
+
+    // Determine the first available filter month from Receipts.
+    const firstReceipt = deviceIds.length
+      ? await Receipt.findOne({
+          deviceId: { $in: deviceIds },
+        })
+          .select("createdAt")
+          .sort({ createdAt: 1 })
+          .lean()
+      : null;
+
+    let earliestMonthStart = firstReceipt?.createdAt
+      ? getIstMonthStart(new Date(firstReceipt.createdAt))
+      : currentMonthStart;
+
+    // Safety: never offer a month after the current month.
+    if (earliestMonthStart > currentMonthStart) {
+      earliestMonthStart = currentMonthStart;
+    }
+
+    const earliestAvailableMonth =
+      getIstMonthKey(earliestMonthStart);
+
+    const availableMonths = [];
+
+    let cursor = new Date(earliestMonthStart);
+
+    while (cursor <= currentMonthStart) {
+      availableMonths.push(getIstMonthKey(cursor));
+      cursor = getIstNextMonthStart(cursor);
+    }
+
+    // Newest month first, down to the earliest receipt month.
+    availableMonths.reverse();
+
+    const month =
+      typeof req.query.month === "string" &&
+      req.query.month.trim()
+        ? req.query.month.trim()
+        : currentMonthKey;
+
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+      return res.status(400).json({
+        error: "Invalid month. Use YYYY-MM.",
+      });
+    }
+
+    if (month > currentMonthKey) {
+      return res.status(400).json({
+        error: "Future months cannot be selected.",
+      });
+    }
+
+    if (month < earliestAvailableMonth) {
+      return res.status(400).json({
+        error:
+          "The selected month is before the first available receipt month.",
+        earliestAvailableMonth,
+      });
+    }
+
+    const period = monthKeyToRange(month);
+
+    if (!period) {
+      return res.status(400).json({
+        error: "Could not determine the selected month.",
+      });
+    }
+
+    const { from, to } = period;
+
+    // --------------------------------------------------------
+    // 1. RECEIPT-ONLY FINANCIAL SUMMARY
+    // --------------------------------------------------------
+
+    let receiptTotals = {
+      receiptCount: 0,
+      energyConsumed: 0,
+      taxableAmount: 0,
+      gstAmount: 0,
+      totalAmount: 0,
+      vjraMarginAmount: 0,
+      ownerPayout: 0,
+
+      // Internal reconciliation field. Not a customer or transaction detail.
+      payoutEligibleReceiptCount: 0,
+    };
+
+    if (deviceIds.length) {
+      const [row] = await Receipt.aggregate([
+        {
+          $match: {
+            deviceId: { $in: deviceIds },
+            createdAt: { $gte: from, $lt: to },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+
+            receiptCount: {
+              $sum: 1,
+            },
+
+            energyConsumed: {
+              $sum: {
+                $ifNull: ["$energyConsumed", 0],
+              },
+            },
+
+            taxableAmount: {
+              $sum: {
+                $ifNull: ["$taxableAmount", 0],
+              },
+            },
+
+            gstAmount: {
+              $sum: {
+                $ifNull: ["$gstAmount", 0],
+              },
+            },
+
+            totalAmount: {
+              $sum: {
+                $ifNull: ["$totalAmount", 0],
+              },
+            },
+
+            vjraMarginAmount: {
+              $sum: {
+                $ifNull: ["$vjraMarginAmount", 0],
+              },
+            },
+
+            ownerPayout: {
+              $sum: {
+                $ifNull: ["$ownerPayout", 0],
+              },
+            },
+
+            payoutEligibleReceiptCount: {
+              $sum: {
+                $cond: [
+                  {
+                    $gt: [
+                      { $ifNull: ["$ownerPayout", 0] },
+                      0,
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]);
+
+      if (row) {
+        receiptTotals = {
+          receiptCount: Number(row.receiptCount || 0),
+          energyConsumed: round3(row.energyConsumed),
+          taxableAmount: round2(row.taxableAmount),
+          gstAmount: round2(row.gstAmount),
+          totalAmount: round2(row.totalAmount),
+          vjraMarginAmount: round2(row.vjraMarginAmount),
+          ownerPayout: round2(row.ownerPayout),
+          payoutEligibleReceiptCount: Number(
+            row.payoutEligibleReceiptCount || 0
+          ),
+        };
+      }
+    }
+
+    // --------------------------------------------------------
+    // 2. ELECTRICITY BILL RECONCILIATION
+    // Show this section only when at least one owned device
+    // has commercial.electricityBearer === "VJRA".
+    // --------------------------------------------------------
+
+    const vjraDevices = ownedDevices.filter(
+      (device) =>
+        String(
+          device.commercial?.electricityBearer || ""
+        ).toUpperCase() === "VJRA"
+    );
+
+    const electricityApplicable = vjraDevices.length > 0;
+
+    // Group VJRA-borne devices by project. ElectricityBill is
+    // recorded per project and month.
+    const projectMap = new Map();
+
+    for (const device of vjraDevices) {
+      const projectName = String(device.project || "").trim();
+
+      const projectKey = projectName || "__UNASSIGNED__";
+
+      if (!projectMap.has(projectKey)) {
+        projectMap.set(projectKey, {
+          project: projectName || "Project not assigned",
+          projectKey: projectName || null,
+          deviceCount: 0,
+        });
+      }
+
+      projectMap.get(projectKey).deviceCount += 1;
+    }
+
+    const vjraProjectRows = [...projectMap.values()];
+
+    const validProjectNames = vjraProjectRows
+      .map((row) => row.projectKey)
+      .filter(Boolean);
+
+    const billDocuments =
+      validProjectNames.length > 0
+        ? await ElectricityBill.find({
+            project: { $in: validProjectNames },
+            month,
+            isVoided: false,
+          })
+            .select(
+              "project month status totalOwnerPayable totalEBAmount " +
+              "ownerPayment.submittedAt ownerPayment.verifiedAt"
+            )
+            .lean()
+        : [];
+
+    const billByProject = new Map(
+      billDocuments.map((bill) => [
+        bill.project,
+        bill,
+      ])
+    );
+
+    const electricityProjects = vjraProjectRows.map(
+      (projectRow) => {
+        const bill = projectRow.projectKey
+          ? billByProject.get(projectRow.projectKey)
+          : null;
+
+        if (!bill) {
+          return {
+            project: projectRow.project,
+            deviceCount: projectRow.deviceCount,
+
+            billGenerated: false,
+            status: "not_generated",
+
+            totalMsebBill: null,
+            ownerPayable: null,
+            vjraPayable: null,
+
+            ownerPaymentVerified: false,
+            canPay: false,
+          };
+        }
+
+        const totalMsebBill = round2(bill.totalEBAmount);
+        const ownerPayable = round2(bill.totalOwnerPayable);
+
+        // Per the requested formula:
+        // VJRA payable = full MSEB bill - owner's payable share.
+        const vjraPayable = round2(
+          totalMsebBill - ownerPayable
+        );
+
+        return {
+          project: projectRow.project,
+          deviceCount: projectRow.deviceCount,
+
+          billGenerated: true,
+          status: bill.status,
+
+          totalMsebBill,
+          ownerPayable,
+          vjraPayable,
+
+          ownerPaymentVerified: [
+            "payment_verified",
+            "eb_paid_to_mseb",
+          ].includes(bill.status),
+
+          // The existing record-payment API only accepts "uploaded".
+          canPay: bill.status === "uploaded",
+
+          paymentSubmittedAt:
+            bill.ownerPayment?.submittedAt || null,
+
+          paymentVerifiedAt:
+            bill.ownerPayment?.verifiedAt || null,
+        };
+      }
+    );
+
+    const allVjraBillsGenerated =
+      electricityApplicable &&
+      electricityProjects.length > 0 &&
+      electricityProjects.every(
+        (project) => project.billGenerated
+      );
+
+    const totalMsebBill = round2(
+      electricityProjects.reduce(
+        (sum, project) =>
+          sum + Number(project.totalMsebBill || 0),
+        0
+      )
+    );
+
+    const totalOwnerPayable = round2(
+      electricityProjects.reduce(
+        (sum, project) =>
+          sum + Number(project.ownerPayable || 0),
+        0
+      )
+    );
+
+    const totalVjraPayable = round2(
+      electricityProjects.reduce(
+        (sum, project) =>
+          sum + Number(project.vjraPayable || 0),
+        0
+      )
+    );
+
+    // When no VJRA-bearing devices exist, there is no EB offset.
+    // If bills are missing, this value is provisional because
+    // their owner-payable amounts are not yet known.
+    const netOwnerPayout = electricityApplicable
+      ? round2(receiptTotals.ownerPayout - totalOwnerPayable)
+      : round2(receiptTotals.ownerPayout);
+
+    const netOwnerPayoutComplete =
+      !electricityApplicable || allVjraBillsGenerated;
+
+    // --------------------------------------------------------
+    // 3. OWNER PAYOUT SETTLEMENT STATUS
+    //
+    // This status is derived from OwnerSettlement line items
+    // whose receipt dates fall inside the selected month.
+    //
+    // Existing settlements record Receipt.ownerPayout before
+    // electricity-bill offsets. Keep that distinction explicit.
+    // --------------------------------------------------------
+
+    const settlementGroups = await OwnerSettlement.aggregate([
+      {
+        $match: {
+          ownerId: ownerObjectId,
+          "lineItems.receiptCreatedAt": {
+            $gte: from,
+            $lt: to,
+          },
+        },
+      },
+      {
+        $unwind: "$lineItems",
+      },
+      {
+        $match: {
+          "lineItems.receiptCreatedAt": {
+            $gte: from,
+            $lt: to,
+          },
+          "lineItems.payoutAmount": { $gt: 0 },
+        },
+      },
+      {
+        $group: {
+          _id: "$status",
+
+          receiptCount: {
+            $sum: 1,
+          },
+
+          payoutAmount: {
+            $sum: {
+              $ifNull: ["$lineItems.payoutAmount", 0],
+            },
+          },
+        },
+      },
+    ]);
+
+    const settlementSummary = settlementGroups.reduce(
+      (summary, row) => {
+        const count = Number(row.receiptCount || 0);
+        const amount = Number(row.payoutAmount || 0);
+
+        summary.settledReceiptCount += count;
+        summary.recordedPayoutAmount += amount;
+
+        if (row._id === "paid") {
+          summary.paidReceiptCount += count;
+          summary.paidPayoutAmount += amount;
+        }
+
+        return summary;
+      },
+      {
+        settledReceiptCount: 0,
+        recordedPayoutAmount: 0,
+        paidReceiptCount: 0,
+        paidPayoutAmount: 0,
+      }
+    );
+
+    const eligibleReceipts =
+      receiptTotals.payoutEligibleReceiptCount;
+
+    let payoutSettlementStatus = "not_applicable";
+
+    if (eligibleReceipts > 0) {
+      if (
+        settlementSummary.paidReceiptCount >= eligibleReceipts
+      ) {
+        payoutSettlementStatus = "paid";
+      } else if (settlementSummary.paidReceiptCount > 0) {
+        payoutSettlementStatus = "partially_paid";
+      } else if (settlementSummary.settledReceiptCount > 0) {
+        payoutSettlementStatus = "pending";
+      } else {
+        payoutSettlementStatus = "not_settled";
+      }
+    }
+
+    return res.status(200).json({
+      month,
+      period: {
+        from: from.toISOString(),
+        to: to.toISOString(),
+        timezone: "Asia/Kolkata",
+        endIsExclusive: true,
+      },
+
+      availableMonths,
+      earliestAvailableMonth,
+
+      // These totals are all derived from Receipt records.
+      totals: {
+        receiptCount: receiptTotals.receiptCount,
+        totalAmount: receiptTotals.totalAmount,
+        taxableAmount: receiptTotals.taxableAmount,
+        gstAmount: receiptTotals.gstAmount,
+        vjraMarginAmount: receiptTotals.vjraMarginAmount,
+        energyConsumed: receiptTotals.energyConsumed,
+        ownerPayout: receiptTotals.ownerPayout,
+
+        netOwnerPayout,
+        netOwnerPayoutComplete,
+      },
+
+      // Omit this entire section from the UI when applicable=false.
+      electricity: {
+        applicable: electricityApplicable,
+        allBillsGenerated: allVjraBillsGenerated,
+        missingBillCount: electricityProjects.filter(
+          (project) => !project.billGenerated
+        ).length,
+
+        projects: electricityProjects,
+
+        totals: electricityApplicable
+          ? {
+              totalMsebBill,
+              totalOwnerPayable,
+              totalVjraPayable,
+              netOwnerPayout,
+              netOwnerPayoutComplete,
+            }
+          : null,
+      },
+
+      payoutSettlement: {
+        status: payoutSettlementStatus,
+
+        eligibleReceiptCount: eligibleReceipts,
+        settledReceiptCount:
+          settlementSummary.settledReceiptCount,
+        paidReceiptCount:
+          settlementSummary.paidReceiptCount,
+
+        recordedPayoutAmount: round2(
+          settlementSummary.recordedPayoutAmount
+        ),
+
+        paidPayoutAmount: round2(
+          settlementSummary.paidPayoutAmount
+        ),
+
+        // OwnerSettlement currently tracks gross receipt payout,
+        // before any electricity-bill offsets.
+        basis: "receipt_owner_payout_before_electricity_offset",
+      },
+
+      metadata: {
+        generatedAt: new Date().toISOString(),
+        financialSource: "Receipt records only",
+        electricitySource: "ElectricityBill records for VJRA-borne projects",
+        settlementSource: "OwnerSettlement receipt line items",
+      },
+    });
+  } catch (error) {
+    console.error("Owner monthly finance error:", error);
+
+    return res.status(500).json({
+      error: "Could not fetch monthly finance and settlement summary.",
+    });
+  }
+});
+
 
 // GET /api/owner/reports/sessions.csv
 //
