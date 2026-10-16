@@ -560,7 +560,11 @@ async function completeSessionInternal({
     const isWalletPay = paymentRecord?.gateway === "wallet";
 
     // ── Snapshot user and device metadata for receipt ─────────────────────
-const userDoc = await User.findById(session.userId).select('name email mobile gstin').lean();
+const userDoc = await User.findById(session.userId)
+  .select(
+    "name email mobile gstin vehicleNumber vehicleModel"
+  )
+  .lean();
 
     // For wallet sessions: refund goes to wallet immediately → status = "wallet_refunded"
     // For cashfree sessions: refund is initiated via Cashfree → status = "initiated"
@@ -605,6 +609,10 @@ const receiptId = await generateReceiptId({
   deviceArea:     device?.area     || "",
   deviceLocation: device?.location || "",
   placeOfSupply:  device?.state    || "",   // ← KEY FIELD for GST bifurcation
+
+// ── VEHICLE SNAPSHOT ───────────────────────────────
+vehicleNumber: userDoc?.vehicleNumber || "",
+vehicleModel: userDoc?.vehicleModel || "",
 
   // ── PAYMENT GATEWAY (NEW) ────────────────────────
   paymentGateway: isWalletPay ? "wallet" : (session.paymentGateway || "cashfree"),

@@ -27,6 +27,19 @@ const receiptSchema = new mongoose.Schema({
   deviceArea: String,
   deviceLocation: String,
 placeOfSupply: { type: String, default: "" },
+
+// VEHICLE SNAPSHOT — safe fields for owner reporting
+vehicleNumber: {
+  type: String,
+  trim: true,
+  default: "",
+},
+vehicleModel: {
+  type: String,
+  trim: true,
+  default: "",
+},
+
     // ============== PAYMENT MODE ==============
   paymentGateway: {                            // ← NEW: snapshotted from Session
     type: String,

@@ -81,7 +81,9 @@ router.get("/all", auth, async (req, res) => {
       }
     }
 
-    if (requestedUserId) {
+    // Only admins may filter by customer ID.
+    // Owner responses must not expose customer identifiers.
+    if (requestedUserId && req.user.role === "admin") {
       match.userId = requestedUserId;
     }
 
@@ -119,13 +121,221 @@ router.get("/all", auth, async (req, res) => {
         "i"
       );
 
-      match.$or = [
+match.$or =
+  req.user.role === "owner"
+    ? [
+        { receiptId: safeSearch },
+        { deviceId: safeSearch },
+        { vehicleNumber: safeSearch },
+        { vehicleModel: safeSearch },
+      ]
+    : [
         { receiptId: safeSearch },
         { deviceId: safeSearch },
         { sessionId: safeSearch },
         { transactionId: safeSearch },
       ];
     }
+
+    if (req.user.role === "owner") {
+  const [facet] = await Receipt.aggregate([
+    { $match: match },
+    {
+      $facet: {
+        list: [
+          { $sort: { createdAt: -1 } },
+          { $skip: skip },
+          { $limit: lim },
+          {
+            $project: {
+              _id: 0,
+              receiptId: 1,
+              deviceId: 1,
+              createdAt: 1,
+
+              vehicleNumber: {
+                $ifNull: ["$vehicleNumber", ""],
+              },
+              vehicleModel: {
+                $ifNull: ["$vehicleModel", ""],
+              },
+
+              totalAmount: {
+                $ifNull: ["$totalAmount", 0],
+              },
+              taxableAmount: {
+                $ifNull: ["$taxableAmount", 0],
+              },
+              gstAmount: {
+                $ifNull: ["$gstAmount", 0],
+              },
+              energyConsumed: {
+                $ifNull: ["$energyConsumed", 0],
+              },
+              ownerPayout: {
+                $ifNull: ["$ownerPayout", 0],
+              },
+            },
+          },
+        ],
+
+        totals: [
+          {
+            $group: {
+              _id: null,
+
+              receiptCount: { $sum: 1 },
+
+              totalAmount: {
+                $sum: { $ifNull: ["$totalAmount", 0] },
+              },
+              taxableAmount: {
+                $sum: { $ifNull: ["$taxableAmount", 0] },
+              },
+              gstAmount: {
+                $sum: { $ifNull: ["$gstAmount", 0] },
+              },
+              energyConsumed: {
+                $sum: { $ifNull: ["$energyConsumed", 0] },
+              },
+              ownerPayout: {
+                $sum: { $ifNull: ["$ownerPayout", 0] },
+              },
+            },
+          },
+        ],
+
+        count: [{ $count: "total" }],
+      },
+    },
+  ]);
+
+  const ownerTotals = facet?.totals?.[0] || {
+    receiptCount: 0,
+    totalAmount: 0,
+    taxableAmount: 0,
+    gstAmount: 0,
+    energyConsumed: 0,
+    ownerPayout: 0,
+  };
+
+  return res.status(200).json({
+    page: pageNum,
+    limit: lim,
+    total: facet?.count?.[0]?.total || 0,
+
+    totals: {
+      receiptCount: Number(ownerTotals.receiptCount || 0),
+      totalAmount: Number(ownerTotals.totalAmount || 0),
+      taxableAmount: Number(ownerTotals.taxableAmount || 0),
+      gstAmount: Number(ownerTotals.gstAmount || 0),
+      energyConsumed: Number(ownerTotals.energyConsumed || 0),
+      ownerPayout: Number(ownerTotals.ownerPayout || 0),
+    },
+
+    receipts: facet?.list || [],
+  });
+}
+
+if (req.user.role === "owner") {
+  const [facet] = await Receipt.aggregate([
+    { $match: match },
+    {
+      $facet: {
+        list: [
+          { $sort: { createdAt: -1 } },
+          { $skip: skip },
+          { $limit: lim },
+          {
+            $project: {
+              _id: 0,
+              receiptId: 1,
+              deviceId: 1,
+              createdAt: 1,
+
+              vehicleNumber: {
+                $ifNull: ["$vehicleNumber", ""],
+              },
+              vehicleModel: {
+                $ifNull: ["$vehicleModel", ""],
+              },
+
+              totalAmount: {
+                $ifNull: ["$totalAmount", 0],
+              },
+              taxableAmount: {
+                $ifNull: ["$taxableAmount", 0],
+              },
+              gstAmount: {
+                $ifNull: ["$gstAmount", 0],
+              },
+              energyConsumed: {
+                $ifNull: ["$energyConsumed", 0],
+              },
+              ownerPayout: {
+                $ifNull: ["$ownerPayout", 0],
+              },
+            },
+          },
+        ],
+
+        totals: [
+          {
+            $group: {
+              _id: null,
+
+              receiptCount: { $sum: 1 },
+
+              totalAmount: {
+                $sum: { $ifNull: ["$totalAmount", 0] },
+              },
+              taxableAmount: {
+                $sum: { $ifNull: ["$taxableAmount", 0] },
+              },
+              gstAmount: {
+                $sum: { $ifNull: ["$gstAmount", 0] },
+              },
+              energyConsumed: {
+                $sum: { $ifNull: ["$energyConsumed", 0] },
+              },
+              ownerPayout: {
+                $sum: { $ifNull: ["$ownerPayout", 0] },
+              },
+            },
+          },
+        ],
+
+        count: [{ $count: "total" }],
+      },
+    },
+  ]);
+
+  const ownerTotals = facet?.totals?.[0] || {
+    receiptCount: 0,
+    totalAmount: 0,
+    taxableAmount: 0,
+    gstAmount: 0,
+    energyConsumed: 0,
+    ownerPayout: 0,
+  };
+
+  return res.status(200).json({
+    page: pageNum,
+    limit: lim,
+    total: facet?.count?.[0]?.total || 0,
+
+    totals: {
+      receiptCount: Number(ownerTotals.receiptCount || 0),
+      totalAmount: Number(ownerTotals.totalAmount || 0),
+      taxableAmount: Number(ownerTotals.taxableAmount || 0),
+      gstAmount: Number(ownerTotals.gstAmount || 0),
+      energyConsumed: Number(ownerTotals.energyConsumed || 0),
+      ownerPayout: Number(ownerTotals.ownerPayout || 0),
+    },
+
+    receipts: facet?.list || [],
+  });
+}
 
     const pipeline = [
       { $match: match },
@@ -319,17 +529,15 @@ router.get(
 
     if (ownedDeviceIds.length === 0) {
       return res.json({
-        summary: {
-          totalEnergy: 0,
-          baseRevenue: 0,
-          gstAmount: 0,
-          grossRevenue: 0,
-          platformCommission: 0,
-          pgCharges: 0,
-          electricityCost: 0,
-          netProfit: 0,
-          sessionsCount: 0
-        },
+summary: {
+  receiptCount: 0,
+  energyConsumed: 0,
+  taxableAmount: 0,
+  gstAmount: 0,
+  totalAmount: 0,
+  ownerPayout: 0,
+},
+chartData: [],
         chartData: []
       });
     }
@@ -341,17 +549,15 @@ router.get(
 
     if (targetDeviceIds.length === 0) {
       return res.json({
-        summary: {
-          totalEnergy: 0,
-          baseRevenue: 0,
-          gstAmount: 0,
-          grossRevenue: 0,
-          platformCommission: 0,
-          pgCharges: 0,
-          electricityCost: 0,
-          netProfit: 0,
-          sessionsCount: 0
-        },
+summary: {
+  receiptCount: 0,
+  energyConsumed: 0,
+  taxableAmount: 0,
+  gstAmount: 0,
+  totalAmount: 0,
+  ownerPayout: 0,
+},
+chartData: [],
         chartData: []
       });
     }
@@ -367,33 +573,39 @@ const matchStage = {
 const [summaryResult] = await Receipt.aggregate([
   { $match: matchStage },
   {
-    $group: {
-      _id: null,
-      totalEnergy: { $sum: { $ifNull: ["$energyConsumed", 0] } },
-      baseRevenue: { $sum: { $ifNull: ["$taxableAmount", 0] } },
-      gstAmount: { $sum: { $ifNull: ["$gstAmount", 0] } },
-      grossRevenue: { $sum: { $ifNull: ["$totalAmount", 0] } },
-      platformCommission: { $sum: { $ifNull: ["$vjraMarginAmount", 0] } },
-      pgCharges: { $sum: { $ifNull: ["$paymentCharges", 0] } },
-      electricityCost: { $sum: { $ifNull: ["$electricityCost", 0] } },
-      netProfit: { $sum: { $ifNull: ["$ownerPayout", 0] } },
-      totalRefund: { $sum: { $ifNull: ["$refundAmount", 0] } },
-      sessions: { $addToSet: "$sessionId" }
-    }
+$group: {
+  _id: null,
+
+  receiptCount: { $sum: 1 },
+
+  totalEnergy: {
+    $sum: { $ifNull: ["$energyConsumed", 0] },
+  },
+  baseRevenue: {
+    $sum: { $ifNull: ["$taxableAmount", 0] },
+  },
+  gstAmount: {
+    $sum: { $ifNull: ["$gstAmount", 0] },
+  },
+  grossRevenue: {
+    $sum: { $ifNull: ["$totalAmount", 0] },
+  },
+  ownerPayout: {
+    $sum: { $ifNull: ["$ownerPayout", 0] },
+  },
+}
   }
 ]);
-const receipts = await Receipt.find(matchStage).lean();
+const receipts = await Receipt.find(matchStage)
+  .select("createdAt energyConsumed ownerPayout")
+  .lean();
 const summary = summaryResult || {
+  receiptCount: 0,
   totalEnergy: 0,
   baseRevenue: 0,
   gstAmount: 0,
   grossRevenue: 0,
-  platformCommission: 0,
-  pgCharges: 0,
-  electricityCost: 0,
-  netProfit: 0,
-  totalRefund: 0,
-  sessions: []
+  ownerPayout: 0,
 };
 // 🔥 STEP 2.1: Collect unique userIds
 
@@ -492,18 +704,30 @@ const sessionsCount = summary.sessions?.length || 0;
     }
 
 return res.json({
-  summary: {
-    totalEnergy: Number(summary.totalEnergy.toFixed(2)),
-    baseRevenue: Number(summary.baseRevenue.toFixed(2)),
-    gstAmount: Number(summary.gstAmount.toFixed(2)),
-    grossRevenue: Number(summary.grossRevenue.toFixed(2)),
-    platformCommission: Number(summary.platformCommission.toFixed(2)),
-    pgCharges: Number(summary.pgCharges.toFixed(2)),
-    electricityCost: Number(summary.electricityCost.toFixed(2)),
-    netProfit: Number(summary.netProfit.toFixed(2)),
-    sessionsCount
-  },
-  chartData
+summary: {
+  receiptCount: Number(summary.receiptCount || 0),
+
+  energyConsumed: Number(
+    Number(summary.totalEnergy || 0).toFixed(2)
+  ),
+
+  taxableAmount: Number(
+    Number(summary.baseRevenue || 0).toFixed(2)
+  ),
+
+  gstAmount: Number(
+    Number(summary.gstAmount || 0).toFixed(2)
+  ),
+
+  totalAmount: Number(
+    Number(summary.grossRevenue || 0).toFixed(2)
+  ),
+
+  ownerPayout: Number(
+    Number(summary.ownerPayout || 0).toFixed(2)
+  ),
+},
+chartData,
 });
   } catch (error) {
     console.error('Owner analytics error:', error);

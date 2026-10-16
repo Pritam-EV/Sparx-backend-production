@@ -11,8 +11,6 @@ const Session = require("../models/session");
 const Receipt = require("../models/Receipt");
 const DeviceTelemetry = require("../models/deviceTelemetry");
 
-const Payment = require("../models/Payment");
-const Refund = require("../models/Refund");
 const DeviceRateAudit = require("../models/DeviceRateAudit");
 
 const OwnerSettlement = require("../models/OwnerSettlement");
@@ -54,6 +52,23 @@ function round2(value) {
 
 function round3(value) {
   return Number((Number(value) || 0).toFixed(3));
+}
+
+function shapeOwnerReceipt(receipt) {
+  return {
+    receiptId: receipt.receiptId || "",
+    deviceId: receipt.deviceId || "",
+    createdAt: receipt.createdAt || null,
+
+    vehicleNumber: receipt.vehicleNumber || "",
+    vehicleModel: receipt.vehicleModel || "",
+
+    totalAmount: round2(receipt.totalAmount),
+    taxableAmount: round2(receipt.taxableAmount),
+    gstAmount: round2(receipt.gstAmount),
+    energyConsumed: round3(receipt.energyConsumed),
+    ownerPayout: round2(receipt.ownerPayout),
+  };
 }
 
 /**
@@ -184,18 +199,18 @@ function getPeriodRange(query) {
 
 function emptyReceiptSummary() {
   return {
-    completedSessions: 0,
-    energyKwh: 0,
-    customerBillingsInclGst: 0,
+    receiptCount: 0,
+    energyConsumed: 0,
+    taxableAmount: 0,
     gstAmount: 0,
-    refunds: 0,
-    estimatedOwnerPayout: 0,
+    totalAmount: 0,
+    ownerPayout: 0,
   };
 }
 
 /**
- * Use Receipt snapshots for completed-session metrics.
- * This does not load every receipt into Node.js.
+ * Owner finance and historical usage are calculated from Receipt records only.
+ * deviceIds must be derived from the authenticated owner's devices.
  */
 async function aggregateReceiptSummary(deviceIds, from, to) {
   if (!deviceIds.length) {
@@ -213,25 +228,25 @@ async function aggregateReceiptSummary(deviceIds, from, to) {
       $group: {
         _id: null,
 
-        completedSessions: { $sum: 1 },
+        receiptCount: { $sum: 1 },
 
-        energyKwh: {
+        energyConsumed: {
           $sum: { $ifNull: ["$energyConsumed", 0] },
         },
 
-        customerBillingsInclGst: {
-          $sum: { $ifNull: ["$totalAmount", 0] },
+        taxableAmount: {
+          $sum: { $ifNull: ["$taxableAmount", 0] },
         },
 
         gstAmount: {
           $sum: { $ifNull: ["$gstAmount", 0] },
         },
 
-        refunds: {
-          $sum: { $ifNull: ["$refundAmount", 0] },
+        totalAmount: {
+          $sum: { $ifNull: ["$totalAmount", 0] },
         },
 
-        estimatedOwnerPayout: {
+        ownerPayout: {
           $sum: { $ifNull: ["$ownerPayout", 0] },
         },
       },
@@ -243,12 +258,12 @@ async function aggregateReceiptSummary(deviceIds, from, to) {
   }
 
   return {
-    completedSessions: Number(row.completedSessions || 0),
-    energyKwh: round3(row.energyKwh),
-    customerBillingsInclGst: round2(row.customerBillingsInclGst),
+    receiptCount: Number(row.receiptCount || 0),
+    energyConsumed: round3(row.energyConsumed),
+    taxableAmount: round2(row.taxableAmount),
     gstAmount: round2(row.gstAmount),
-    refunds: round2(row.refunds),
-    estimatedOwnerPayout: round2(row.estimatedOwnerPayout),
+    totalAmount: round2(row.totalAmount),
+    ownerPayout: round2(row.ownerPayout),
   };
 }
 
@@ -426,16 +441,17 @@ router.get("/overview", async (req, res) => {
         ? Session.countDocuments(activeFilter)
         : Promise.resolve(0),
 
-      deviceIds.length
-        ? Session.find(activeFilter)
-            .select(
-              "sessionId deviceId status startTime estimatedEndTime " +
-              "energySelected energyConsumed amountPaid -_id"
-            )
-            .sort({ startTime: -1 })
-            .limit(5)
-            .lean()
-        : Promise.resolve([]),
+    deviceIds.length
+    ? Session.find(activeFilter)
+        .select(
+            "sessionId deviceId status startTime estimatedEndTime " +
+            "energyConsumed userId -_id"
+        )
+        .populate("userId", "vehicleNumber vehicleModel")
+        .sort({ startTime: -1 })
+        .limit(5)
+        .lean()
+    : Promise.resolve([]),
 
       aggregateReceiptSummary(deviceIds, from, to),
 
@@ -463,32 +479,40 @@ router.get("/overview", async (req, res) => {
             createdAt: { $gte: from, $lt: to },
           },
         },
-        {
-          $group: {
-            _id: {
-              $dateToString: {
-                format: formatByBucket[bucket],
-                date: "$createdAt",
-                timezone: "Asia/Kolkata",
-              },
-            },
+{
+  $group: {
+    _id: {
+      $dateToString: {
+        format: formatByBucket[bucket],
+        date: "$createdAt",
+        timezone: "Asia/Kolkata",
+      },
+    },
 
-            sessions: { $sum: 1 },
+    receiptCount: { $sum: 1 },
 
-            energyKwh: {
-              $sum: { $ifNull: ["$energyConsumed", 0] },
-            },
+    energyConsumed: {
+      $sum: { $ifNull: ["$energyConsumed", 0] },
+    },
 
-            customerBillingsInclGst: {
-              $sum: { $ifNull: ["$totalAmount", 0] },
-            },
+    taxableAmount: {
+      $sum: { $ifNull: ["$taxableAmount", 0] },
+    },
 
-            estimatedOwnerPayout: {
-              $sum: { $ifNull: ["$ownerPayout", 0] },
-            },
-          },
-        },
-        { $sort: { _id: 1 } },
+    gstAmount: {
+      $sum: { $ifNull: ["$gstAmount", 0] },
+    },
+
+    totalAmount: {
+      $sum: { $ifNull: ["$totalAmount", 0] },
+    },
+
+    ownerPayout: {
+      $sum: { $ifNull: ["$ownerPayout", 0] },
+    },
+  },
+},
+{ $sort: { _id: 1 } },
       ]);
     }
 
@@ -520,20 +544,16 @@ router.get("/overview", async (req, res) => {
       }
     }
 
-    const performance = {
-      activeSessions: activeSessionsCount,
-      completedSessions: currentSummary.completedSessions,
-      energyKwh: currentSummary.energyKwh,
-      customerBillingsInclGst:
-        currentSummary.customerBillingsInclGst,
-      gstAmount: currentSummary.gstAmount,
-      refunds: currentSummary.refunds,
-      estimatedOwnerPayout: currentSummary.estimatedOwnerPayout,
+const performance = {
+  activeSessions: activeSessionsCount,
 
-      // Do not infer cash collected from billed receipt totals.
-      // Payment/refund reconciliation will be implemented in the Finance API.
-      paymentsReceivedNet: null,
-    };
+  receiptCount: currentSummary.receiptCount,
+  energyConsumed: currentSummary.energyConsumed,
+  taxableAmount: currentSummary.taxableAmount,
+  gstAmount: currentSummary.gstAmount,
+  totalAmount: currentSummary.totalAmount,
+  ownerPayout: currentSummary.ownerPayout,
+};
 
     return res.status(200).json({
       period: {
@@ -553,34 +573,36 @@ router.get("/overview", async (req, res) => {
         performance: previousSummary,
       },
 
-      trend: trend.map((row) => ({
-        bucket: row._id,
-        sessions: Number(row.sessions || 0),
-        energyKwh: round3(row.energyKwh),
-        customerBillingsInclGst:
-          round2(row.customerBillingsInclGst),
-        estimatedOwnerPayout: round2(row.estimatedOwnerPayout),
-      })),
+trend: trend.map((row) => ({
+  bucket: row._id,
+  receiptCount: Number(row.receiptCount || 0),
+  energyConsumed: round3(row.energyConsumed),
+  taxableAmount: round2(row.taxableAmount),
+  gstAmount: round2(row.gstAmount),
+  totalAmount: round2(row.totalAmount),
+  ownerPayout: round2(row.ownerPayout),
+})),
 
-      activeSessionsPreview: activeSessionDocs.map((session) => ({
-        sessionId: session.sessionId,
-        deviceId: session.deviceId,
-        status: session.status,
-        startTime: session.startTime || null,
-        estimatedEndTime: session.estimatedEndTime || null,
-        energySelected: round3(session.energySelected),
-        energyConsumed: round3(session.energyConsumed),
-        amountPaid: round2(session.amountPaid),
-      })),
+activeSessionsPreview: activeSessionDocs.map((session) => ({
+  sessionId: session.sessionId,
+  deviceId: session.deviceId,
+  status: session.status,
+  startTime: session.startTime || null,
+  estimatedEndTime: session.estimatedEndTime || null,
+  energyConsumed: round3(session.energyConsumed),
+
+  vehicleNumber: session.userId?.vehicleNumber || "",
+  vehicleModel: session.userId?.vehicleModel || "",
+})),
 
       // Current-state issues only; persistent alert history will be a later phase.
       alerts: alerts.slice(0, 8),
 
-      metadata: {
-        generatedAt: new Date().toISOString(),
-        onlineThresholdMs: ONLINE_THRESHOLD_MS,
-        paymentCollectionMetric: "not_yet_reconciled",
-      },
+metadata: {
+  generatedAt: new Date().toISOString(),
+  onlineThresholdMs: ONLINE_THRESHOLD_MS,
+  financialSource: "Receipt records only",
+},
     });
   } catch (error) {
     console.error("Owner overview error:", error);
@@ -738,24 +760,42 @@ router.get("/devices/:deviceId", async (req, res) => {
       Date.now() - 24 * 60 * 60 * 1000
     );
 
-    const [latestTelemetry, recentSessions] = await Promise.all([
-      DeviceTelemetry.findOne({
-        deviceId,
-        timestamp: { $gte: telemetryCutoff },
-      })
-        .select("voltage current power timestamp -_id")
-        .sort({ timestamp: -1 })
-        .lean(),
+const [
+  latestTelemetry,
+  activeSessions,
+  recentReceipts,
+] = await Promise.all([
+DeviceTelemetry.findOne({
+  deviceId,
+  timestamp: { $gte: telemetryCutoff },
+})
+    .select("voltage current power timestamp -_id")
+    .sort({ timestamp: -1 })
+    .lean(),
 
-      Session.find({ deviceId })
-        .select(
-          "sessionId deviceId status startTime endTime " +
-          "energySelected energyConsumed amountPaid amountUsed -_id"
-        )
-        .sort({ startTime: -1 })
-        .limit(10)
-        .lean(),
-    ]);
+  Session.find({
+    deviceId,
+    status: { $in: ["active", "paused"] },
+    endTime: null,
+  })
+    .select(
+      "sessionId deviceId status startTime estimatedEndTime " +
+      "energyConsumed userId -_id"
+    )
+    .populate("userId", "vehicleNumber vehicleModel")
+    .sort({ startTime: -1 })
+    .limit(10)
+    .lean(),
+
+  Receipt.find({ deviceId })
+    .select(
+      "receiptId deviceId vehicleNumber vehicleModel createdAt " +
+      "totalAmount taxableAmount gstAmount energyConsumed ownerPayout -_id"
+    )
+    .sort({ createdAt: -1 })
+    .limit(10)
+    .lean(),
+]);
 
     const state = getDeviceState(device);
 
@@ -783,17 +823,18 @@ router.get("/devices/:deviceId", async (req, res) => {
 
       telemetry,
 
-      recentSessions: recentSessions.map((session) => ({
-        sessionId: session.sessionId,
-        deviceId: session.deviceId,
-        status: session.status,
-        startTime: session.startTime || null,
-        endTime: session.endTime || null,
-        energySelected: round3(session.energySelected),
-        energyConsumed: round3(session.energyConsumed),
-        amountPaid: round2(session.amountPaid),
-        amountUsed: round2(session.amountUsed),
-      })),
+activeSessions: activeSessions.map((session) => ({
+  sessionId: session.sessionId,
+  deviceId: session.deviceId,
+  status: session.status,
+  startTime: session.startTime || null,
+  estimatedEndTime: session.estimatedEndTime || null,
+  energyConsumed: round3(session.energyConsumed),
+  vehicleNumber: session.userId?.vehicleNumber || "",
+  vehicleModel: session.userId?.vehicleModel || "",
+})),
+
+recentReceipts: recentReceipts.map(shapeOwnerReceipt),
 
       metadata: {
         generatedAt: new Date().toISOString(),
@@ -904,6 +945,90 @@ function sendOwnerCsv(res, filename, headers, rows) {
   );
 
   return res.status(200).send("\uFEFF" + csv);
+}
+
+async function sendOwnerReceiptCsv(req, res, filename) {
+  const ownerId = req.user.userId;
+
+  if (!isValidOwnerId(ownerId)) {
+    return res.status(400).json({
+      error: "Invalid owner ID in authentication token.",
+    });
+  }
+
+  const range = getPeriodRange(req.query);
+
+  if (range.error) {
+    return res.status(400).json({
+      error: range.error,
+    });
+  }
+
+  const { from, to } = range;
+  const ownerObjectId = getOwnerObjectId(req);
+  let deviceIds = await getOwnerDeviceIds(ownerObjectId);
+
+  if (
+    typeof req.query.deviceId === "string" &&
+    req.query.deviceId.trim()
+  ) {
+    const requestedDeviceId = req.query.deviceId.trim();
+
+    if (!deviceIds.includes(requestedDeviceId)) {
+      return res.status(404).json({
+        error: "Device not found in your account.",
+      });
+    }
+
+    deviceIds = [requestedDeviceId];
+  }
+
+  const receipts = await Receipt.find({
+    deviceId: { $in: deviceIds },
+    createdAt: { $gte: from, $lt: to },
+  })
+    .select(
+      "receiptId deviceId vehicleNumber vehicleModel createdAt " +
+      "totalAmount taxableAmount gstAmount energyConsumed ownerPayout -_id"
+    )
+    .sort({ createdAt: -1 })
+    .limit(OWNER_EXPORT_LIMIT + 1)
+    .lean();
+
+  if (receipts.length > OWNER_EXPORT_LIMIT) {
+    return res.status(413).json({
+      error:
+        "The report exceeds 10,000 receipts. Narrow the date range or select a device.",
+    });
+  }
+
+  const headers = [
+    "Receipt ID",
+    "Receipt Date",
+    "Device ID",
+    "Vehicle Number",
+    "Vehicle Model",
+    "Total Amount",
+    "Taxable Amount",
+    "GST Amount",
+    "Energy Consumed (kWh)",
+    "Owner Payout",
+  ];
+
+  const rows = receipts.map((receipt) => [
+    receipt.receiptId || "",
+    receipt.createdAt || "",
+    receipt.deviceId || "",
+    receipt.vehicleNumber || "",
+    receipt.vehicleModel || "",
+    round2(receipt.totalAmount),
+    round2(receipt.taxableAmount),
+    round2(receipt.gstAmount),
+    round3(receipt.energyConsumed),
+    round2(receipt.ownerPayout),
+  ]);
+
+  return sendOwnerCsv(res, filename, headers, rows);
 }
 
 function getOwnerSessionDateMatch(query) {
@@ -1191,7 +1316,6 @@ router.get("/sessions", async (req, res) => {
     const ownerObjectId = getOwnerObjectId(req);
     let deviceIds = await getOwnerDeviceIds(ownerObjectId);
 
-    // A requested device can only narrow this owner's device list.
     if (
       typeof req.query.deviceId === "string" &&
       req.query.deviceId.trim()
@@ -1209,9 +1333,9 @@ router.get("/sessions", async (req, res) => {
 
     const filter = {
       deviceId: { $in: deviceIds },
+      status: { $in: ["active", "paused"] },
+      endTime: null,
     };
-
-    const validStatuses = ["active", "completed", "faulty"];
 
     if (
       typeof req.query.status === "string" &&
@@ -1219,9 +1343,10 @@ router.get("/sessions", async (req, res) => {
     ) {
       const status = req.query.status.trim().toLowerCase();
 
-      if (!validStatuses.includes(status)) {
+      if (!["active", "paused"].includes(status)) {
         return res.status(400).json({
-          error: "Invalid status. Use active, completed or faulty.",
+          error:
+            "This endpoint lists live sessions only. Use active or paused.",
         });
       }
 
@@ -1243,11 +1368,10 @@ router.get("/sessions", async (req, res) => {
       req.query.search.trim()
     ) {
       const search = escapeRegex(req.query.search.trim());
-      const searchRegex = new RegExp(search, "i");
 
       filter.$or = [
-        { sessionId: searchRegex },
-        { transactionId: searchRegex },
+        { deviceId: new RegExp(search, "i") },
+        { sessionId: new RegExp(search, "i") },
       ];
     }
 
@@ -1266,13 +1390,10 @@ router.get("/sessions", async (req, res) => {
     const [sessions, total] = await Promise.all([
       Session.find(filter)
         .select(
-          "sessionId transactionId deviceId userId status " +
-          "startTime endTime endTrigger paymentGateway " +
-          "energySelected energyConsumed ratePerKwh " +
-          "amountSelected amountPaid amountUsed discountApplied " +
-          "latestVoltage latestCurrent latestPower lastUpdate"
+          "sessionId deviceId status startTime estimatedEndTime " +
+          "energyConsumed userId -_id"
         )
-        .populate("userId", "name email mobile")
+        .populate("userId", "vehicleNumber vehicleModel")
         .sort({ startTime: -1 })
         .skip(skip)
         .limit(limit)
@@ -1284,37 +1405,13 @@ router.get("/sessions", async (req, res) => {
     return res.status(200).json({
       items: sessions.map((session) => ({
         sessionId: session.sessionId,
-        transactionId: session.transactionId,
         deviceId: session.deviceId,
         status: session.status,
-
         startTime: session.startTime || null,
-        endTime: session.endTime || null,
-        endTrigger: session.endTrigger || null,
-        paymentGateway: session.paymentGateway || null,
-
-        energySelected: round3(session.energySelected),
+        estimatedEndTime: session.estimatedEndTime || null,
         energyConsumed: round3(session.energyConsumed),
-        ratePerKwh: round2(session.ratePerKwh),
-
-        amountSelected: round2(session.amountSelected),
-        amountPaid: round2(session.amountPaid),
-        amountUsed: round2(session.amountUsed),
-        discountApplied: round2(session.discountApplied),
-
-        latestVoltage: session.latestVoltage ?? null,
-        latestCurrent: session.latestCurrent ?? null,
-        latestPower: session.latestPower ?? null,
-        lastUpdate: session.lastUpdate || null,
-
-        customer: session.userId
-          ? {
-              id: session.userId._id,
-              name: session.userId.name || "",
-              email: session.userId.email || "",
-              mobile: session.userId.mobile || "",
-            }
-          : null,
+        vehicleNumber: session.userId?.vehicleNumber || "",
+        vehicleModel: session.userId?.vehicleModel || "",
       })),
 
       pagination: {
@@ -1327,10 +1424,10 @@ router.get("/sessions", async (req, res) => {
       generatedAt: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Owner sessions fetch error:", error);
+    console.error("Owner live sessions fetch error:", error);
 
     return res.status(500).json({
-      error: "Could not fetch owner sessions.",
+      error: "Could not fetch live sessions.",
     });
   }
 });
@@ -1360,21 +1457,20 @@ router.get("/sessions/:sessionId", async (req, res) => {
     const session = await Session.findOne({
       sessionId,
       deviceId: { $in: deviceIds },
+      status: { $in: ["active", "paused"] },
+      endTime: null,
     })
       .select(
-        "sessionId transactionId deviceId userId status " +
-        "startTime endTime endTrigger paymentGateway " +
-        "energySelected energyConsumed ratePerKwh " +
-        "amountSelected amountPaid amountUsed discountApplied " +
-        "latestVoltage latestCurrent latestPower lastUpdate " +
-        "estimatedEndTime createdAt updatedAt"
+        "sessionId deviceId status startTime estimatedEndTime " +
+        "energyConsumed latestVoltage latestCurrent latestPower " +
+        "lastUpdate userId -_id"
       )
-      .populate("userId", "name email mobile")
+      .populate("userId", "vehicleNumber vehicleModel")
       .lean();
 
     if (!session) {
       return res.status(404).json({
-        error: "Session not found in your account.",
+        error: "Live session not found in your account.",
       });
     }
 
@@ -1388,41 +1484,19 @@ router.get("/sessions/:sessionId", async (req, res) => {
     return res.status(200).json({
       session: {
         sessionId: session.sessionId,
-        transactionId: session.transactionId,
         deviceId: session.deviceId,
         status: session.status,
-
         startTime: session.startTime || null,
-        endTime: session.endTime || null,
-        endTrigger: session.endTrigger || null,
         estimatedEndTime: session.estimatedEndTime || null,
-        paymentGateway: session.paymentGateway || null,
-
-        energySelected: round3(session.energySelected),
         energyConsumed: round3(session.energyConsumed),
-        ratePerKwh: round2(session.ratePerKwh),
-
-        amountSelected: round2(session.amountSelected),
-        amountPaid: round2(session.amountPaid),
-        amountUsed: round2(session.amountUsed),
-        discountApplied: round2(session.discountApplied),
 
         latestVoltage: session.latestVoltage ?? null,
         latestCurrent: session.latestCurrent ?? null,
         latestPower: session.latestPower ?? null,
         lastUpdate: session.lastUpdate || null,
 
-        createdAt: session.createdAt || null,
-        updatedAt: session.updatedAt || null,
-
-        customer: session.userId
-          ? {
-              id: session.userId._id,
-              name: session.userId.name || "",
-              email: session.userId.email || "",
-              mobile: session.userId.mobile || "",
-            }
-          : null,
+        vehicleNumber: session.userId?.vehicleNumber || "",
+        vehicleModel: session.userId?.vehicleModel || "",
       },
 
       device: device
@@ -1437,380 +1511,17 @@ router.get("/sessions/:sessionId", async (req, res) => {
         : null,
     });
   } catch (error) {
-    console.error("Owner session detail error:", error);
+    console.error("Owner live session detail error:", error);
 
     return res.status(500).json({
-      error: "Could not fetch session details.",
+      error: "Could not fetch live session details.",
     });
   }
 });
 
-// GET /api/owner/finance/summary
-//
-// Optional query:
-// ?from=2026-10-01&to=2026-10-17
-// ?bucket=day  // accepted by the shared date-range helper
+// GET /api/owner/receipts provides receipt history and pagination.
 
-router.get("/finance/summary", async (req, res) => {
-  try {
-    const ownerId = req.user.userId;
-
-    if (!isValidOwnerId(ownerId)) {
-      return res.status(400).json({
-        error: "Invalid owner ID in authentication token.",
-      });
-    }
-
-    const range = getPeriodRange(req.query);
-
-    if (range.error) {
-      return res.status(400).json({
-        error: range.error,
-      });
-    }
-
-    const { from, to } = range;
-    const ownerObjectId = getOwnerObjectId(req);
-    const deviceIds = await getOwnerDeviceIds(ownerObjectId);
-
-    const emptyResponse = {
-      period: {
-        from: from.toISOString(),
-        to: to.toISOString(),
-        timezone: "Asia/Kolkata",
-      },
-
-      usage: {
-        receiptCount: 0,
-        energyKwh: 0,
-        customerBillingsInclGst: 0,
-        gstAmount: 0,
-        receiptRefunds: 0,
-        estimatedOwnerPayout: 0,
-      },
-
-      collections: {
-        successfulChargingPaymentCount: 0,
-        successfulChargingPaymentAmount: 0,
-        cashfreeGrossAmount: 0,
-        walletFundedChargingAmount: 0,
-        freeChargingAmount: 0,
-        successfulBankRefundAmount: 0,
-        successfulWalletRefundAmount: 0,
-        netCashfreeCollections: 0,
-      },
-
-      metadata: {
-        generatedAt: new Date().toISOString(),
-        collectionsSource: "Payment and Refund records",
-        usageSource: "Receipt snapshots",
-        ownerPayoutIsEstimate: true,
-      },
-    };
-
-    if (!deviceIds.length) {
-      return res.status(200).json(emptyResponse);
-    }
-
-    const paymentDateMatch = {
-      $or: [
-        {
-          paidAt: {
-            $gte: from,
-            $lt: to,
-          },
-        },
-        {
-          paidAt: null,
-          createdAt: {
-            $gte: from,
-            $lt: to,
-          },
-        },
-      ],
-    };
-
-    const refundDateMatch = {
-      $or: [
-        {
-          processedAt: {
-            $gte: from,
-            $lt: to,
-          },
-        },
-        {
-          processedAt: null,
-          updatedAt: {
-            $gte: from,
-            $lt: to,
-          },
-        },
-      ],
-    };
-
-    const [
-      receiptRows,
-      paymentRows,
-      refundRows,
-    ] = await Promise.all([
-      // Usage, billing, tax and estimated payout snapshots.
-      Receipt.aggregate([
-        {
-          $match: {
-            deviceId: { $in: deviceIds },
-            createdAt: { $gte: from, $lt: to },
-          },
-        },
-        {
-          $group: {
-            _id: null,
-
-            receiptCount: { $sum: 1 },
-
-            energyKwh: {
-              $sum: { $ifNull: ["$energyConsumed", 0] },
-            },
-
-            customerBillingsInclGst: {
-              $sum: { $ifNull: ["$totalAmount", 0] },
-            },
-
-            gstAmount: {
-              $sum: { $ifNull: ["$gstAmount", 0] },
-            },
-
-            receiptRefunds: {
-              $sum: { $ifNull: ["$refundAmount", 0] },
-            },
-
-            estimatedOwnerPayout: {
-              $sum: { $ifNull: ["$ownerPayout", 0] },
-            },
-          },
-        },
-      ]),
-
-      // Successful charging-payment records only.
-      Payment.aggregate([
-        {
-          $match: {
-            type: "charging",
-            status: "SUCCESS",
-            ...paymentDateMatch,
-          },
-        },
-        {
-          $lookup: {
-            from: Session.collection.name,
-            localField: "sessionId",
-            foreignField: "sessionId",
-            as: "linkedSession",
-          },
-        },
-        {
-          $unwind: {
-            path: "$linkedSession",
-            preserveNullAndEmptyArrays: true,
-          },
-        },
-        {
-          $match: {
-            $or: [
-              {
-                "linkedSession.deviceId": {
-                  $in: deviceIds,
-                },
-              },
-              {
-                deviceId: { $in: deviceIds },
-                sessionId: { $in: [null, ""] },
-              },
-            ],
-          },
-        },
-        {
-          $group: {
-            _id: { $ifNull: ["$gateway", "unknown"] },
-
-            count: { $sum: 1 },
-
-            amount: {
-              $sum: { $ifNull: ["$amountPaid", 0] },
-            },
-          },
-        },
-      ]),
-
-      // Successful refunds linked to sessions on owned devices.
-      Refund.aggregate([
-        {
-          $match: {
-            status: "SUCCESS",
-            ...refundDateMatch,
-          },
-        },
-        {
-          $lookup: {
-            from: Session.collection.name,
-            localField: "sessionId",
-            foreignField: "sessionId",
-            as: "linkedSession",
-          },
-        },
-        {
-          $unwind: "$linkedSession",
-        },
-        {
-          $match: {
-            "linkedSession.deviceId": {
-              $in: deviceIds,
-            },
-          },
-        },
-        {
-          $group: {
-            _id: { $ifNull: ["$destination", "unknown"] },
-
-            count: { $sum: 1 },
-
-            amount: {
-              $sum: { $ifNull: ["$refundAmount", 0] },
-            },
-          },
-        },
-      ]),
-    ]);
-
-    const usage = receiptRows[0] || {
-      receiptCount: 0,
-      energyKwh: 0,
-      customerBillingsInclGst: 0,
-      gstAmount: 0,
-      receiptRefunds: 0,
-      estimatedOwnerPayout: 0,
-    };
-
-    const paymentsByGateway = {};
-
-    for (const row of paymentRows) {
-      const gateway = String(row._id || "unknown").toLowerCase();
-
-      paymentsByGateway[gateway] = {
-        count: Number(row.count || 0),
-        amount: round2(row.amount),
-      };
-    }
-
-    const refundsByDestination = {};
-
-    for (const row of refundRows) {
-      const destination = String(
-        row._id || "unknown"
-      ).toLowerCase();
-
-      refundsByDestination[destination] = {
-        count: Number(row.count || 0),
-        amount: round2(row.amount),
-      };
-    }
-
-    const cashfreeGrossAmount =
-      paymentsByGateway.cashfree?.amount || 0;
-
-    const walletFundedChargingAmount =
-      paymentsByGateway.wallet?.amount || 0;
-
-    const freeChargingAmount =
-      paymentsByGateway.free?.amount || 0;
-
-    const successfulBankRefundAmount =
-      refundsByDestination.bank?.amount || 0;
-
-    const successfulWalletRefundAmount =
-      refundsByDestination.wallet?.amount || 0;
-
-    const successfulChargingPaymentCount =
-      Object.values(paymentsByGateway).reduce(
-        (sum, item) => sum + item.count,
-        0
-      );
-
-    const successfulChargingPaymentAmount =
-      Object.values(paymentsByGateway).reduce(
-        (sum, item) => sum + item.amount,
-        0
-      );
-
-    return res.status(200).json({
-      period: {
-        from: from.toISOString(),
-        to: to.toISOString(),
-        timezone: "Asia/Kolkata",
-      },
-
-      usage: {
-        receiptCount: Number(usage.receiptCount || 0),
-        energyKwh: round3(usage.energyKwh),
-        customerBillingsInclGst: round2(
-          usage.customerBillingsInclGst
-        ),
-        gstAmount: round2(usage.gstAmount),
-        receiptRefunds: round2(usage.receiptRefunds),
-        estimatedOwnerPayout: round2(
-          usage.estimatedOwnerPayout
-        ),
-      },
-
-      collections: {
-        successfulChargingPaymentCount,
-        successfulChargingPaymentAmount: round2(
-          successfulChargingPaymentAmount
-        ),
-
-        cashfreeGrossAmount: round2(cashfreeGrossAmount),
-        walletFundedChargingAmount: round2(
-          walletFundedChargingAmount
-        ),
-        freeChargingAmount: round2(freeChargingAmount),
-
-        successfulBankRefundAmount: round2(
-          successfulBankRefundAmount
-        ),
-        successfulWalletRefundAmount: round2(
-          successfulWalletRefundAmount
-        ),
-
-        // This is a net recorded Cashfree figure, not a bank-statement
-        // reconciliation or proof that an owner payout was settled.
-        netCashfreeCollections: round2(
-          cashfreeGrossAmount - successfulBankRefundAmount
-        ),
-      },
-
-      metadata: {
-        generatedAt: new Date().toISOString(),
-        collectionsSource: "Payment and Refund records",
-        usageSource: "Receipt snapshots",
-        ownerPayoutIsEstimate: true,
-        walletTopupsAllocatedToOwner: false,
-      },
-    });
-  } catch (error) {
-    console.error("Owner finance summary error:", error);
-
-    return res.status(500).json({
-      error: "Could not fetch owner finance summary.",
-    });
-  }
-});
-
-// GET /api/owner/reports/sessions.csv
-//
-// Optional query:
-// ?from=2026-10-01&to=2026-10-17
-// &deviceId=VIZ1A02&status=completed
-
-router.get("/reports/sessions.csv", async (req, res) => {
+router.get("/receipts", async (req, res) => {
   try {
     const ownerId = req.user.userId;
 
@@ -1842,24 +1553,10 @@ router.get("/reports/sessions.csv", async (req, res) => {
       deviceId: { $in: deviceIds },
     };
 
-    const validStatuses = ["active", "completed", "faulty"];
-
-    if (
-      typeof req.query.status === "string" &&
-      req.query.status.trim()
-    ) {
-      const status = req.query.status.trim().toLowerCase();
-
-      if (!validStatuses.includes(status)) {
-        return res.status(400).json({
-          error: "Invalid status. Use active, completed or faulty.",
-        });
-      }
-
-      filter.status = status;
-    }
-
-    const dateMatch = getOwnerSessionDateMatch(req.query);
+    const dateMatch = buildOptionalDateFilter(
+      req.query,
+      "createdAt"
+    );
 
     if (dateMatch.error) {
       return res.status(400).json({
@@ -1869,92 +1566,128 @@ router.get("/reports/sessions.csv", async (req, res) => {
 
     Object.assign(filter, dateMatch.filter);
 
-    const sessions = await Session.find(filter)
-      .select(
-        "sessionId transactionId deviceId userId status " +
-        "startTime endTime endTrigger paymentGateway " +
-        "energySelected energyConsumed ratePerKwh " +
-        "amountSelected amountPaid amountUsed discountApplied"
-      )
-      .populate("userId", "name email")
-      .sort({ startTime: -1 })
-      .limit(OWNER_EXPORT_LIMIT + 1)
-      .lean();
+    if (
+      typeof req.query.search === "string" &&
+      req.query.search.trim()
+    ) {
+      const search = new RegExp(
+        escapeRegex(req.query.search.trim()),
+        "i"
+      );
 
-    if (sessions.length > OWNER_EXPORT_LIMIT) {
-      return res.status(413).json({
-        error:
-          "The report exceeds 10,000 rows. Narrow the date range or select a device.",
-      });
+      filter.$or = [
+        { receiptId: search },
+        { deviceId: search },
+        { vehicleNumber: search },
+        { vehicleModel: search },
+      ];
     }
 
-    const headers = [
-      "Session ID",
-      "Transaction ID",
-      "Device ID",
-      "Status",
-      "Start Time",
-      "End Time",
-      "End Trigger",
-      "Payment Gateway",
-      "Energy Selected (kWh)",
-      "Energy Consumed (kWh)",
-      "Rate per kWh",
-      "Amount Selected",
-      "Amount Paid",
-      "Amount Used",
-      "Discount Applied",
-      "Customer Name",
-      "Customer Email",
-    ];
+    const page = Math.max(
+      1,
+      parseInt(req.query.page, 10) || 1
+    );
 
-    const rows = sessions.map((session) => [
-      session.sessionId,
-      session.transactionId,
-      session.deviceId,
-      session.status,
-      session.startTime || "",
-      session.endTime || "",
-      session.endTrigger || "",
-      session.paymentGateway || "",
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit, 10) || 25)
+    );
 
-      round3(session.energySelected),
-      round3(session.energyConsumed),
-      round2(session.ratePerKwh),
+    const skip = (page - 1) * limit;
 
-      round2(session.amountSelected),
-      round2(session.amountPaid),
-      round2(session.amountUsed),
-      round2(session.discountApplied),
+    const [receipts, total] = await Promise.all([
+      Receipt.find(filter)
+        .select(
+          "receiptId deviceId vehicleNumber vehicleModel createdAt " +
+          "totalAmount taxableAmount gstAmount energyConsumed ownerPayout -_id"
+        )
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
 
-      session.userId?.name || "",
-      session.userId?.email || "",
+      Receipt.countDocuments(filter),
     ]);
 
-    return sendOwnerCsv(
-      res,
-      "viz-owner-sessions.csv",
-      headers,
-      rows
-    );
+    return res.status(200).json({
+      items: receipts.map(shapeOwnerReceipt),
+
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+
+      generatedAt: new Date().toISOString(),
+    });
   } catch (error) {
-    console.error("Owner sessions CSV error:", error);
+    console.error("Owner receipt history error:", error);
 
     return res.status(500).json({
-      error: "Could not export owner sessions.",
+      error: "Could not fetch owner receipt history.",
     });
   }
 });
 
-// GET /api/owner/reports/finance.csv
+
+// GET /api/owner/receipts/:receiptId gives the owner-safe details for one receipt:
+router.get("/receipts/:receiptId", async (req, res) => {
+  try {
+    const ownerId = req.user.userId;
+
+    if (!isValidOwnerId(ownerId)) {
+      return res.status(400).json({
+        error: "Invalid owner ID in authentication token.",
+      });
+    }
+
+    const ownerObjectId = getOwnerObjectId(req);
+    const deviceIds = await getOwnerDeviceIds(ownerObjectId);
+    const receiptId = String(req.params.receiptId || "").trim();
+
+    if (!receiptId) {
+      return res.status(400).json({
+        error: "Receipt ID is required.",
+      });
+    }
+
+    const receipt = await Receipt.findOne({
+      receiptId,
+      deviceId: { $in: deviceIds },
+    })
+      .select(
+        "receiptId deviceId vehicleNumber vehicleModel createdAt " +
+        "totalAmount taxableAmount gstAmount energyConsumed ownerPayout -_id"
+      )
+      .lean();
+
+    if (!receipt) {
+      return res.status(404).json({
+        error: "Receipt not found in your account.",
+      });
+    }
+
+    return res.status(200).json({
+      receipt: shapeOwnerReceipt(receipt),
+    });
+  } catch (error) {
+    console.error("Owner receipt detail error:", error);
+
+    return res.status(500).json({
+      error: "Could not fetch receipt details.",
+    });
+  }
+});
+
+
+// GET /api/owner/finance/summary
 //
 // Optional query:
 // ?from=2026-10-01&to=2026-10-17
-// ?deviceId=VIZ1A02
-//
-// If dates are omitted, uses the current IST month-to-date period.
+// ?bucket=day  // accepted by the shared date-range helper
 
-router.get("/reports/finance.csv", async (req, res) => {
+router.get("/finance/summary", async (req, res) => {
   try {
     const ownerId = req.user.userId;
 
@@ -1991,274 +1724,116 @@ router.get("/reports/finance.csv", async (req, res) => {
       deviceIds = [requestedDeviceId];
     }
 
-    const headers = [
-      "Timestamp",
-      "Record Type",
-      "Status",
-      "Device ID",
-      "Session ID",
-      "Reference ID",
-      "Channel",
-      "Energy (kWh)",
-      "Gross Amount",
-      "GST Amount",
-      "Refund Amount",
-      "Owner Payout Snapshot",
-      "Notes",
-    ];
+    let totals = emptyReceiptSummary();
 
-    if (!deviceIds.length) {
-      return sendOwnerCsv(
-        res,
-        "viz-owner-finance.csv",
-        headers,
-        []
-      );
-    }
-
-    const paymentDateMatch = {
-      $or: [
-        {
-          paidAt: {
-            $gte: from,
-            $lt: to,
-          },
-        },
-        {
-          paidAt: null,
-          createdAt: {
-            $gte: from,
-            $lt: to,
-          },
-        },
-      ],
-    };
-
-    const refundDateMatch = {
-      $or: [
-        {
-          processedAt: {
-            $gte: from,
-            $lt: to,
-          },
-        },
-        {
-          processedAt: null,
-          updatedAt: {
-            $gte: from,
-            $lt: to,
-          },
-        },
-      ],
-    };
-
-    const [
-      receiptDocs,
-      paymentDocs,
-      refundDocs,
-    ] = await Promise.all([
-      Receipt.find({
-        deviceId: { $in: deviceIds },
-        createdAt: { $gte: from, $lt: to },
-      })
-        .select(
-          "receiptId deviceId sessionId paymentGateway createdAt " +
-          "energyConsumed totalAmount gstAmount refundAmount ownerPayout"
-        )
-        .sort({ createdAt: -1 })
-        .limit(OWNER_EXPORT_LIMIT + 1)
-        .lean(),
-
-      Payment.aggregate([
+    if (deviceIds.length) {
+      const [row] = await Receipt.aggregate([
         {
           $match: {
-            type: "charging",
-            ...paymentDateMatch,
+            deviceId: { $in: deviceIds },
+            createdAt: { $gte: from, $lt: to },
           },
         },
         {
-          $lookup: {
-            from: Session.collection.name,
-            localField: "sessionId",
-            foreignField: "sessionId",
-            as: "linkedSession",
-          },
-        },
-        {
-          $unwind: {
-            path: "$linkedSession",
-            preserveNullAndEmptyArrays: true,
-          },
-        },
-        {
-          $match: {
-            $or: [
-              {
-                "linkedSession.deviceId": {
-                  $in: deviceIds,
-                },
-              },
-              {
-                deviceId: { $in: deviceIds },
-                sessionId: { $in: [null, ""] },
-              },
-            ],
-          },
-        },
-        {
-          $project: {
-            _id: 0,
-            timestamp: { $ifNull: ["$paidAt", "$createdAt"] },
-            recordType: { $literal: "payment" },
-            status: 1,
-            deviceId: {
-              $ifNull: ["$linkedSession.deviceId", "$deviceId"],
+          $group: {
+            _id: null,
+
+            receiptCount: { $sum: 1 },
+
+            energyConsumed: {
+              $sum: { $ifNull: ["$energyConsumed", 0] },
             },
-            sessionId: { $ifNull: ["$sessionId", ""] },
-            referenceId: "$orderId",
-            channel: { $ifNull: ["$gateway", "unknown"] },
-            energyKwh: { $literal: "" },
-            grossAmount: { $ifNull: ["$amountPaid", 0] },
-            gstAmount: { $literal: "" },
-            refundAmount: { $literal: 0 },
-            ownerPayout: { $literal: "" },
-            notes: { $ifNull: ["$paymentMethod", "Charging payment record"] },
-          },
-        },
-        { $sort: { timestamp: -1 } },
-        { $limit: OWNER_EXPORT_LIMIT + 1 },
-      ]),
 
-      Refund.aggregate([
-        {
-          $match: refundDateMatch,
-        },
-        {
-          $lookup: {
-            from: Session.collection.name,
-            localField: "sessionId",
-            foreignField: "sessionId",
-            as: "linkedSession",
-          },
-        },
-        {
-          $unwind: "$linkedSession",
-        },
-        {
-          $match: {
-            "linkedSession.deviceId": {
-              $in: deviceIds,
+            taxableAmount: {
+              $sum: { $ifNull: ["$taxableAmount", 0] },
+            },
+
+            gstAmount: {
+              $sum: { $ifNull: ["$gstAmount", 0] },
+            },
+
+            totalAmount: {
+              $sum: { $ifNull: ["$totalAmount", 0] },
+            },
+
+            ownerPayout: {
+              $sum: { $ifNull: ["$ownerPayout", 0] },
             },
           },
         },
-        {
-          $project: {
-            _id: 0,
-            timestamp: {
-              $ifNull: ["$processedAt", "$updatedAt"],
-            },
-            recordType: { $literal: "refund" },
-            status: 1,
-            deviceId: "$linkedSession.deviceId",
-            sessionId: { $ifNull: ["$sessionId", ""] },
-            referenceId: "$refundId",
-            channel: { $ifNull: ["$destination", "unknown"] },
-            energyKwh: { $literal: "" },
-            grossAmount: { $literal: 0 },
-            gstAmount: { $literal: "" },
-            refundAmount: { $ifNull: ["$refundAmount", 0] },
-            ownerPayout: { $literal: "" },
-            notes: { $ifNull: ["$refundNote", "Refund record"] },
-          },
-        },
-        { $sort: { timestamp: -1 } },
-        { $limit: OWNER_EXPORT_LIMIT + 1 },
-      ]),
-    ]);
-
-    const totalRows =
-      receiptDocs.length + paymentDocs.length + refundDocs.length;
-
-    if (
-      receiptDocs.length > OWNER_EXPORT_LIMIT ||
-      paymentDocs.length > OWNER_EXPORT_LIMIT ||
-      refundDocs.length > OWNER_EXPORT_LIMIT ||
-      totalRows > OWNER_EXPORT_LIMIT
-    ) {
-      return res.status(413).json({
-        error:
-          "The finance report exceeds 10,000 rows. Narrow the date range or select a device.",
-      });
-    }
-
-    const rows = [];
-
-    // Receipt rows represent usage/billing snapshots, not proof of collection.
-    for (const receipt of receiptDocs) {
-      rows.push([
-        receipt.createdAt || "",
-        "usage_receipt",
-        "receipt_snapshot",
-        receipt.deviceId || "",
-        receipt.sessionId || "",
-        receipt.receiptId || "",
-        receipt.paymentGateway || "",
-        round3(receipt.energyConsumed),
-        round2(receipt.totalAmount),
-        round2(receipt.gstAmount),
-        round2(receipt.refundAmount),
-        round2(receipt.ownerPayout),
-        "Usage/billing snapshot; not payment settlement proof.",
       ]);
+
+      if (row) {
+        totals = {
+          receiptCount: Number(row.receiptCount || 0),
+          energyConsumed: round3(row.energyConsumed),
+          taxableAmount: round2(row.taxableAmount),
+          gstAmount: round2(row.gstAmount),
+          totalAmount: round2(row.totalAmount),
+          ownerPayout: round2(row.ownerPayout),
+        };
+      }
     }
 
-    for (const payment of paymentDocs) {
-      rows.push([
-        payment.timestamp || "",
-        payment.recordType || "payment",
-        payment.status || "",
-        payment.deviceId || "",
-        payment.sessionId || "",
-        payment.referenceId || "",
-        payment.channel || "",
-        payment.energyKwh ?? "",
-        round2(payment.grossAmount),
-        payment.gstAmount ?? "",
-        round2(payment.refundAmount),
-        payment.ownerPayout ?? "",
-        payment.notes || "Charging payment record",
-      ]);
-    }
+    return res.status(200).json({
+      period: {
+        from: from.toISOString(),
+        to: to.toISOString(),
+        timezone: "Asia/Kolkata",
+      },
 
-    for (const refund of refundDocs) {
-      rows.push([
-        refund.timestamp || "",
-        refund.recordType || "refund",
-        refund.status || "",
-        refund.deviceId || "",
-        refund.sessionId || "",
-        refund.referenceId || "",
-        refund.channel || "",
-        refund.energyKwh ?? "",
-        round2(refund.grossAmount),
-        refund.gstAmount ?? "",
-        round2(refund.refundAmount),
-        refund.ownerPayout ?? "",
-        refund.notes || "Refund record",
-      ]);
-    }
+      totals,
 
-    rows.sort((a, b) => {
-      const dateA = new Date(a[0]).getTime() || 0;
-      const dateB = new Date(b[0]).getTime() || 0;
-      return dateB - dateA;
+      metadata: {
+        generatedAt: new Date().toISOString(),
+        source: "Receipt records only",
+      },
     });
+  } catch (error) {
+    console.error("Owner finance summary error:", error);
 
-    return sendOwnerCsv(
+    return res.status(500).json({
+      error: "Could not fetch owner finance summary.",
+    });
+  }
+});
+
+// GET /api/owner/reports/sessions.csv
+//
+// Optional query:
+// ?from=2026-10-01&to=2026-10-17
+// &deviceId=VIZ1A02&status=completed
+
+router.get("/reports/sessions.csv", async (req, res) => {
+  try {
+    return await sendOwnerReceiptCsv(
+      req,
       res,
-      "viz-owner-finance.csv",
-      headers,
-      rows
+      "viz-owner-receipts.csv"
+    );
+  } catch (error) {
+    console.error("Owner receipt CSV error:", error);
+
+    return res.status(500).json({
+      error: "Could not export owner receipt report.",
+    });
+  }
+});
+
+// GET /api/owner/reports/finance.csv
+//
+// Optional query:
+// ?from=2026-10-01&to=2026-10-17
+// ?deviceId=VIZ1A02
+//
+// If dates are omitted, uses the current IST month-to-date period.
+
+router.get("/reports/finance.csv", async (req, res) => {
+  try {
+    return await sendOwnerReceiptCsv(
+      req,
+      res,
+      "viz-owner-finance.csv"
     );
   } catch (error) {
     console.error("Owner finance CSV error:", error);
