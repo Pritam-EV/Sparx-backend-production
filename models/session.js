@@ -75,5 +75,6 @@ deviceAvailableSince: { type: Date, default: null },
   timestamps: true
 });
 
+sessionSchema.index({ deviceId: 1, startTime: -1 });
 const Session = mongoose.model("Session", sessionSchema);
 module.exports = Session;

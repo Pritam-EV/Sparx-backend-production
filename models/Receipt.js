@@ -115,4 +115,5 @@ receiptSchema.pre('save', function(next) {
   next();
 });
 
+receiptSchema.index({ deviceId: 1, createdAt: -1 });
 module.exports = mongoose.models.Receipt || mongoose.model('Receipt', receiptSchema);

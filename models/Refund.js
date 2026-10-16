@@ -70,4 +70,20 @@ gateway: {
 
 }, { timestamps: true });
 
+RefundSchema.index({
+  status: 1,
+  processedAt: -1,
+});
+
+RefundSchema.index({
+  status: 1,
+  updatedAt: -1,
+});
+
+RefundSchema.index({
+  sessionId: 1,
+  status: 1,
+  processedAt: -1,
+});
+
 module.exports = mongoose.model("Refund", RefundSchema);

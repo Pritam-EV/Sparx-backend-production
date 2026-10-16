@@ -75,4 +75,16 @@ const PaymentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+PaymentSchema.index({
+  type: 1,
+  status: 1,
+  paidAt: -1,
+});
+
+PaymentSchema.index({
+  type: 1,
+  status: 1,
+  createdAt: -1,
+});
+
 module.exports = mongoose.model("Payment", PaymentSchema);
