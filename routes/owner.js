@@ -1997,15 +1997,6 @@ router.get("/finance/summary", async (req, res) => {
 
 
 // GET /api/owner/finance/monthly?month=YYYY-MM
-//
-// Returns:
-// - Available monthly filters, starting from the owner's first receipt
-// - Receipt-only financial summary for the selected month
-// - VJRA-borne electricity bill reconciliation, only when applicable
-// - Receipt payout settlement status from OwnerSettlement
-//
-// "to" month boundary is exclusive. All month boundaries use Asia/Kolkata.
-
 // Replace the existing router.get("/finance/monthly", ...) handler in
 // routes/owner.js with this block. Keep the existing imports/helpers above it.
 
@@ -2199,8 +2190,14 @@ router.get("/finance/monthly", async (req, res) => {
 
     const billByProject = new Map(billDocuments.map((bill) => [bill.project, bill]));
 
-    const electricityProjects = await Promise.all(vjraProjectRows.map(async (projectRow) => {
-      const bill = projectRow.projectKey ? billByProject.get(projectRow.projectKey) : null;
+    // Bill cards are project-scoped and show only the relevant electricity-bill amounts.
+    // Payout amounts are consolidated separately using the same owner-level
+    // taxableAmount and vjraMarginAmount values displayed in the summary cards.
+    const electricityProjects = vjraProjectRows.map((projectRow) => {
+      const bill = projectRow.projectKey
+        ? billByProject.get(projectRow.projectKey)
+        : null;
+
       if (!bill) {
         return {
           project: projectRow.project,
@@ -2210,24 +2207,15 @@ router.get("/finance/monthly", async (req, res) => {
           totalMsebBill: null,
           energyCharges: null,
           fixedElectricityCharges: null,
-          grossOwnerPayout: null,
-          netSettlement: null,
+          ownerPayable: null,
           ownerPaymentVerified: false,
           canPay: false,
         };
       }
 
-      const projectReceipts = await aggregateReceipts(projectRow.deviceIds);
       const energyCharges = round2(bill.charges?.energyCharges?.amount);
       const fixedElectricityCharges = round2(bill.totalOwnerPayable);
       const totalMsebBill = round2(bill.totalEBAmount);
-
-      // Requested formula: taxable receipts - VJRA margin - bill energy charges.
-      const grossOwnerPayout = round2(
-        projectReceipts.taxableAmount - projectReceipts.vjraMarginAmount - energyCharges
-      );
-      // Requested formula: Gross Owner Payout - Fixed Electricity Charges.
-      const netSettlement = round2(grossOwnerPayout - fixedElectricityCharges);
 
       return {
         project: projectRow.project,
@@ -2237,41 +2225,51 @@ router.get("/finance/monthly", async (req, res) => {
         totalMsebBill,
         energyCharges,
         fixedElectricityCharges,
-        // Backwards-compatible alias for any existing bill UI.
+        // Alias retained for compatibility with the Energy Bills page.
         ownerPayable: fixedElectricityCharges,
-        grossOwnerPayout,
-        netSettlement,
-        receiptCount: projectReceipts.receiptCount,
-        taxableAmount: projectReceipts.taxableAmount,
-        vjraMarginAmount: projectReceipts.vjraMarginAmount,
         ownerPaymentVerified: ["payment_verified", "eb_paid_to_mseb"].includes(bill.status),
         canPay: bill.status === "uploaded",
         paymentSubmittedAt: bill.ownerPayment?.submittedAt || null,
         paymentVerifiedAt: bill.ownerPayment?.verifiedAt || null,
       };
-    }));
+    });
 
     const allVjraBillsGenerated = electricityApplicable &&
       electricityProjects.length > 0 &&
       electricityProjects.every((project) => project.billGenerated);
 
-    // Do not publish consolidated VJRA payout figures when a project bill is missing.
+    // IMPORTANT: these two inputs are the same owner-level values returned as
+    // totals.taxableAmount and totals.vjraMarginAmount for the top KPI cards.
+    // Consolidated VJRA payout is not exposed until all applicable project bills exist.
     const vjraTotals = allVjraBillsGenerated
-      ? electricityProjects.reduce((totals, project) => ({
-          energyCharges: round2(totals.energyCharges + project.energyCharges),
-          fixedElectricityCharges: round2(
-            totals.fixedElectricityCharges + project.fixedElectricityCharges
-          ),
-          grossOwnerPayout: round2(totals.grossOwnerPayout + project.grossOwnerPayout),
-          netSettlement: round2(totals.netSettlement + project.netSettlement),
-          totalMsebBill: round2(totals.totalMsebBill + project.totalMsebBill),
-        }), {
-          energyCharges: 0,
-          fixedElectricityCharges: 0,
-          grossOwnerPayout: 0,
-          netSettlement: 0,
-          totalMsebBill: 0,
-        })
+      ? (() => {
+          const billTotals = electricityProjects.reduce((totals, project) => ({
+            energyCharges: round2(totals.energyCharges + project.energyCharges),
+            fixedElectricityCharges: round2(
+              totals.fixedElectricityCharges + project.fixedElectricityCharges
+            ),
+            totalMsebBill: round2(totals.totalMsebBill + project.totalMsebBill),
+          }), {
+            energyCharges: 0,
+            fixedElectricityCharges: 0,
+            totalMsebBill: 0,
+          });
+
+          const grossOwnerPayout = round2(
+            allReceiptTotals.taxableAmount -
+            allReceiptTotals.vjraMarginAmount -
+            billTotals.energyCharges
+          );
+          const netSettlement = round2(
+            grossOwnerPayout - billTotals.fixedElectricityCharges
+          );
+
+          return {
+            ...billTotals,
+            grossOwnerPayout,
+            netSettlement,
+          };
+        })()
       : null;
 
     // Track existing OwnerSettlement records only for OWNER-borne devices;
@@ -2382,7 +2380,7 @@ router.get("/finance/monthly", async (req, res) => {
         financialSource: "Receipt records only",
         electricitySource: "ElectricityBill records for VJRA-borne projects",
         settlementSource: "OwnerSettlement receipt line items for OWNER-borne devices only",
-        vjraFormula: "taxableAmount - vjraMarginAmount - energyCharges - totalOwnerPayable",
+        vjraFormula: "totals.taxableAmount - totals.vjraMarginAmount - sum(ElectricityBill.charges.energyCharges.amount) - sum(ElectricityBill.totalOwnerPayable)",
       },
     });
   } catch (error) {
@@ -2392,6 +2390,7 @@ router.get("/finance/monthly", async (req, res) => {
     });
   }
 });
+
 
 
 
