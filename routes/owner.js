@@ -1996,7 +1996,6 @@ router.get("/finance/summary", async (req, res) => {
 });
 
 
-// GET /api/owner/finance/monthly?month=YYYY-MM
 // Replace the existing router.get("/finance/monthly", ...) handler in
 // routes/owner.js with this block. Keep the existing imports/helpers above it.
 
@@ -2255,19 +2254,30 @@ router.get("/finance/monthly", async (req, res) => {
             totalMsebBill: 0,
           });
 
+          // Canonical revenue inputs are the SAME receipt aggregates returned
+          // in totals.taxableAmount and totals.vjraMarginAmount for the top cards.
+          const taxableAmount = round2(allReceiptTotals.taxableAmount);
+          const vjraMarginAmount = round2(allReceiptTotals.vjraMarginAmount);
+
+          // Formula requested by the owner:
+          // Gross Owner Payout = Taxable Amount - VJRA Margin - EB energy charges
           const grossOwnerPayout = round2(
-            allReceiptTotals.taxableAmount -
-            allReceiptTotals.vjraMarginAmount -
-            billTotals.energyCharges
+            taxableAmount - vjraMarginAmount - billTotals.energyCharges
           );
-          const netSettlement = round2(
+
+          // Net Owner Payout = Gross Owner Payout - EB totalOwnerPayable
+          const netOwnerPayout = round2(
             grossOwnerPayout - billTotals.fixedElectricityCharges
           );
 
           return {
             ...billTotals,
+            taxableAmount,
+            vjraMarginAmount,
             grossOwnerPayout,
-            netSettlement,
+            netOwnerPayout,
+            // Keep the previous response key for backward compatibility.
+            netSettlement: netOwnerPayout,
           };
         })()
       : null;
@@ -2356,7 +2366,9 @@ router.get("/finance/monthly", async (req, res) => {
         vjraGrossOwnerPayout: vjraTotals ? vjraTotals.grossOwnerPayout : null,
         fixedElectricityCharges: vjraTotals ? vjraTotals.fixedElectricityCharges : null,
         vjraEnergyCharges: vjraTotals ? vjraTotals.energyCharges : null,
-        netSettlement: vjraTotals ? vjraTotals.netSettlement : null,
+        netOwnerPayout: vjraTotals ? vjraTotals.netOwnerPayout : null,
+        // Backward-compatible alias retained for prior FE consumers.
+        netSettlement: vjraTotals ? vjraTotals.netOwnerPayout : null,
         vjraSettlementAvailable: !electricityApplicable || allVjraBillsGenerated,
       },
       electricity: {
@@ -2380,7 +2392,7 @@ router.get("/finance/monthly", async (req, res) => {
         financialSource: "Receipt records only",
         electricitySource: "ElectricityBill records for VJRA-borne projects",
         settlementSource: "OwnerSettlement receipt line items for OWNER-borne devices only",
-        vjraFormula: "totals.taxableAmount - totals.vjraMarginAmount - sum(ElectricityBill.charges.energyCharges.amount) - sum(ElectricityBill.totalOwnerPayable)",
+        vjraFormula: "Gross Owner Payout = totals.taxableAmount - totals.vjraMarginAmount - sum(ElectricityBill.charges.energyCharges.amount); Net Owner Payout = Gross Owner Payout - sum(ElectricityBill.totalOwnerPayable)",
       },
     });
   } catch (error) {
