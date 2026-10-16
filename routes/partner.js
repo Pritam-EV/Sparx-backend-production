@@ -388,45 +388,94 @@ function extractClientMeta(req) {
     platform: req.headers["sec-ch-ua-platform"] || "Unknown"
   };
 }
-
-
 // GET /api/partner/devices/:userId
-// Get all devices for a partner
-// routes/partner.js - Update GET /api/partner/devices/:userId
+// Transitional endpoint for existing frontend pages.
+//
+// For owners, the authenticated JWT determines the user ID.
+// Only admins can request another user's device list by URL.
+router.get(
+  "/devices/:userId",
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const requestedUserId = String(req.params.userId || "").trim();
+      const role = req.user?.role;
 
-// routes/partner.js - UPDATED VERSION
-router.get('/devices/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    
-    // ✅ UPDATED: Add ALL needed fields
-    const devices = await Device.find({
-      ownerId: userId
-    })
-    .select('device_id location status charger_type rate relayOn meterType meterConsumerNumber onboardedAt lastSeen updatedAt area city state _id')  // ✅ Added lastSeen, updatedAt, area, city, state, _id
-    .sort({ createdAt: -1 })
-    .lean();
-
-    // Fetch owner profile for GST info
-    const OwnerProfile = require('../models/ownerProfile');
-    const ownerProfile = await OwnerProfile.findOne({ userId }).lean();
-
-    res.status(200).json({
-      success: true,
-      count: devices.length,
-      devices,
-      ownerProfile: {
-        gstin: ownerProfile?.gstin || null
+      if (!["owner", "admin"].includes(role)) {
+        return res.status(403).json({
+          error: "Access denied.",
+        });
       }
-    });
-  } catch (error) {
-    console.error('Error fetching partner devices:', error);
-    res.status(500).json({
-      error: 'Failed to fetch devices',
-      details: error.message
-    });
+
+      const targetUserId =
+        role === "admin"
+          ? requestedUserId
+          : String(req.user.userId);
+
+      if (!/^[a-f\d]{24}$/i.test(targetUserId)) {
+        return res.status(400).json({
+          error: "Invalid user ID.",
+        });
+      }
+
+      const devices = await Device.find({
+        ownerId: targetUserId,
+      })
+        .select(
+          "device_id location status charger_type rate relayOn " +
+          "meterType meterConsumerNumber onboardedAt lastSeen " +
+          "updatedAt area city state"
+        )
+        .sort({ createdAt: -1 })
+        .lean();
+
+      // Explicit response allowlist. Do not return the full Device document.
+      const safeDevices = devices.map((device) => ({
+        device_id: device.device_id,
+        location: device.location || "",
+        status: device.status || "Unknown",
+        charger_type: device.charger_type || "",
+        rate: Number(device.rate || 0),
+        relayOn: Boolean(device.relayOn),
+
+        meterType: device.meterType || null,
+        meterConsumerNumber: device.meterConsumerNumber || null,
+
+        onboardedAt: device.onboardedAt || null,
+        lastSeen: device.lastSeen || null,
+        updatedAt: device.updatedAt || null,
+
+        area: device.area || "",
+        city: device.city || "",
+        state: device.state || "",
+      }));
+
+      const OwnerProfile = require("../models/ownerProfile");
+
+      const ownerProfile = await OwnerProfile.findOne({
+        userId: targetUserId,
+      })
+        .select("gstin -_id")
+        .lean();
+
+      return res.status(200).json({
+        success: true,
+        count: safeDevices.length,
+        devices: safeDevices,
+
+        ownerProfile: {
+          gstin: ownerProfile?.gstin || null,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching partner devices:", error);
+
+      return res.status(500).json({
+        error: "Failed to fetch devices.",
+      });
+    }
   }
-});
+);
 
 
 

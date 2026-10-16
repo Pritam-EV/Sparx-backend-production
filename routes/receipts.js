@@ -5,43 +5,125 @@ const authorizeRoles = require('../middleware/roleMiddleware');
 const Receipt = require('../models/Receipt');
 const Device = require('../models/device');
 const User = require('../models/User'); // 🔥 ADD THIS
+const {
+  getOwnedDeviceIds,
+  escapeRegex,
+} = require("../utils/ownerScope");
 
-// GET /api/receipts/all?search=&deviceId=&userId=&from=&to=&page=1&limit=100
-router.get('/all', auth, async (req, res) => {
+// GET /api/receipts/all
+// Admin and owner receipt listing.
+// Owner filters are always intersected with the authenticated owner's devices.
+router.get("/all", auth, async (req, res) => {
   try {
-    const { search = "", deviceId, userId, from, to, page = 1, limit = 100 } = req.query;
+    const {
+      search = "",
+      deviceId,
+      userId: requestedUserId,
+      deviceIds,
+      from,
+      to,
+      page = 1,
+      limit = 100,
+    } = req.query;
+
+    if (!["admin", "owner"].includes(req.user?.role)) {
+      return res.status(403).json({
+        error: "Access denied.",
+      });
+    }
+
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const lim = Math.max(1, Math.min(500, parseInt(limit, 10) || 100));
+    const lim = Math.max(
+      1,
+      Math.min(100, parseInt(limit, 10) || 100)
+    );
     const skip = (pageNum - 1) * lim;
+
+    const requestedDeviceIds = [
+      ...(Array.isArray(deviceIds)
+        ? deviceIds
+        : typeof deviceIds === "string"
+        ? deviceIds.split(",")
+        : []),
+
+      ...(deviceId ? [String(deviceId)] : []),
+    ]
+      .map((value) => String(value).trim())
+      .filter(Boolean);
 
     const match = {};
 
-    if (req.user?.role === 'owner') {
-      const owned = await Device.find({ ownerId: req.user.userId }, 'device_id').lean();
-      const ids = owned.map(d => d.device_id);
-      match.deviceId = { $in: ids.length ? ids : ['__none__'] };
+    if (req.user.role === "owner") {
+      // Never use a client-supplied owner ID for data access.
+      const ownedDeviceIds = await getOwnedDeviceIds(
+        req.user.userId
+      );
+
+      const allowedDeviceIds = requestedDeviceIds.length
+        ? ownedDeviceIds.filter((id) =>
+            requestedDeviceIds.includes(id)
+          )
+        : ownedDeviceIds;
+
+      match.deviceId = {
+        $in: allowedDeviceIds.length
+          ? allowedDeviceIds
+          : ["__no_owned_devices__"],
+      };
+    } else {
+      // Admins may filter across the wider network.
+      if (deviceId) {
+        match.deviceId = String(deviceId);
+      } else if (requestedDeviceIds.length) {
+        match.deviceId = {
+          $in: requestedDeviceIds,
+        };
+      }
     }
 
-    const { deviceIds } = req.query;
-    if (deviceIds) {
-      const list = Array.isArray(deviceIds) ? deviceIds : String(deviceIds).split(",").map(s => s.trim()).filter(Boolean);
-      if (list.length) match.deviceId = match.deviceId ? { $in: list.filter(x => match.deviceId.$in?.includes(x)) } : { $in: list };
+    if (requestedUserId) {
+      match.userId = requestedUserId;
     }
 
-    if (deviceId) match.deviceId = deviceId;
-    if (userId) match.userId = userId;
     if (from || to) {
       match.createdAt = {};
-      if (from) match.createdAt.$gte = new Date(from);
-      if (to) match.createdAt.$lte = new Date(to);
+
+      if (from) {
+        const fromDate = new Date(from);
+
+        if (Number.isNaN(fromDate.getTime())) {
+          return res.status(400).json({
+            error: "Invalid from date.",
+          });
+        }
+
+        match.createdAt.$gte = fromDate;
+      }
+
+      if (to) {
+        const toDate = new Date(to);
+
+        if (Number.isNaN(toDate.getTime())) {
+          return res.status(400).json({
+            error: "Invalid to date.",
+          });
+        }
+
+        match.createdAt.$lte = toDate;
+      }
     }
 
-    if (search) {
+    if (search.trim()) {
+      const safeSearch = new RegExp(
+        escapeRegex(search.trim()),
+        "i"
+      );
+
       match.$or = [
-        { receiptId: new RegExp(search, 'i') },
-        { deviceId: new RegExp(search, 'i') },
-        { sessionId: new RegExp(search, 'i') },
-        { transactionId: new RegExp(search, 'i') },
+        { receiptId: safeSearch },
+        { deviceId: safeSearch },
+        { sessionId: safeSearch },
+        { transactionId: safeSearch },
       ];
     }
 
@@ -69,34 +151,61 @@ router.get('/all', auth, async (req, res) => {
                 energySelected: 1,
                 energyConsumed: 1,
                 createdAt: 1,
-              }
-            }
+              },
+            },
           ],
+
           totals: [
             {
               $group: {
                 _id: null,
+
                 totalReceipts: { $sum: 1 },
-                totalAmountPaid: { $sum: { $ifNull: ["$amountPaid", 0] } },
-                totalAmountUtilized: { $sum: { $ifNull: ["$amountUtilized", 0] } },
-                totalAmountSelected: { $sum: { $ifNull: ["$amountSelected", 0] } },
-                totalDiscountApplied: { $sum: { $ifNull: ["$discountApplied", 0] } },
-                totalRefunds: { $sum: { $ifNull: ["$refund", 0] } },
-                totalEnergySelected: { $sum: { $ifNull: ["$energySelected", 0] } },
-                totalEnergyConsumed: { $sum: { $ifNull: ["$energyConsumed", 0] } },
-              }
-            }
+
+                totalAmountPaid: {
+                  $sum: { $ifNull: ["$amountPaid", 0] },
+                },
+
+                totalAmountUtilized: {
+                  $sum: { $ifNull: ["$amountUtilized", 0] },
+                },
+
+                totalAmountSelected: {
+                  $sum: { $ifNull: ["$amountSelected", 0] },
+                },
+
+                totalDiscountApplied: {
+                  $sum: { $ifNull: ["$discountApplied", 0] },
+                },
+
+                // refundAmount is numeric; refund is a nested object.
+                totalRefunds: {
+                  $sum: { $ifNull: ["$refundAmount", 0] },
+                },
+
+                totalEnergySelected: {
+                  $sum: { $ifNull: ["$energySelected", 0] },
+                },
+
+                totalEnergyConsumed: {
+                  $sum: { $ifNull: ["$energyConsumed", 0] },
+                },
+              },
+            },
           ],
-          count: [{ $count: "total" }]
-        }
-      }
+
+          count: [{ $count: "total" }],
+        },
+      },
     ];
 
     const result = await Receipt.aggregate(pipeline);
     const facet = result?.[0] || {};
-    const list = facet.list || [];
-    const count = facet.count?.[0]?.total || 0;
-    const t = facet.totals?.[0] || {
+
+    const receipts = facet.list || [];
+    const total = facet.count?.[0]?.total || 0;
+
+    const totals = facet.totals?.[0] || {
       totalReceipts: 0,
       totalAmountPaid: 0,
       totalAmountUtilized: 0,
@@ -107,42 +216,63 @@ router.get('/all', auth, async (req, res) => {
       totalEnergyConsumed: 0,
     };
 
-    res.json({
+    return res.status(200).json({
       page: pageNum,
       limit: lim,
-      total: count,
+      total,
+
       totals: {
-        totalReceipts: t.totalReceipts,
-        totalAmountPaid: t.totalAmountPaid,
-        totalAmountUtilized: t.totalAmountUtilized,
-        totalAmountSelected: t.totalAmountSelected,
-        totalDiscountApplied: t.totalDiscountApplied,
-        totalRefunds: t.totalRefunds,
-        totalEnergySelected: t.totalEnergySelected,
-        totalEnergyConsumed: t.totalEnergyConsumed,
+        totalReceipts: totals.totalReceipts,
+        totalAmountPaid: totals.totalAmountPaid,
+        totalAmountUtilized: totals.totalAmountUtilized,
+        totalAmountSelected: totals.totalAmountSelected,
+        totalDiscountApplied: totals.totalDiscountApplied,
+        totalRefunds: totals.totalRefunds,
+        totalEnergySelected: totals.totalEnergySelected,
+        totalEnergyConsumed: totals.totalEnergyConsumed,
       },
-      receipts: list,
+
+      receipts,
     });
-  } catch (err) {
-    console.error('Error fetching receipts:', err);
-    res.status(500).json({ message: 'Server error' });
+  } catch (error) {
+    console.error("Error fetching receipts:", error);
+
+    return res.status(500).json({
+      error: "Could not fetch receipts.",
+    });
   }
 });
 
 // ✅ NEW: GET /api/receipts/owner/analytics
 // routes/receipts.js
 
-router.get('/owner/analytics', auth, async (req, res) => {
-  try {
-    const { userId, duration, deviceIds } = req.query;
-    
-    if (!userId) {
-      return res.status(400).json({ error: 'userId is required' });
-    }
+router.get(
+  "/owner/analytics",
+  auth,
+  authorizeRoles("owner"),
+  async (req, res) => {
+    try {
+      // Always derive owner identity from the verified JWT.
+      // Ignore any userId supplied through req.query.
+      const userId = req.user.userId;
+      const { duration, deviceIds } = req.query;
 
-    // Parse device IDs
-    const deviceIdArray = deviceIds ? deviceIds.split(',').map(s => s.trim()).filter(Boolean) : [];
+      if (!userId) {
+        return res.status(401).json({
+          error: "Owner authentication is required.",
+        });
+      }
 
+      const deviceIdArray = deviceIds
+        ? String(deviceIds)
+            .split(",")
+            .map((id) => id.trim())
+            .filter(Boolean)
+        : [];
+
+      // Keep the existing date-range, aggregation and response logic below.
+      // The owned-device lookup below must continue to use this token-derived
+      // userId, and deviceIdArray must only narrow the owner's device scope.
     // Calculate date range based on duration
     const now = new Date();
     const endDate = new Date(now);
