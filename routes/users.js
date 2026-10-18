@@ -6,7 +6,10 @@ const User = require("../models/User");
 const authMiddleware = require("../middleware/authMiddleware");
 const authorizeRoles = require("../middleware/roleMiddleware");
 
-const SAFE_ADMIN_FIELDS = "_id name email mobile role";
+const SAFE_ADMIN_FIELDS =
+  "_id name email mobile role " +
+  "vehicleType vehicleModel vehicleNumber gstin " +
+  "phoneVerified createdAt";
 
 const ALLOWED_ROLES = [
   "customer",
@@ -24,6 +27,14 @@ function shapeAdminUser(user) {
     email: user.email || "",
     mobile: user.mobile || "",
     role: user.role || "customer",
+
+    vehicleType: user.vehicleType || "",
+    vehicleModel: user.vehicleModel || "",
+    vehicleNumber: user.vehicleNumber || "",
+
+    gstin: user.gstin || "",
+    phoneVerified: Boolean(user.phoneVerified),
+    createdAt: user.createdAt || null,
   };
 }
 
