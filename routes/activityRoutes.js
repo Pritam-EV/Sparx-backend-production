@@ -3,6 +3,7 @@ const router         = express.Router();
 const UserActivity   = require('../models/UserActivity');
 const User           = require('../models/User');
 const authMiddleware = require('../middleware/authMiddleware');
+const authorizeRoles = require('../middleware/roleMiddleware');
 
 // ─── POST /api/activity/track ─────────────────────────────────────────────────
 // FE calls this on every page change. Uses upsert — one doc per user per day.
@@ -64,7 +65,7 @@ router.get('/summary', authMiddleware, async (req, res) => {
 
 // ─── GET /api/activity/dropoffs ───────────────────────────────────────────────
 // Last page each user visited — grouped to show where users exit
-router.get('/dropoffs', authMiddleware, async (req, res) => {
+router.get('/dropoffs', authMiddleware, authorizeRoles('admin'), async (req, res) => {
   try {
     const dropoffs = await UserActivity.aggregate([
       { $sort: { lastSeen: -1 } },
@@ -88,13 +89,13 @@ router.get('/dropoffs', authMiddleware, async (req, res) => {
 // ─── GET /api/activity/users ──────────────────────────────────────────────────
 // Per-user summary with name, mobile, last seen, total pages, total time
 // ─── GET /api/activity/users ──────────────────────────────────────────────────
-router.get('/users', authMiddleware, async (req, res) => {
+router.get('/users', authMiddleware, authorizeRoles('admin'), async (req, res) => {
   try {
     const Device = require('../models/device');
 
     // Step 1 — aggregate user activity as before, but also grab last location
     const stats = await UserActivity.aggregate([
-      { $sort: { date: -1 } },
+      { $sort: { date: 1 } },
       { $group: {
           _id:          '$userId',
           lastSeen:     { $max: '$lastSeen' },
@@ -141,11 +142,23 @@ router.get('/users', authMiddleware, async (req, res) => {
     // Step 4 — for each user find last location + nearest charger
     const result = stats.map(u => {
       // flatten all pages arrays, find last one with a valid location
-      const allPagesFlat = (u.allPages || []).flat();
-      const pagesWithLoc = allPagesFlat.filter(p => p?.location?.lat);
-      const lastLoc = pagesWithLoc.length
-        ? pagesWithLoc[pagesWithLoc.length - 1].location
-        : null;
+const allPagesFlat = (u.allPages || []).flat();
+
+const pagesWithLoc = allPagesFlat
+  .filter((p) =>
+    p?.location &&
+    Number.isFinite(Number(p.location.lat)) &&
+    Number.isFinite(Number(p.location.lng))
+  )
+  .sort(
+    (a, b) =>
+      new Date(b.visitedAt || 0).getTime() -
+      new Date(a.visitedAt || 0).getTime()
+  );
+
+const latestLocationPage = pagesWithLoc[0] || null;
+const lastLoc = latestLocationPage?.location || null;
+const lastLocationAt = latestLocationPage?.visitedAt || null;
 
       let nearestCharger = null;
       if (lastLoc && chargers.length) {
@@ -167,7 +180,12 @@ router.get('/users', authMiddleware, async (req, res) => {
       }
 
       const { allPages, ...rest } = u; // strip raw pages from response
-      return { ...rest, lastLocation: lastLoc, nearestCharger };
+     return {
+  ...rest,
+  lastLocation: lastLoc,
+  lastLocationAt,
+  nearestCharger,
+};
     });
 
     return res.json(result);
@@ -176,7 +194,7 @@ router.get('/users', authMiddleware, async (req, res) => {
 
 // ─── GET /api/activity/user/:userId ──────────────────────────────────────────
 // Full page-by-page journey for one user
-router.get('/user/:userId', authMiddleware, async (req, res) => {
+router.get('/user/:userId', authMiddleware, authorizeRoles('admin'),  async (req, res) => {
   try {
     const docs = await UserActivity.find({ userId: req.params.userId })
       .sort({ date: -1 }).limit(30).lean();
@@ -186,7 +204,7 @@ router.get('/user/:userId', authMiddleware, async (req, res) => {
 
 // GET /api/activity/location-heatmap
 // Returns aggregated user location pings near each charger
-router.get('/location-heatmap', authMiddleware, async (req, res) => {
+router.get('/location-heatmap', authMiddleware, authorizeRoles('admin'), async (req, res) => {
   try {
     // Step 1 — get all location pings from last 30 days
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -198,6 +216,7 @@ router.get('/location-heatmap', authMiddleware, async (req, res) => {
           'pages.location.lat': { $exists: true },
           'pages.location.accuracy': { $lt: 100 }  // only accurate pings (< 100m)
       }},
+      { $sort: { 'pages.visitedAt': 1 } },
       { $group: {
           _id: '$userId',
           lat:        { $last: '$pages.location.lat' },
