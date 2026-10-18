@@ -32,6 +32,7 @@ const adminTransactionsRoutes = require("./routes/adminTransactions");
 const adminProvisionRoutes = require("./routes/adminProvision");
 const cashfreeRouter          = require("./routes/cashfree");
 const accountantRoutes        = require("./routes/accountant");
+const adminOwnerFinanceRoutes = require("./routes/adminOwnerFinance");
 
 // MQTT Subscriber
 const startMqttSubscriber = require("./mqttSubscriber");
@@ -138,6 +139,7 @@ app.use("/api/operator",           operatorRoutes);
 app.use("/api/activity",           activityRoutes);
 app.use('/api/provision',           require('./routes/deviceProvision.routes'));
 app.use("/api/accountant",         accountantRoutes);
+app.use("/api/admin/owners", adminOwnerFinanceRoutes);
 
 app.get("/api/getDevice", async (req, res) => {
   try {
