@@ -57,8 +57,11 @@ router.post("/webhook", async (req, res) => {
   try {
     switch (eventType) {
       case "PAYMENT_SUCCESS":
+      case "PAYMENT_SUCCESS_WEBHOOK":
       case "PAYMENT_FAILED":
-      case "PAYMENT_USER_DROPPED": {
+      case "PAYMENT_FAILED_WEBHOOK":
+      case "PAYMENT_USER_DROPPED":
+      case "PAYMENT_USER_DROPPED_WEBHOOK": {
         await processCashfreePaymentEvent(event, { ip: req.ip });
         break;
       }
