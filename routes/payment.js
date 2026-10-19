@@ -189,13 +189,12 @@ router.post("/webhook", async (req, res) => {
 router.get("/verify", async (req, res) => {
   try {
     const { orderId } = req.query;
-
     if (!orderId) {
       return res.status(400).json({ success: false, message: "Order ID missing" });
     }
 
-    // FREE / ZERO PAYMENT — skip verification
-    if (orderId?.startsWith("FREE_")) {
+    // FREE / ZERO PAYMENT — skip Cashfree verification.
+    if (String(orderId).startsWith("FREE_")) {
       await Payment.updateOne(
         { orderId },
         { $set: { status: "SUCCESS", gateway: "free", paymentMethod: "free", paidAt: new Date() } },
@@ -204,71 +203,41 @@ router.get("/verify", async (req, res) => {
       return res.json({ success: true, status: "successful", gateway: "free" });
     }
 
-    // console.log("🔍 Verifying payment for:", orderId);
-
     const payment = await Payment.findOne({ orderId });
-
     if (!payment) {
-      console.warn("⚠️ Payment not found for:", orderId);
-      const response = await axios.get(`${CASHFREE_BASE_URL}/pg/orders/${orderId}`, {
-        headers: {
-          "x-client-id":     process.env.CASHFREE_APP_ID,
-          "x-client-secret": process.env.CASHFREE_SECRET_KEY,
-          "x-api-version":   "2023-08-01",
-        },
-      });
-      return res.status(response.status).json({
-        success: true,
-        message: response.data?.message,
-        status:  response.data?.order_status
-          ? (response.data.order_status === "PAID"
-              ? "successful"
-              : response.data.order_status === "TERMINATED"
-              ? "cancelled"
-              : response.data.order_status === "TERMINATION_REQUESTED"
-              ? "pending"
-              : "failed")
-          : "failed",
+      return res.status(404).json({
+        success: false,
+        status: "not_found",
+        message: "Payment order was not found in our records",
       });
     }
 
     if (payment.status === "SUCCESS") {
-      return res.json({ success: true, status: "successful", payment });
+      return res.json({ success: true, status: "successful" });
     }
 
-    if (payment.status === "PENDING") {
-      // console.log("⏳ Payment pending in DB, checking Cashfree...");
-      const response = await axios.get(`${CASHFREE_BASE_URL}/pg/orders/${orderId}`, {
-        headers: {
-          "x-client-id":     process.env.CASHFREE_APP_ID,
-          "x-client-secret": process.env.CASHFREE_SECRET_KEY,
-          "x-api-version":   "2023-08-01",
-        },
+    // Webhook is the primary source; Cashfree order verification is the recovery path.
+    const result = await reconcileCashfreeOrder(orderId, { ip: req.ip });
+    if (!result.success) {
+      return res.status(502).json({
+        success: false,
+        status: "pending",
+        message: result.error || "Unable to verify payment with Cashfree",
       });
-
-      const orderStatus = response.data?.order_status;
-      // console.log("🔍 Cashfree order status:", orderStatus);
-
-      if (orderStatus === "PAID") {
-        await Payment.updateOne(
-          { orderId },
-          { $set: { status: "SUCCESS", paidAt: new Date(), rawResponse: response.data } }
-        );
-        return res.json({ success: true, status: "successful" });
-      }
-
-      if (orderStatus === "FAILED" || orderStatus === "CANCELLED") {
-        await Payment.updateOne(
-          { orderId },
-          { $set: { status: "FAILED", rawResponse: response.data } }
-        );
-        return res.status(400).json({ success: false, message: "Payment failed" });
-      }
-
-      return res.status(202).json({ success: false, message: "Payment pending" });
     }
+    if (result.status === "SUCCESS") {
+      return res.json({ success: true, status: "successful" });
+    }
+    if (result.status === "FAILED") {
+      return res.status(400).json({ success: false, status: "failed", message: "Payment failed" });
+    }
+    return res.status(202).json({
+      success: false,
+      status: "pending",
+      message: "Payment is not confirmed yet",
+    });
   } catch (err) {
-    console.error("❌ Verify route crashed:", err);
+    console.error("[Payment verify] Error:", err);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
