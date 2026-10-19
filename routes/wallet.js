@@ -10,8 +10,18 @@ const { creditWallet, debitWallet } = require("../services/walletService");
 const { reconcileCashfreeOrder } = require("../services/cashfreePaymentProcessor");
 
 async function ensureTopupWalletCredit(payment, ip) {
-  // A signed success webhook may have marked legacy payments SUCCESS before crediting.
-  // Reusing the same idempotency key safely repairs that state without double-crediting.
+  // Legacy webhook code could credit the wallet before saving an idempotency key.
+  const priorTopup = await WalletTransaction.findOne({
+    orderId: payment.orderId,
+    type: "topup",
+  }).lean();
+  if (priorTopup) {
+    if (Math.abs(Number(priorTopup.amount) - Number(payment.amountPaid)) > 0.02) {
+      throw new Error(`Existing wallet topup amount mismatch for ${payment.orderId}`);
+    }
+    return;
+  }
+
   await creditWallet({
     userId: payment.userId.toString(),
     amount: Number(payment.amountPaid),
