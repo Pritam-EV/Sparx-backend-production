@@ -17,6 +17,7 @@ const {
   fetchSettlements,
 } = require("../services/cashfreeVerify");
 const { processCashfreePaymentEvent, reconcileCashfreeOrder } = require("../services/cashfreePaymentProcessor");
+const { creditWallet } = require("../services/walletService");
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -69,7 +70,7 @@ router.post("/webhook", async (req, res) => {
       // ── REFUND_STATUS_WEBHOOK ────────────────────────────────────────────
       case "REFUND_STATUS_WEBHOOK": {
         const orderId   = data?.order?.order_id;
-        const refundId  = data?.refund?.cf_refund_id?.toString();
+        const refundId  = (data?.refund?.cf_refund_id || data?.refund?.refund_id)?.toString();
         const status    = data?.refund?.refund_status; // SUCCESS | PENDING | CANCELLED
         const refundAmt = parseFloat(data?.refund?.refund_amount) || 0;
 
@@ -99,30 +100,24 @@ router.post("/webhook", async (req, res) => {
 
         // ── Refund back to wallet ────────────────────────────────────────
         if (refundMode === "wallet") {
-          const existingTx = await WalletTransaction.findOne({ orderId, type: "refund" });
+          const refundKey = `cashfree_refund_${refundId || `${orderId}_${refundAmt}`}`;
+          const existingTx = await WalletTransaction.findOne({ idempotencyKey: refundKey });
           if (existingTx) {
-            console.log(`[CF Webhook] Duplicate wallet-refund for order ${orderId} — skipped`);
+            console.log(`[CF Webhook] Duplicate wallet-refund ${refundKey} — skipped`);
             break;
           }
 
-          const user = await User.findById(receipt.userId);
-          if (user) {
-            const balBefore = user.walletBalance || 0;
-            await User.findByIdAndUpdate(receipt.userId, {
-              $inc: { walletBalance: refundAmt },
-            });
-            await WalletTransaction.create({
-              userId:        receipt.userId,
-              type:          "refund",
-              amount:        refundAmt,
-              balanceBefore: balBefore,
-              balanceAfter:  balBefore + refundAmt,
-              orderId,
-              description:   `Wallet refund — Session ${receipt.sessionId || "?"} · CF ${refundId}`,
-              initiatedBy:   "cashfree_webhook",
-            });
-            console.log(`[CF Webhook] ✅ Wallet refund ₹${refundAmt} for user ${receipt.userId}`);
-          }
+          await creditWallet({
+            userId: receipt.userId.toString(),
+            amount: refundAmt,
+            type: "refund",
+            orderId,
+            sessionId: receipt.sessionId || null,
+            description: `Wallet refund — Session ${receipt.sessionId || "?"} · CF ${refundId || "unknown"}`,
+            idempotencyKey: refundKey,
+            ip: req.ip,
+          });
+          console.log(`[CF Webhook] ✅ Wallet refund ₹${refundAmt} for user ${receipt.userId}`);
           break;
         }
 
@@ -148,6 +143,7 @@ router.post("/webhook", async (req, res) => {
               orderId,
               description:   `Bank refund — Session ${receipt.sessionId || "?"} · CF ${refundId}`,
               initiatedBy:   "cashfree_webhook",
+              idempotencyKey: `cashfree_refund_bank_${refundId || `${orderId}_${refundAmt}`}`,
             });
             console.log(`[CF Webhook] ✅ Bank refund audit entry ₹${refundAmt} for user ${receipt.userId}`);
           }
