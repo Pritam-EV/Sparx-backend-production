@@ -16,6 +16,7 @@ const {
   fetchOrderDetails,
   fetchSettlements,
 } = require("../services/cashfreeVerify");
+const { processCashfreePaymentEvent, reconcileCashfreeOrder } = require("../services/cashfreePaymentProcessor");
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -52,117 +53,13 @@ router.post("/webhook", async (req, res) => {
   const data      = event?.data;
   console.log(`[CF Webhook] ✅ Event: ${eventType} | Order: ${data?.order?.order_id}`);
 
-  // ── 4. Respond 200 immediately so Cashfree does not retry ────────────────
-  res.status(200).json({ received: true });
-
-  // ── 5. Process event asynchronously (after response sent) ─────────────────
+  // ── Process payment events before acknowledging to Cashfree ───────────────
   try {
     switch (eventType) {
-
-      // ── PAYMENT_SUCCESS ──────────────────────────────────────────────────
-      case "PAYMENT_SUCCESS": {
-        const orderId   = data?.order?.order_id;
-        const paymentId = data?.payment?.cf_payment_id?.toString();
-        const amount    = parseFloat(data?.payment?.payment_amount) || 0;
-        const method    = data?.payment?.payment_method;
-        const bankRef   = data?.payment?.bank_reference;
-
-        if (!orderId) break;
-
-        const payment = await Payment.findOneAndUpdate(
-          { orderId },
-          {
-            $set: {
-              status:        "SUCCESS",
-              cfPaymentId:   paymentId,
-              paymentMethod: JSON.stringify(method),
-              bankReference: bankRef,
-              amount,
-              paidAt:        new Date(),
-            },
-          },
-          { new: true }
-        );
-
-        if (!payment) {
-          console.warn(`[CF Webhook] ⚠ Payment record not found for order ${orderId}`);
-          break;
-        }
-
-        // ── Wallet topup ──────────────────────────────────────────────────
-        if (payment.type === "wallet_topup" || payment.purpose === "wallet_topup") {
-          // Idempotency check — MUST be before any DB write
-          const existing = await WalletTransaction.findOne({ orderId, type: "topup" });
-          if (existing) {
-            console.log(`[CF Webhook] Duplicate topup for order ${orderId} — skipped`);
-            break; // ← break is inside switch case, correctly stops further processing
-          }
-
-          const user = await User.findById(payment.userId);
-          if (!user) {
-            console.warn(`[CF Webhook] ⚠ User not found for topup order ${orderId}`);
-            break;
-          }
-
-          const balanceBefore = user.walletBalance || 0;
-          const balanceAfter  = balanceBefore + amount;
-
-          await User.findByIdAndUpdate(payment.userId, {
-            $inc: { walletBalance: amount },
-          });
-
-          await WalletTransaction.create({
-            userId:       payment.userId,
-            type:         "topup",
-            amount,
-            balanceBefore,
-            balanceAfter,
-            orderId,
-            paymentId:    payment._id,
-            initiatedBy:  "cashfree_webhook",
-            description:  `Wallet topup via Cashfree — Order ${orderId}`,
-          });
-
-          console.log(`[CF Webhook] ✅ Wallet credited ₹${amount} for user ${payment.userId}`);
-          break; // Done — do NOT fall through to session block
-        }
-
-        // ── Direct session payment ────────────────────────────────────────
-        if (payment.type === "session" || payment.purpose === "session") {
-          await Session.findOneAndUpdate(
-            { paymentOrderId: orderId },
-            { $set: { paymentStatus: "paid", paymentVerifiedAt: new Date() } }
-          );
-          console.log(`[CF Webhook] ✅ Session payment confirmed for order ${orderId}`);
-        }
-
-        break;
-      }
-
-      // ── PAYMENT_FAILED / PAYMENT_USER_DROPPED ────────────────────────────
+      case "PAYMENT_SUCCESS":
       case "PAYMENT_FAILED":
       case "PAYMENT_USER_DROPPED": {
-        const orderId = data?.order?.order_id;
-        if (!orderId) break;
-
-        await Payment.findOneAndUpdate(
-          { orderId },
-          {
-            $set: {
-              status:     eventType === "PAYMENT_FAILED" ? "FAILED" : "DROPPED",
-              failedAt:   new Date(),
-              failReason: data?.error_details?.error_description || eventType,
-            },
-          }
-        );
-
-        // Cancel any pending session waiting on this payment
-        await Session.findOneAndUpdate(
-          { paymentOrderId: orderId, status: "pending" },
-          { $set: { status: "cancelled", cancelReason: "Payment failed or dropped" } }
-        );
-
-        console.log(`[CF Webhook] ⚠ Payment ${eventType} for order ${orderId}`);
+        await processCashfreePaymentEvent(event, { ip: req.ip });
         break;
       }
 
@@ -273,9 +170,11 @@ router.post("/webhook", async (req, res) => {
       default:
         console.log(`[CF Webhook] Unhandled event type: ${eventType}`);
     }
+    // Acknowledge only after durable work has completed. Non-2xx enables retries.
+    return res.status(200).json({ received: true });
   } catch (err) {
-    console.error("[CF Webhook] ❌ Async handler error:", err);
-    // Never re-throw — 200 already sent to Cashfree
+    console.error("[CF Webhook] ❌ Handler error:", err);
+    return res.status(500).json({ error: "Webhook processing failed" });
   }
 });
 
