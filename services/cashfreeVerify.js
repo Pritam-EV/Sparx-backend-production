@@ -33,7 +33,7 @@ function verifyCashfreeWebhook(rawBody, signature, timestamp) {
     .digest();
   const signatureValue = String(signature);
   // Reject malformed/non-canonical base64 before timing-safe comparison.
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(signatureValue)) return false;
+  if (!/^[A-Za-z0-9+\\/]+={0,2}$/.test(signatureValue)) return false;
   const received = Buffer.from(signatureValue, "base64");
   if (received.toString("base64") !== signatureValue) return false;
 
