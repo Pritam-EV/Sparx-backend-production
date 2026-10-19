@@ -12,6 +12,8 @@ const WalletTransaction = require("../models/WalletTransaction");
 const Wallet            = require("../models/Wallet");
 const authMiddleware    = require("../middleware/authMiddleware");
 const { creditWallet }  = require("../services/walletService");
+const { verifyCashfreeWebhook } = require("../services/cashfreeVerify");
+const { processCashfreePaymentEvent, reconcileCashfreeOrder } = require("../services/cashfreePaymentProcessor");
 
 const CASHFREE_BASE_URL =
   process.env.CASHFREE_ENV === "PROD"
@@ -112,134 +114,72 @@ router.post("/order", authMiddleware, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/webhook", async (req, res) => {
   try {
+    const rawBody = Buffer.isBuffer(req.rawBody)
+      ? req.rawBody.toString("utf8")
+      : req.rawBody;
     const signature = req.headers["x-webhook-signature"];
+    const timestamp = req.headers["x-webhook-timestamp"];
 
-    if (!signature || !req.rawBody) {
-      console.error("❌ Missing webhook signature or raw body");
+    if (!rawBody || !signature || !timestamp) {
       return res.status(400).send("Invalid webhook");
     }
-
-const timestamp = req.headers["x-webhook-timestamp"];
-
-const expectedSignature = crypto
-  .createHmac("sha256", process.env.CASHFREE_SECRET_KEY)
-  .update(timestamp + req.rawBody)   // ← this is the fix
-  .digest("base64");
-
-    if (signature !== expectedSignature) {
-      console.error("❌ Invalid Cashfree webhook signature");
+    if (!verifyCashfreeWebhook(rawBody, signature, timestamp)) {
+      console.warn("[Cashfree webhook] Invalid signature");
       return res.status(401).send("Invalid signature");
     }
 
-    const event = req.body;
-
-    // ── PAYMENT_SUCCESS (existing logic — unchanged) ──────────────────────────
-    if (event.type === "PAYMENT_SUCCESS") {
-      const orderId = event.data.order.order_id;
-      const payment = event.data.payment;
-
-      // console.log("✅ Cashfree payment success:", orderId);
-
-      await Payment.updateOne(
-        { orderId, status: { $ne: "SUCCESS" } },
-        {
-          $set: {
-            status:        "SUCCESS",
-            paymentMethod: payment.payment_method,
-            paymentGroup:  payment.payment_group,
-            cfPaymentId:   payment.cf_payment_id,
-            bankReference: payment.bank_reference || null,
-            paidAt:        new Date(payment.payment_time),
-            rawResponse:   event,
-          },
-        }
-      );
-
-      // Wallet topup credit (existing logic — unchanged)
-      if (orderId.startsWith("wlt_") && !orderId.startsWith("wlt_pay_")) {
-        const pmt = await Payment.findOne({ orderId });
-        if (pmt && pmt.status !== "WALLET_CREDITED") {
-          try {
-            await creditWallet({
-              userId:        pmt.userId.toString(),
-              amount:        pmt.amountPaid,
-              type:          "topup",
-              orderId,
-              description:   "Wallet topup via Cashfree webhook",
-              idempotencyKey: `topup_${orderId}`,
-            });
-            await Payment.updateOne({ orderId }, { $set: { status: "SUCCESS" } });
-          } catch (e) {
-            console.error("Webhook wallet credit failed:", e.message);
-          }
-        }
-      }
+    let event;
+    try {
+      event = JSON.parse(rawBody);
+    } catch {
+      return res.status(400).send("Invalid JSON payload");
     }
 
-    // ── PAYMENT_FAILED (existing logic — unchanged) ───────────────────────────
-    if (event.type === "PAYMENT_FAILED") {
-      const orderId = event.data.order.order_id;
-      // console.log("❌ Cashfree payment failed:", orderId);
-
-      await Payment.updateOne(
-        { orderId },
-        {
-          $set: {
-            status:        "FAILED",
-            failureReason: event.data.payment?.payment_message || null,
-            rawResponse:   event,
-          },
-        }
-      );
-    }
-
-    // ── REFUND_STATUS_WEBHOOOK (new) ─────────────────────────────────────────
-    // Cashfree fires this for every refund status change:
-    // PENDING → SUCCESS (money sent to bank, arnNumber available)
-    // PENDING → CANCELLED / ONHOLD
-    if (event.type === "REFUND_STATUS_WEBHOOK") {
-      const r           = event.data.refund;
-      const cfRefundId  = r.cf_refund_id;
-      const newStatus   = r.refund_status; // "PENDING" | "SUCCESS" | "CANCELLED" | "ONHOLD"
+    if (["PAYMENT_SUCCESS", "PAYMENT_SUCCESS_WEBHOOK", "PAYMENT_FAILED", "PAYMENT_FAILED_WEBHOOK", "PAYMENT_USER_DROPPED", "PAYMENT_USER_DROPPED_WEBHOOK"].includes(event?.type)) {
+      await processCashfreePaymentEvent(event, { ip: req.ip });
+    } else if (event?.type === "REFUND_STATUS_WEBHOOK") {
+      const r = event?.data?.refund;
+      if (!r) return res.status(400).send("Invalid refund event");
 
       const statusMap = {
-        PENDING:   "PENDING",
-        SUCCESS:   "SUCCESS",
+        PENDING: "PENDING",
+        SUCCESS: "SUCCESS",
         CANCELLED: "CANCELLED",
-        ONHOLD:    "ONHOLD",
+        ONHOLD: "ONHOLD",
+        FAILED: "FAILED",
       };
-
+      const newStatus = String(r.refund_status || "").toUpperCase();
       const updateFields = {
-        status:            statusMap[newStatus] || "PENDING",
+        status: statusMap[newStatus] || "PENDING",
         statusDescription: r.status_description || null,
-        rawResponse:       event,
+        rawResponse: event,
       };
-
-      // On SUCCESS — save the ARN (bank proof) and processedAt timestamp
       if (newStatus === "SUCCESS") {
-        updateFields.arnNumber   = r.refund_arn || null;
-        updateFields.processedAt = new Date();
+        updateFields.arnNumber = r.refund_arn || null;
+        updateFields.processedAt = r.refund_completion_time
+          ? new Date(r.refund_completion_time)
+          : new Date();
       }
 
+      const refundQuery = r.cf_refund_id
+        ? { cfRefundId: String(r.cf_refund_id) }
+        : { refundId: String(r.refund_id || "") };
       const updated = await Refund.findOneAndUpdate(
-        { cfRefundId },
+        refundQuery,
         { $set: updateFields },
         { new: true }
       );
-
-      if (updated) {
-        // console.log(`🔄 Refund ${cfRefundId} → ${newStatus}${newStatus === "SUCCESS" ? ` | ARN: ${r.refund_arn}` : ""}`);
-      } else {
-        // cfRefundId not found — could be the very first webhook before we stored it
-        // Try matching by refundId in case cf_refund_id wasn't set at creation time
-        console.warn(`⚠️ Refund not found for cfRefundId: ${cfRefundId}`);
+      if (!updated) {
+        console.warn("[Cashfree webhook] Refund record not found", refundQuery);
       }
     }
 
+    // Acknowledge only after the event's database work has completed.
     return res.status(200).send("OK");
   } catch (err) {
-    console.error("Webhook error:", err);
-    return res.status(500).send("Webhook error");
+    console.error("[Cashfree payment webhook] Processing failed:", err);
+    // Non-2xx allows Cashfree to retry transient failures.
+    return res.status(500).send("Webhook processing failed");
   }
 });
 
@@ -249,13 +189,12 @@ const expectedSignature = crypto
 router.get("/verify", async (req, res) => {
   try {
     const { orderId } = req.query;
-
     if (!orderId) {
       return res.status(400).json({ success: false, message: "Order ID missing" });
     }
 
-    // FREE / ZERO PAYMENT — skip verification
-    if (orderId?.startsWith("FREE_")) {
+    // FREE / ZERO PAYMENT — skip Cashfree verification.
+    if (String(orderId).startsWith("FREE_")) {
       await Payment.updateOne(
         { orderId },
         { $set: { status: "SUCCESS", gateway: "free", paymentMethod: "free", paidAt: new Date() } },
@@ -264,71 +203,41 @@ router.get("/verify", async (req, res) => {
       return res.json({ success: true, status: "successful", gateway: "free" });
     }
 
-    // console.log("🔍 Verifying payment for:", orderId);
-
     const payment = await Payment.findOne({ orderId });
-
     if (!payment) {
-      console.warn("⚠️ Payment not found for:", orderId);
-      const response = await axios.get(`${CASHFREE_BASE_URL}/pg/orders/${orderId}`, {
-        headers: {
-          "x-client-id":     process.env.CASHFREE_APP_ID,
-          "x-client-secret": process.env.CASHFREE_SECRET_KEY,
-          "x-api-version":   "2023-08-01",
-        },
-      });
-      return res.status(response.status).json({
-        success: true,
-        message: response.data?.message,
-        status:  response.data?.order_status
-          ? (response.data.order_status === "PAID"
-              ? "successful"
-              : response.data.order_status === "TERMINATED"
-              ? "cancelled"
-              : response.data.order_status === "TERMINATION_REQUESTED"
-              ? "pending"
-              : "failed")
-          : "failed",
+      return res.status(404).json({
+        success: false,
+        status: "not_found",
+        message: "Payment order was not found in our records",
       });
     }
 
     if (payment.status === "SUCCESS") {
-      return res.json({ success: true, status: "successful", payment });
+      return res.json({ success: true, status: "successful" });
     }
 
-    if (payment.status === "PENDING") {
-      // console.log("⏳ Payment pending in DB, checking Cashfree...");
-      const response = await axios.get(`${CASHFREE_BASE_URL}/pg/orders/${orderId}`, {
-        headers: {
-          "x-client-id":     process.env.CASHFREE_APP_ID,
-          "x-client-secret": process.env.CASHFREE_SECRET_KEY,
-          "x-api-version":   "2023-08-01",
-        },
+    // Webhook is the primary source; Cashfree order verification is the recovery path.
+    const result = await reconcileCashfreeOrder(orderId, { ip: req.ip });
+    if (!result.success) {
+      return res.status(502).json({
+        success: false,
+        status: "pending",
+        message: result.error || "Unable to verify payment with Cashfree",
       });
-
-      const orderStatus = response.data?.order_status;
-      // console.log("🔍 Cashfree order status:", orderStatus);
-
-      if (orderStatus === "PAID") {
-        await Payment.updateOne(
-          { orderId },
-          { $set: { status: "SUCCESS", paidAt: new Date(), rawResponse: response.data } }
-        );
-        return res.json({ success: true, status: "successful" });
-      }
-
-      if (orderStatus === "FAILED" || orderStatus === "CANCELLED") {
-        await Payment.updateOne(
-          { orderId },
-          { $set: { status: "FAILED", rawResponse: response.data } }
-        );
-        return res.status(400).json({ success: false, message: "Payment failed" });
-      }
-
-      return res.status(202).json({ success: false, message: "Payment pending" });
     }
+    if (result.status === "SUCCESS") {
+      return res.json({ success: true, status: "successful" });
+    }
+    if (result.status === "FAILED") {
+      return res.status(400).json({ success: false, status: "failed", message: "Payment failed" });
+    }
+    return res.status(202).json({
+      success: false,
+      status: "pending",
+      message: "Payment is not confirmed yet",
+    });
   } catch (err) {
-    console.error("❌ Verify route crashed:", err);
+    console.error("[Payment verify] Error:", err);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
