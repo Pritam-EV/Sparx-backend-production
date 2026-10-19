@@ -135,7 +135,7 @@ router.post("/webhook", async (req, res) => {
       return res.status(400).send("Invalid JSON payload");
     }
 
-    if (["PAYMENT_SUCCESS", "PAYMENT_FAILED", "PAYMENT_USER_DROPPED"].includes(event?.type)) {
+    if (["PAYMENT_SUCCESS", "PAYMENT_SUCCESS_WEBHOOK", "PAYMENT_FAILED", "PAYMENT_FAILED_WEBHOOK", "PAYMENT_USER_DROPPED", "PAYMENT_USER_DROPPED_WEBHOOK"].includes(event?.type)) {
       await processCashfreePaymentEvent(event, { ip: req.ip });
     } else if (event?.type === "REFUND_STATUS_WEBHOOK") {
       const r = event?.data?.refund;
