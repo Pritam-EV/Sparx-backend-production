@@ -92,14 +92,20 @@ async function markFailedIfTerminal(orderId, event) {
 }
 
 async function processCashfreePaymentEvent(event, options = {}) {
-  const eventType = event?.type;
+  const eventType = String(event?.type || "").toUpperCase();
   const orderId = event?.data?.order?.order_id;
   if (!orderId) throw new Error("Cashfree payment event is missing data.order.order_id");
 
-  if (eventType === "PAYMENT_SUCCESS") {
+  // Support Cashfree's documented webhook names and the shorter legacy names.
+  if (eventType === "PAYMENT_SUCCESS" || eventType === "PAYMENT_SUCCESS_WEBHOOK") {
     return finalizeSuccessfulPayment(orderId, event?.data?.payment || {}, event, options.ip);
   }
-  if (eventType === "PAYMENT_FAILED" || eventType === "PAYMENT_USER_DROPPED") {
+  if (
+    eventType === "PAYMENT_FAILED" ||
+    eventType === "PAYMENT_FAILED_WEBHOOK" ||
+    eventType === "PAYMENT_USER_DROPPED" ||
+    eventType === "PAYMENT_USER_DROPPED_WEBHOOK"
+  ) {
     return markFailedIfTerminal(orderId, event);
   }
   return { ignored: true, reason: "unsupported_event", eventType };
