@@ -238,98 +238,33 @@ router.get("/verify/:orderId", caMiddleware, async (req, res) => {
 router.post("/heal/:orderId", caMiddleware, async (req, res) => {
   try {
     const { orderId } = req.params;
-
-    // Fetch latest state from Cashfree
-    const cfResult = await fetchOrderDetails(orderId);
-    if (!cfResult.success) {
-      return res.status(502).json({ error: cfResult.error || "Cashfree API error" });
-    }
-
-    const order    = cfResult.order;
-    const cfStatus = order?.order_status; // PAID | ACTIVE | EXPIRED | CANCELLED
-
     const dbPayment = await Payment.findOne({ orderId }).lean();
     if (!dbPayment) {
       return res.status(404).json({ error: `No Payment record found for order ${orderId}` });
     }
 
-    const actions = [];
-
-    // ── Already in terminal match state — nothing to do ──────────────────
-    const terminalMap = { PAID: "SUCCESS", EXPIRED: "FAILED", CANCELLED: "FAILED" };
-    const targetStatus = terminalMap[cfStatus];
-
-    if (!targetStatus) {
-      return res.json({
-        orderId,
-        cfStatus,
-        message: `Order is in non-terminal state "${cfStatus}" — cannot heal yet. Retry after payment completes.`,
-        healed: false,
-      });
+    const result = await reconcileCashfreeOrder(orderId, { ip: req.ip });
+    if (!result.success) {
+      return res.status(502).json({ error: result.error || "Cashfree API error" });
     }
 
-    if (dbPayment.status === targetStatus) {
-      return res.json({
-        orderId,
-        message: `DB already shows "${targetStatus}" — no heal needed.`,
-        healed: false,
-      });
-    }
-
-    // ── Update Payment record ─────────────────────────────────────────────
-    await Payment.findOneAndUpdate(
-      { orderId },
-      {
-        $set: {
-          status:   targetStatus,
-          healedAt: new Date(),
-          healNote: `Healed from Cashfree order status "${cfStatus}"`,
-        },
-      }
-    );
-    actions.push(`Payment status set to ${targetStatus}`);
-
-    // ── If healed to SUCCESS: replay topup / session logic ────────────────
-    if (targetStatus === "SUCCESS") {
-      if (dbPayment.type === "wallet_topup" || dbPayment.purpose === "wallet_topup") {
-        const existing = await WalletTransaction.findOne({ orderId, type: "topup" });
-        if (!existing) {
-          const user = await User.findById(dbPayment.userId);
-          if (user) {
-            const balBefore = user.walletBalance || 0;
-            const amt       = dbPayment.amount   || 0;
-            await User.findByIdAndUpdate(dbPayment.userId, { $inc: { walletBalance: amt } });
-            await WalletTransaction.create({
-              userId: dbPayment.userId, type: "topup", amount: amt,
-              balanceBefore: balBefore, balanceAfter: balBefore + amt,
-              orderId, paymentId: dbPayment._id,
-              initiatedBy: "heal_api",
-              description: `Wallet topup healed — Order ${orderId}`,
-            });
-            actions.push(`Wallet credited ₹${amt}`);
-          }
-        } else {
-          actions.push("Wallet topup already exists — skipped");
-        }
-      }
-
-      if (dbPayment.type === "session" || dbPayment.purpose === "session") {
-        await Session.findOneAndUpdate(
-          { paymentOrderId: orderId },
-          { $set: { paymentStatus: "paid", paymentVerifiedAt: new Date() } }
-        );
-        actions.push("Session payment status set to paid");
-      }
-    }
+    const latest = await Payment.findOne({ orderId }).lean();
+    const previousStatus = dbPayment.status;
+    const newStatus = latest?.status || previousStatus;
+    const changed = newStatus !== previousStatus;
 
     return res.json({
       orderId,
-      previousStatus: dbPayment.status,
-      newStatus:      targetStatus,
-      healed:         true,
-      actions,
+      cashfreeOrderStatus: result.orderStatus,
+      previousStatus,
+      newStatus,
+      healed: changed,
+      actions: result.status === "SUCCESS" && dbPayment.type === "wallet_topup"
+        ? ["Payment reconciled; wallet credit handled idempotently by walletService"]
+        : changed
+          ? [`Payment status reconciled to ${newStatus}`]
+          : ["No database change needed"],
     });
-
   } catch (err) {
     console.error("[CF Heal] Error:", err);
     return res.status(500).json({ error: "Server error during heal" });
