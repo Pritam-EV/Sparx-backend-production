@@ -7,6 +7,7 @@ const User = require("../models/User");
 const Payment = require("../models/Payment");
 const WalletTransaction = require("../models/WalletTransaction");
 const { creditWallet, debitWallet } = require("../services/walletService");
+const { reconcileCashfreeOrder } = require("../services/cashfreePaymentProcessor");
 const crypto = require("crypto");
 
 const CASHFREE_BASE_URL = process.env.CASHFREE_ENV === "PROD"
@@ -160,44 +161,47 @@ router.post("/topup/order", authMiddleware, async (req, res) => {
 router.post("/topup/verify", authMiddleware, async (req, res) => {
   try {
     const { orderId } = req.body;
-    if (!orderId?.startsWith("wlt_"))
+    if (!orderId?.startsWith("wlt_") || orderId.startsWith("wlt_pay_")) {
       return res.status(400).json({ message: "Invalid topup order ID" });
+    }
 
-    const payment = await Payment.findOne({ orderId, userId: req.user.userId });
-    if (!payment) return res.status(404).json({ message: "Order not found" });
-    if (payment.status === "SUCCESS")
-      return res.json({ success: true, message: "Already credited", alreadyCredited: true });
-
-    // Verify with Cashfree
-    const cfResp = await axios.get(`${CASHFREE_BASE_URL}/pg/orders/${orderId}`, {
-      headers: {
-        "x-client-id": process.env.CASHFREE_APP_ID,
-        "x-client-secret": process.env.CASHFREE_SECRET_KEY,
-        "x-api-version": "2023-08-01",
-      },
-    });
-
-    if (cfResp.data?.order_status !== "PAID")
-      return res.status(400).json({ success: false, message: "Payment not confirmed" });
-
-    // Credit wallet (idempotent — uses orderId as idempotency key)
-    const result = await creditWallet({
-      userId: req.user.userId,
-      amount: payment.amountPaid,
-      type: "topup",
+    const payment = await Payment.findOne({
       orderId,
-      description: `Wallet topup via Cashfree`,
-      idempotencyKey: `topup_${orderId}`,
-      ip: req.ip,
+      userId: req.user.userId,
+      type: "wallet_topup",
     });
+    if (!payment) return res.status(404).json({ message: "Topup order not found" });
 
-    // Update payment record to SUCCESS
-    await Payment.updateOne({ orderId }, { $set: { status: "SUCCESS", paidAt: new Date() } });
+    if (payment.status === "SUCCESS") {
+      const user = await User.findById(req.user.userId).select("walletBalance").lean();
+      return res.json({
+        success: true,
+        message: "Topup already credited",
+        alreadyCredited: true,
+        newBalance: user?.walletBalance ?? null,
+      });
+    }
+    if (payment.status === "FAILED") {
+      return res.status(400).json({ success: false, status: "FAILED", message: "Topup order failed" });
+    }
 
-    return res.json({ success: true, newBalance: result.newBalance });
+    // Webhook is primary; this endpoint reconciles the authoritative Cashfree order as fallback.
+    const result = await reconcileCashfreeOrder(orderId, { ip: req.ip });
+    if (!result.success) {
+      return res.status(502).json({ success: false, status: "PENDING", message: result.error });
+    }
+    if (result.status === "FAILED") {
+      return res.status(400).json({ success: false, status: "FAILED", message: "Topup order failed" });
+    }
+    if (result.status !== "SUCCESS") {
+      return res.status(202).json({ success: false, status: "PENDING", message: "Payment not confirmed yet" });
+    }
+
+    const user = await User.findById(req.user.userId).select("walletBalance").lean();
+    return res.json({ success: true, newBalance: user?.walletBalance ?? null });
   } catch (err) {
-    console.error("Wallet topup verify error:", err.message);
-    return res.status(500).json({ message: err.message || "Verification failed" });
+    console.error("Wallet topup verify error:", err);
+    return res.status(500).json({ success: false, message: err.message || "Verification failed" });
   }
 });
 
@@ -207,12 +211,19 @@ router.post("/topup/verify", authMiddleware, async (req, res) => {
 router.get("/topup-status", authMiddleware, async (req, res) => {
   try {
     const { orderId } = req.query;
-    if (!orderId) return res.json({ status: "PENDING" });
+    if (!orderId) return res.status(400).json({ status: "PENDING" });
+    if (typeof orderId !== "string" || !orderId.startsWith("wlt_") || orderId.startsWith("wlt_pay_")) {
+      return res.status(400).json({ status: "NOT_FOUND" });
+    }
 
-    const payment = await Payment.findOne({ orderId }).lean();
-    if (!payment) return res.json({ status: "PENDING" });
+    // Scope polling to the logged-in user's own top-up.
+    const payment = await Payment.findOne({
+      orderId,
+      userId: req.user.userId,
+      type: "wallet_topup",
+    }).lean();
+    if (!payment) return res.status(404).json({ status: "NOT_FOUND" });
 
-    // Already done — return immediately
     if (payment.status === "SUCCESS") {
       return res.json({ status: "SUCCESS", amount: payment.amountPaid });
     }
@@ -220,58 +231,21 @@ router.get("/topup-status", authMiddleware, async (req, res) => {
       return res.json({ status: "FAILED" });
     }
 
-    // Still PENDING in DB — go ask Cashfree directly
-    const CASHFREE_BASE_URL = process.env.CASHFREE_ENV === "PROD"
-      ? "https://api.cashfree.com"
-      : "https://sandbox.cashfree.com";
-
-    const cfResp = await axios.get(`${CASHFREE_BASE_URL}/pg/orders/${orderId}`, {
-      headers: {
-        "x-client-id": process.env.CASHFREE_APP_ID,
-        "x-client-secret": process.env.CASHFREE_SECRET_KEY,
-        "x-api-version": "2023-08-01",
-      },
-    });
-
-    const orderStatus = cfResp.data?.order_status;
-
-    if (orderStatus === "PAID") {
-      // Credit wallet (idempotent — safe to call even if webhook fires later)
-      try {
-        await creditWallet({
-          userId: payment.userId.toString(),
-          amount: payment.amountPaid,
-          type: "topup",
-          orderId,
-          description: "Wallet topup via Cashfree",
-          idempotencyKey: `topup_${orderId}`,
-          ip: req.ip,
-        });
-      } catch (e) {
-        // Already credited via webhook — idempotency key prevents double credit
-        console.log("creditWallet skipped (already done):", e.message);
-      }
-
-      // Mark payment SUCCESS
-      await Payment.updateOne(
-        { orderId, status: { $ne: "SUCCESS" } },
-        { $set: { status: "SUCCESS", paidAt: new Date() } }
-      );
-
+    const result = await reconcileCashfreeOrder(orderId, { ip: req.ip });
+    if (!result.success) {
+      console.warn("Cashfree topup status check failed:", result.error);
+      return res.status(502).json({ status: "PENDING" });
+    }
+    if (result.status === "SUCCESS") {
       return res.json({ status: "SUCCESS", amount: payment.amountPaid });
     }
-
-    if (orderStatus === "FAILED" || orderStatus === "CANCELLED" || orderStatus === "TERMINATED") {
-      await Payment.updateOne({ orderId }, { $set: { status: "FAILED" } });
+    if (result.status === "FAILED") {
       return res.json({ status: "FAILED" });
     }
-
-    // Genuinely still pending
     return res.json({ status: "PENDING" });
-
   } catch (err) {
     console.error("topup-status error:", err.message);
-    res.status(500).json({ status: "PENDING" });
+    return res.status(500).json({ status: "PENDING" });
   }
 });
 
