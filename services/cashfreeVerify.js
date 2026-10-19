@@ -31,12 +31,11 @@ function verifyCashfreeWebhook(rawBody, signature, timestamp) {
     .createHmac("sha256", secret)
     .update(String(timestamp) + (Buffer.isBuffer(rawBody) ? rawBody.toString("utf8") : String(rawBody)))
     .digest();
-  let received;
-  try {
-    received = Buffer.from(String(signature), "base64");
-  } catch {
-    return false;
-  }
+  const signatureValue = String(signature);
+  // Reject malformed/non-canonical base64 before timing-safe comparison.
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(signatureValue)) return false;
+  const received = Buffer.from(signatureValue, "base64");
+  if (received.toString("base64") !== signatureValue) return false;
 
   // timingSafeEqual throws if buffer lengths differ.
   return received.length === computed.length && crypto.timingSafeEqual(received, computed);
