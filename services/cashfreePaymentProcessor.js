@@ -2,6 +2,7 @@
 "use strict";
 
 const Payment = require("../models/Payment");
+const WalletTransaction = require("../models/WalletTransaction");
 const { creditWallet } = require("./walletService");
 const { fetchOrderDetails, fetchPaymentStatus } = require("./cashfreeVerify");
 
@@ -37,15 +38,24 @@ async function finalizeSuccessfulPayment(orderId, paymentData = {}, rawResponse,
   // Always attempt the idempotent wallet credit, even if Payment is already SUCCESS.
   // This recovers the case where the payment status was saved but wallet credit previously failed.
   if (payment.type === "wallet_topup" && payment.gateway === "cashfree") {
-    await creditWallet({
-      userId: payment.userId.toString(),
-      amount: Number(payment.amountPaid),
-      type: "topup",
-      orderId,
-      description: "Wallet topup via Cashfree",
-      idempotencyKey: `topup_${orderId}`,
-      ip,
-    });
+    // Older webhook code created ledger rows without idempotencyKey. Check by orderId
+    // as well, so a replay after deployment cannot credit those top-ups a second time.
+    const priorTopup = await WalletTransaction.findOne({ orderId, type: "topup" }).lean();
+    if (priorTopup) {
+      if (Math.abs(Number(priorTopup.amount) - Number(payment.amountPaid)) > 0.02) {
+        throw new Error(`Existing wallet topup amount mismatch for ${orderId}`);
+      }
+    } else {
+      await creditWallet({
+        userId: payment.userId.toString(),
+        amount: Number(payment.amountPaid),
+        type: "topup",
+        orderId,
+        description: "Wallet topup via Cashfree",
+        idempotencyKey: `topup_${orderId}`,
+        ip,
+      });
+    }
   }
 
   const fields = {
