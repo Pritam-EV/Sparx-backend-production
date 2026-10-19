@@ -8,6 +8,20 @@ const Payment = require("../models/Payment");
 const WalletTransaction = require("../models/WalletTransaction");
 const { creditWallet, debitWallet } = require("../services/walletService");
 const { reconcileCashfreeOrder } = require("../services/cashfreePaymentProcessor");
+
+async function ensureTopupWalletCredit(payment, ip) {
+  // A signed success webhook may have marked legacy payments SUCCESS before crediting.
+  // Reusing the same idempotency key safely repairs that state without double-crediting.
+  await creditWallet({
+    userId: payment.userId.toString(),
+    amount: Number(payment.amountPaid),
+    type: "topup",
+    orderId: payment.orderId,
+    description: "Wallet topup via Cashfree",
+    idempotencyKey: `topup_${payment.orderId}`,
+    ip,
+  });
+}
 const crypto = require("crypto");
 
 const CASHFREE_BASE_URL = process.env.CASHFREE_ENV === "PROD"
@@ -173,6 +187,7 @@ router.post("/topup/verify", authMiddleware, async (req, res) => {
     if (!payment) return res.status(404).json({ message: "Topup order not found" });
 
     if (payment.status === "SUCCESS") {
+      await ensureTopupWalletCredit(payment, req.ip);
       const user = await User.findById(req.user.userId).select("walletBalance").lean();
       return res.json({
         success: true,
@@ -225,6 +240,7 @@ router.get("/topup-status", authMiddleware, async (req, res) => {
     if (!payment) return res.status(404).json({ status: "NOT_FOUND" });
 
     if (payment.status === "SUCCESS") {
+      await ensureTopupWalletCredit(payment, req.ip);
       return res.json({ status: "SUCCESS", amount: payment.amountPaid });
     }
     if (payment.status === "FAILED") {
@@ -237,6 +253,7 @@ router.get("/topup-status", authMiddleware, async (req, res) => {
       return res.status(502).json({ status: "PENDING" });
     }
     if (result.status === "SUCCESS") {
+      await ensureTopupWalletCredit(payment, req.ip);
       return res.json({ status: "SUCCESS", amount: payment.amountPaid });
     }
     if (result.status === "FAILED") {
