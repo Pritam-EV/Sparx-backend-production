@@ -20,13 +20,26 @@ const CF_HEADERS = {
 // Signature header: x-webhook-signature
 // Timestamp header: x-webhook-timestamp
 function verifyCashfreeWebhook(rawBody, signature, timestamp) {
-  if (!signature || !timestamp) return false;
-  const payload = timestamp + rawBody;
+  if (!rawBody || !signature || !timestamp) return false;
+  const secret =
+    process.env.CASHFREE_WEBHOOK_SECRET ||
+    process.env.CASHFREE_SECRET_KEY ||
+    "";
+  if (!secret) return false;
+
   const computed = crypto
-    .createHmac("sha256", process.env.CASHFREE_SECRET_KEY || "")
-    .update(payload)
-    .digest("base64");
-  return computed === signature;
+    .createHmac("sha256", secret)
+    .update(String(timestamp) + (Buffer.isBuffer(rawBody) ? rawBody.toString("utf8") : String(rawBody)))
+    .digest();
+  let received;
+  try {
+    received = Buffer.from(String(signature), "base64");
+  } catch {
+    return false;
+  }
+
+  // timingSafeEqual throws if buffer lengths differ.
+  return received.length === computed.length && crypto.timingSafeEqual(received, computed);
 }
 
 // ── Fetch single order payment status from Cashfree ─────────────────────────
