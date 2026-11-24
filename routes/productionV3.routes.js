@@ -3,12 +3,6 @@
  * routes/productionV3.routes.js
  *
  * VIZ Production 3.0 API Router
- *
- * Separate from:
- *   /api/provision
- *   /api/admin/provision
- *
- * All endpoints require an authenticated admin.
  */
 
 const express = require("express");
@@ -18,51 +12,46 @@ const authMiddleware = require("../middleware/authMiddleware");
 const authorizeRoles = require("../middleware/roleMiddleware");
 
 const batchController = require("../controllers/productionV3/batch.controller");
+const deviceController = require("../controllers/productionV3/device.controller");
 
-// --------------------------------------------------
-// PRODUCTION 3.0 AUTHORIZATION
-// --------------------------------------------------
-
+// All Production 3.0 routes require an authenticated admin.
 router.use(
   authMiddleware,
   authorizeRoles("admin")
 );
 
-// --------------------------------------------------
+// ==================================================
 // BATCH MANAGEMENT
-// --------------------------------------------------
+// ==================================================
 
-/**
- * POST /
- * Create a manufacturing batch and generate Group A devices.
- */
 router.post(
   "/batches",
   batchController.createBatch
 );
 
-/**
- * GET /
- * List manufacturing batches.
- *
- * Query parameters:
- *   page
- *   limit
- *   status
- *   search
- */
 router.get(
   "/batches",
   batchController.getBatches
 );
 
-/**
- * GET /batches/:batchId
- * Get batch details and associated devices.
- */
 router.get(
   "/batches/:batchId",
   batchController.getBatchById
+);
+
+// ==================================================
+// DEVICE INVENTORY
+// ==================================================
+
+// Keep /devices before /devices/:serialNumber.
+router.get(
+  "/devices",
+  deviceController.getDevices
+);
+
+router.get(
+  "/devices/:serialNumber",
+  deviceController.getDeviceBySerial
 );
 
 module.exports = router;
