@@ -333,21 +333,22 @@ exports.promoteDevice = async (req, res) => {
     await device.save();
     await refreshBatchCountsForDevice(serialNumber);
     
+let command;
+
 try {
-  const command = await publishConfigCommand({
+  command = await publishConfigCommand({
     device,
     payload,
     action: "setConfig",
-    kind: "identity_change",
+    kind: "provisioning",
     metadata: {
-      operation: "identity_change",
-      oldDeviceId,
-      requestedDeviceId: newDeviceId,
+      operation: "promotion",
       nvsVersion,
     },
     createdBy: req.user?.userId,
   });
 
+  // Mark as sent only if an ACK has not already arrived.
   await ProductionDevice.updateOne(
     {
       serialNumber,
@@ -364,20 +365,27 @@ try {
     }
   );
 
+  const latestDevice = await ProductionDevice.findOne({
+    serialNumber,
+  })
+    .select("deviceId manufacturingStatus provisioning")
+    .lean();
+
   return res.status(202).json({
     success: true,
     message:
-      "Identity change command published. Current Device ID remains unchanged until acknowledgement.",
+      "Device promotion configuration published. Waiting for device acknowledgement.",
     data: {
       serialNumber,
-      oldDeviceId,
-      requestedDeviceId: newDeviceId,
+      deviceId: latestDevice?.deviceId || deviceId,
       requestId,
       nvsVersion,
       commandStatus: command.status,
     },
   });
+
 } catch (publishError) {
+
   await ProductionDevice.updateOne(
     {
       serialNumber,

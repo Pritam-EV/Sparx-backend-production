@@ -768,6 +768,180 @@ exports.applyCalibration = async (req, res) => {
   }
 };
 
+exports.captureVerificationPoint = async (req, res) => {
+  try {
+    const session = await getSession(req.params.sessionId);
+
+    if (session.status !== "awaiting_verification") {
+      return res.status(409).json({
+        success: false,
+        message: "Session is not awaiting verification.",
+      });
+    }
+
+    if (!session.appliedAt) {
+      return res.status(409).json({
+        success: false,
+        message: "Calibration application timestamp is missing.",
+      });
+    }
+
+    const pointCode = String(
+      req.body.pointCode || ""
+    ).trim();
+
+    const telemetryRequestId = String(
+      req.body.telemetryRequestId || ""
+    ).trim();
+
+    if (!pointCode || !telemetryRequestId) {
+      return res.status(400).json({
+        success: false,
+        message: "Point code and telemetry request ID are required.",
+      });
+    }
+
+    const profile = session.profileSnapshot || {};
+
+    const point = (profile.referencePoints || []).find(
+      (item) => String(item.code) === pointCode
+    );
+
+    if (!point) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid verification point.",
+      });
+    }
+
+    // Use the original calibrated reference.
+    // Never accept a new reference value from the browser.
+    const originalCapture = [
+      ...(session.captures || []),
+    ].reverse().find(
+      (capture) => capture.pointCode === pointCode
+    );
+
+    if (!originalCapture) {
+      return res.status(409).json({
+        success: false,
+        message: "Original reference capture is missing.",
+      });
+    }
+
+    const condition = String(
+      originalCapture.condition || point.condition || ""
+    );
+
+    const noLoad = isNoLoadCondition(condition);
+
+    const samplingSettings = noLoad
+      ? profile.noLoadSampling || {}
+      : profile.loadSampling || {};
+
+    const sampleCount = Math.min(
+      100,
+      Math.max(1, Number(samplingSettings.sampleCount) || 10)
+    );
+
+    const requiredChannels =
+      originalCapture.requiredChannels?.length
+        ? originalCapture.requiredChannels
+        : CHANNELS;
+
+    const samples = await ProductionTelemetry.find({
+      serialNumber: session.serialNumber,
+      telemetryRequestId,
+      telemetryMode: "fast",
+      sampleFresh: true,
+      sampleAgeMs: { $gte: 0, $lte: 2000 },
+      sessionActive: false,
+      adminRelayTest: noLoad ? false : true,
+      capturedAt: {
+        $gte: new Date(session.appliedAt),
+        $lte: new Date(),
+      },
+    })
+      .sort({ capturedAt: -1 })
+      .limit(sampleCount)
+      .lean();
+
+    if (samples.length < sampleCount) {
+      return res.status(409).json({
+        success: false,
+        message: "Not enough fresh post-calibration samples.",
+        data: {
+          requiredSamples: sampleCount,
+          availableSamples: samples.length,
+        },
+      });
+    }
+
+    const chronologicalSamples = samples.reverse();
+
+    for (const channel of requiredChannels) {
+      if (
+        chronologicalSamples.some(
+          (sample) => finiteValue(sample[channel]) === null
+        )
+      ) {
+        return res.status(409).json({
+          success: false,
+          message: `Missing valid ${channel} telemetry.`,
+        });
+      }
+    }
+
+    const capture = {
+      pointCode,
+      condition,
+      telemetryRequestId,
+      requiredChannels,
+
+      // Reference values are copied from the original capture.
+      reference: originalCapture.reference,
+
+      measurement: calculateStatistics(
+        chronologicalSamples,
+        CHANNELS
+      ),
+
+      sampleCount: chronologicalSamples.length,
+      sampleIds: chronologicalSamples.map(
+        (sample) => sample._id
+      ),
+
+      firstSampleAt: chronologicalSamples[0].capturedAt,
+      lastSampleAt:
+        chronologicalSamples[chronologicalSamples.length - 1].capturedAt,
+
+      capturedAt: new Date(),
+      capturedBy: req.user?.userId || null,
+    };
+
+    session.verificationCaptures.push(capture);
+    session.updatedBy = req.user?.userId || null;
+
+    await session.save();
+
+    return res.status(201).json({
+      success: true,
+      message: "Post-calibration verification point captured.",
+      data: {
+        sessionId: session._id,
+        capture,
+      },
+    });
+
+  } catch (error) {
+    console.error(
+      "[Production V3] captureVerificationPoint:",
+      error
+    );
+
+    return sendError(res, error);
+  }
+};
 
 // ==================================================
 // VERIFY CALIBRATION
@@ -816,77 +990,107 @@ exports.verifyCalibration = async (req, res) => {
       current: criteria.requireCurrentVerification !== false,
       power: criteria.requirePowerVerification !== false,
     };
+const verificationByCode = new Map();
 
-    const results = [];
-    const skippedZeroReference = [];
+for (const capture of session.verificationCaptures || []) {
+  verificationByCode.set(capture.pointCode, capture);
+}
 
-    for (const capture of session.captures || []) {
-      const point = referencePoints.find(
-        (item) => String(item.code) === capture.pointCode
-      );
+const missingVerificationPoints = requiredPointCodes.filter(
+  (code) => !verificationByCode.has(code)
+);
 
-      if (!point || point.required === false) continue;
+if (missingVerificationPoints.length) {
+  return res.status(409).json({
+    success: false,
+    message: "Fresh post-calibration verification is incomplete.",
+    missingPoints: missingVerificationPoints,
+  });
+}
 
-      for (const channel of capture.requiredChannels || CHANNELS) {
-        if (!enabledMap[channel]) continue;
+const originalCaptures = new Map();
 
-        const reference = finiteValue(capture.reference?.[channel]);
-        const measured = finiteValue(
-          capture.measurement?.[channel]?.mean
-        );
+for (const capture of session.captures || []) {
+  originalCaptures.set(capture.pointCode, capture);
+}
 
-        if (reference === null || measured === null) {
-          return res.status(409).json({
-            success: false,
-            message: `Missing ${channel} reference or measured value for ${capture.pointCode}.`,
-          });
-        }
+const results = [];
+const skippedZeroReference = [];
 
-        // Percentage error is undefined for a zero reference.
-        // Zero-reference captures are retained for calibration
-        // but not used for percentage-based acceptance.
-        if (reference === 0) {
-          skippedZeroReference.push({
-            pointCode: capture.pointCode,
-            channel,
-            measured,
-            reference,
-          });
-          continue;
-        }
+for (const pointCode of requiredPointCodes) {
 
-        const tolerance = Number(toleranceMap[channel]);
+  const capture = verificationByCode.get(pointCode);
+  const original = originalCaptures.get(pointCode);
 
-        if (!Number.isFinite(tolerance)) {
-          return res.status(409).json({
-            success: false,
-            message: `Calibration Profile must define ${channel}TolerancePercent.`,
-          });
-        }
+  if (!capture || !original) {
+    return res.status(409).json({
+      success: false,
+      message: `Missing original or verification capture: ${pointCode}`,
+    });
+  }
 
-        const errorPercent =
-          Math.abs(measured - reference) / Math.abs(reference) * 100;
+  for (const channel of capture.requiredChannels || CHANNELS) {
 
-        results.push({
-          pointCode: capture.pointCode,
-          channel,
-          measured,
-          reference,
-          errorPercent,
-          allowedErrorPercent: tolerance,
-          passed: errorPercent <= tolerance,
-        });
-      }
-    }
+    if (!enabledMap[channel]) continue;
 
-    if (!results.length) {
+    const reference = finiteValue(
+      original.reference?.[channel]
+    );
+
+    const measured = finiteValue(
+      capture.measurement?.[channel]?.mean
+    );
+
+    if (reference === null || measured === null) {
       return res.status(409).json({
         success: false,
-        message: "No positive reference values were available for verification.",
-        skippedZeroReference,
+        message: `Missing verification measurement for ${pointCode}/${channel}.`,
       });
     }
 
+    if (reference === 0) {
+      skippedZeroReference.push({
+        pointCode,
+        channel,
+        reference,
+        measured,
+      });
+
+      continue;
+    }
+
+    const tolerance = Number(toleranceMap[channel]);
+
+    if (!Number.isFinite(tolerance)) {
+      return res.status(409).json({
+        success: false,
+        message: `Missing ${channel} verification tolerance.`,
+      });
+    }
+
+    const errorPercent =
+      Math.abs(measured - reference) /
+      Math.abs(reference) * 100;
+
+    results.push({
+      pointCode,
+      channel,
+      reference,
+      measured,
+      errorPercent,
+      allowedErrorPercent: tolerance,
+      passed: errorPercent <= tolerance,
+    });
+  }
+}
+
+if (!results.length) {
+  return res.status(409).json({
+    success: false,
+    message: "No positive reference values available for verification.",
+    skippedZeroReference,
+  });
+}
     const passed = results.every((item) => item.passed);
 
     const now = new Date();

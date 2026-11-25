@@ -115,7 +115,10 @@ router.post(
   "/calibration/sessions/:sessionId/cancel",
   calibrationController.cancelSession
 );
-
+router.post(
+  "/calibration/sessions/:sessionId/verification-captures",
+  calibrationController.captureVerificationPoint
+);
 
 // ==================================================
 // DEVICE INVENTORY
