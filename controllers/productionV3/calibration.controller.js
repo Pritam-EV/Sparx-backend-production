@@ -711,9 +711,21 @@ exports.applyCalibration = async (req, res) => {
         },
         createdBy: req.user?.userId,
       });
-
-      session.applyCommandId = command._id;
-      await session.save();
+await CalibrationSession.updateOne(
+  {
+    _id: session._id,
+    status: "applying",
+    applyRequestId: requestId,
+  },
+  {
+    $set: {
+      status: "in_progress",
+      applyRequestId: null,
+      applyCommandId: null,
+      lastError: publishError.message,
+    },
+  }
+);
 
       device.manufacturingStatus = "calibrating";
       device.calibration.status = "calibrating";

@@ -333,42 +333,70 @@ exports.promoteDevice = async (req, res) => {
     await device.save();
     await refreshBatchCountsForDevice(serialNumber);
     
-    try {
-      const command = await publishConfigCommand({
-        device,
-        payload,
-        action: "setConfig",
-        kind: "provisioning",
-        metadata: {
-          operation: "promotion",
-          nvsVersion,
-        },
-        createdBy: req.user?.userId,
-      });
+try {
+  const command = await publishConfigCommand({
+    device,
+    payload,
+    action: "setConfig",
+    kind: "identity_change",
+    metadata: {
+      operation: "identity_change",
+      oldDeviceId,
+      requestedDeviceId: newDeviceId,
+      nvsVersion,
+    },
+    createdBy: req.user?.userId,
+  });
 
-      device.provisioning.status = "sent";
-      device.provisioning.lastSentAt = new Date();
-      await device.save();
-
-      return res.status(202).json({
-        success: true,
-        message: "Device promoted to Group B. Awaiting firmware acknowledgement.",
-        data: {
-          serialNumber,
-          deviceId,
-          manufacturingStatus: device.manufacturingStatus,
-          provisioningStatus: device.provisioning.status,
-          requestId,
-          nvsVersion,
-          commandStatus: command.status,
-        },
-      });
-    } catch (publishError) {
-      device.provisioning.status = "failed";
-      device.provisioning.lastError = publishError.message;
-      await device.save();
-      throw publishError;
+  await ProductionDevice.updateOne(
+    {
+      serialNumber,
+      "provisioning.lastRequestId": requestId,
+      "provisioning.desiredConfigVersion": nvsVersion,
+      "provisioning.status": "pending",
+    },
+    {
+      $set: {
+        "provisioning.status": "sent",
+        "provisioning.lastSentAt": new Date(),
+        "provisioning.lastError": null,
+      },
     }
+  );
+
+  return res.status(202).json({
+    success: true,
+    message:
+      "Identity change command published. Current Device ID remains unchanged until acknowledgement.",
+    data: {
+      serialNumber,
+      oldDeviceId,
+      requestedDeviceId: newDeviceId,
+      requestId,
+      nvsVersion,
+      commandStatus: command.status,
+    },
+  });
+} catch (publishError) {
+  await ProductionDevice.updateOne(
+    {
+      serialNumber,
+      "provisioning.lastRequestId": requestId,
+      "provisioning.desiredConfigVersion": nvsVersion,
+      "provisioning.status": {
+        $in: ["pending", "sent"],
+      },
+    },
+    {
+      $set: {
+        "provisioning.status": "failed",
+        "provisioning.lastError": publishError.message,
+      },
+    }
+  );
+
+  throw publishError;
+}
   } catch (error) {
     console.error("[Production V3] promoteDevice:", error);
     return sendError(res, error);
@@ -404,7 +432,8 @@ exports.retryProvisioning = async (req, res) => {
     ) {
       return res.status(409).json({
         success: false,
-        message: "Provisioning retry is not allowed in the current lifecycle state.",
+        message:
+          "Provisioning retry is not allowed in the current lifecycle state.",
         currentStatus: device.manufacturingStatus,
       });
     }
@@ -413,6 +442,26 @@ exports.retryProvisioning = async (req, res) => {
       return res.status(409).json({
         success: false,
         message: "Device ID has not been assigned.",
+      });
+    }
+
+    // Do not overwrite the state of another pending configuration.
+    const pendingCommand = await ProductionCommand.findOne({
+      serialNumber,
+      action: {
+        $in: ["setConfig", "setCalibration"],
+      },
+      status: {
+        $in: ACTIVE_COMMAND_STATUSES,
+      },
+    }).sort({ createdAt: -1 });
+
+    if (pendingCommand) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Another configuration or calibration command is awaiting acknowledgement.",
+        requestId: pendingCommand.requestId,
       });
     }
 
@@ -428,7 +477,10 @@ exports.retryProvisioning = async (req, res) => {
 
     const firmwareProfile = device.firmwareProfileId;
 
-    await validateFirmwareCompatibility(device, firmwareProfile);
+    await validateFirmwareCompatibility(
+      device,
+      firmwareProfile
+    );
 
     const nvsVersion =
       Math.max(
@@ -448,43 +500,98 @@ exports.retryProvisioning = async (req, res) => {
       requestId,
     });
 
+    // Save the new attempt before publishing.
     device.provisioning.status = "pending";
     device.provisioning.desiredConfigVersion = nvsVersion;
     device.provisioning.lastRequestId = requestId;
+    device.provisioning.lastSentAt = null;
+    device.provisioning.acknowledgedAt = null;
     device.provisioning.lastError = null;
     device.updatedBy = req.user?.userId || null;
 
     await device.save();
 
-    const command = await publishConfigCommand({
-      device,
-      payload,
-      action: "setConfig",
-      kind: "provisioning",
-      metadata: {
-        operation: "retry",
-        nvsVersion,
-      },
-      createdBy: req.user?.userId,
-    });
+    let command;
 
-    device.provisioning.status = "sent";
-    device.provisioning.lastSentAt = new Date();
-    await device.save();
+    try {
+      command = await publishConfigCommand({
+        device,
+        payload,
+        action: "setConfig",
+        kind: "provisioning",
+        metadata: {
+          operation: "retry",
+          nvsVersion,
+        },
+        createdBy: req.user?.userId,
+      });
+
+      // Only mark as sent if the ACK handler has not already
+      // changed provisioning.status to acknowledged or failed.
+      await ProductionDevice.updateOne(
+        {
+          serialNumber,
+          "provisioning.lastRequestId": requestId,
+          "provisioning.desiredConfigVersion": nvsVersion,
+          "provisioning.status": "pending",
+        },
+        {
+          $set: {
+            "provisioning.status": "sent",
+            "provisioning.lastSentAt": new Date(),
+            "provisioning.lastError": null,
+          },
+        }
+      );
+    } catch (publishError) {
+      // Do not overwrite a successful ACK if one arrived
+      // while the publish operation was completing.
+      await ProductionDevice.updateOne(
+        {
+          serialNumber,
+          "provisioning.lastRequestId": requestId,
+          "provisioning.desiredConfigVersion": nvsVersion,
+          "provisioning.status": {
+            $in: ["pending", "sent"],
+          },
+        },
+        {
+          $set: {
+            "provisioning.status": "failed",
+            "provisioning.lastSentAt": null,
+            "provisioning.lastError": publishError.message,
+          },
+        }
+      );
+
+      throw publishError;
+    }
+
+    const latestDevice = await ProductionDevice.findOne({
+      serialNumber,
+    })
+      .select("deviceId manufacturingStatus provisioning")
+      .lean();
 
     return res.status(202).json({
       success: true,
       message: "Provisioning retry published.",
       data: {
         serialNumber,
-        deviceId: device.deviceId,
+        deviceId: latestDevice?.deviceId || device.deviceId,
         requestId,
         nvsVersion,
         commandStatus: command.status,
+        provisioningStatus:
+          latestDevice?.provisioning?.status || "sent",
       },
     });
   } catch (error) {
-    console.error("[Production V3] retryProvisioning:", error);
+    console.error(
+      "[Production V3] retryProvisioning:",
+      error
+    );
+
     return sendError(res, error);
   }
 };

@@ -43,7 +43,10 @@ const calibrationSessionSchema = new mongoose.Schema(
       ref: "CalibrationProfile",
       required: true,
     },
-
+    verificationCaptures: {
+    type: [mongoose.Schema.Types.Mixed],
+    default: [],
+    },
     // Store the exact profile version used for this session.
     profileSnapshot: {
       type: mongoose.Schema.Types.Mixed,

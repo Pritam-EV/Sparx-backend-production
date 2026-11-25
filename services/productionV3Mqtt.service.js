@@ -639,6 +639,7 @@ if (command.action === "setCalibration") {
   const calibrationSession = await CalibrationSession.findOne({
     serialNumber,
     applyRequestId: command.requestId,
+    status: "applying",
   });
 
   if (calibrationSession) {
