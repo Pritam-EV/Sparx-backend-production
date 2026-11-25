@@ -200,7 +200,7 @@ exports.getDevices = async (req, res) => {
 
     const [devices, total] = await Promise.all([
       ProductionDevice.find(filter)
-        .select("-wifiCredentials -identityHistory")
+       
         .populate({
           path: "batchId",
           select: "batchNumber batchName project hardwareRevision pcbBatch status",
@@ -274,7 +274,7 @@ exports.getDeviceBySerial = async (req, res) => {
     const device = await ProductionDevice.findOne({
       serialNumber,
     })
-      .select("-wifiCredentials -identityHistory")
+      
       .populate({
         path: "batchId",
         select: [
@@ -572,7 +572,7 @@ exports.updateDeviceDetails = async (req, res) => {
         context: "query",
       }
     )
-      .select("-wifiCredentials -identityHistory")
+      
       .lean();
 
     if (!updatedDevice) {
