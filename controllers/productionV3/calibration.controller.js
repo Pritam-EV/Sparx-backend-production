@@ -711,21 +711,18 @@ exports.applyCalibration = async (req, res) => {
         },
         createdBy: req.user?.userId,
       });
-await CalibrationSession.updateOne(
-  {
-    _id: session._id,
-    status: "applying",
-    applyRequestId: requestId,
-  },
-  {
-    $set: {
-      status: "in_progress",
-      applyRequestId: null,
-      applyCommandId: null,
-      lastError: publishError.message,
-    },
-  }
-);
+      await CalibrationSession.updateOne(
+        {
+          _id: session._id,
+          status: "applying",
+          applyRequestId: requestId,
+        },
+        {
+          $set: {
+            applyCommandId: command._id,
+          },
+        }
+      );
 
       device.manufacturingStatus = "calibrating";
       device.calibration.status = "calibrating";
@@ -746,14 +743,25 @@ await CalibrationSession.updateOne(
         },
       });
     } catch (publishError) {
-      session.status = "in_progress";
-      session.applyRequestId = null;
-      session.applyCommandId = null;
-      session.lastError = publishError.message;
-      await session.save();
-
-      throw publishError;
+  await CalibrationSession.updateOne(
+    {
+      _id: session._id,
+      status: "applying",
+      applyRequestId: requestId,
+    },
+    {
+      $set: {
+        status: "in_progress",
+        applyRequestId: null,
+        applyCommandId: null,
+        lastError: publishError.message,
+        updatedBy: req.user?.userId || null,
+      },
     }
+  );
+
+  throw publishError;
+}
   } catch (error) {
     console.error("[Production V3] applyCalibration:", error);
     return sendError(res, error);
