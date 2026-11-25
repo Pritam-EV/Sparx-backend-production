@@ -994,11 +994,15 @@ exports.applyCalibration = async (req, res) => {
       values[key] = value;
     }
 
-    const pending = await ProductionCommand.findOne({
-      serialNumber,
-      action: "setCalibration",
-      status: { $in: ACTIVE_COMMAND_STATUSES },
-    });
+const pending = await ProductionCommand.findOne({
+  serialNumber,
+  action: {
+    $in: ["setConfig", "setCalibration"],
+  },
+  status: {
+    $in: ACTIVE_COMMAND_STATUSES,
+  },
+});
 
     if (pending) {
       return res.status(409).json({
@@ -1022,12 +1026,19 @@ exports.applyCalibration = async (req, res) => {
       payload,
       action: "setCalibration",
       kind: "calibration",
-      metadata: {
+        metadata: {
         operation: "calibration_apply",
         calibrationProfileId: String(profile._id),
         calibrationProfileVersion: profile.profileVersion,
+
+        // The firmware's setCalibration ACK reports the current
+        // g_nvsVersion, not a calibration-specific request ID.
+        expectedNvsVersion: Number(
+            device.provisioning?.appliedConfigVersion || 0
+        ),
+
         constants: values,
-      },
+        },
       createdBy: req.user?.userId,
     });
 

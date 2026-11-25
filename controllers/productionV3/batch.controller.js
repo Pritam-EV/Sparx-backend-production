@@ -740,7 +740,9 @@ exports.updateBatch = async (req, res) => {
       const devicesOutsideGroupA =
         await ProductionDevice.countDocuments({
           batchId: batch._id,
-          manufacturingStatus: { $ne: "group_a" },
+          manufacturingStatus: {
+  $nin: ["group_a", "discovered"],
+},
         }).session(mongoSession);
 
       if (devicesOutsideGroupA > 0) {
@@ -808,7 +810,9 @@ exports.updateBatch = async (req, res) => {
         await ProductionDevice.updateMany(
           {
             batchId: batch._id,
-            manufacturingStatus: "group_a",
+            manufacturingStatus: {
+  $in: ["group_a", "discovered"],
+},
           },
           {
             $set: deviceProfileUpdates,

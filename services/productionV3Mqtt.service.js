@@ -198,6 +198,35 @@ async function publishConfigCommand({
   metadata = {},
   createdBy,
 }) {
+  const serialNumber = normalizeSerial(
+    device?.serialNumber
+  );
+
+  if (!serialNumber) {
+    throw new Error("Valid device serial number is required.");
+  }
+
+  const pending = await ProductionCommand.findOne({
+    serialNumber,
+    action: {
+      $in: ["setConfig", "setCalibration"],
+    },
+    status: {
+      $in: PENDING_COMMAND_STATUSES,
+    },
+  }).sort({ createdAt: -1 });
+
+  if (pending) {
+    const error = new Error(
+      "Another configuration or calibration command is awaiting acknowledgement."
+    );
+
+    error.statusCode = 409;
+    error.requestId = pending.requestId;
+
+    throw error;
+  }
+
   const requestId =
     payload.requestId || createRequestId("config");
 
@@ -206,25 +235,23 @@ async function publishConfigCommand({
     requestId,
   };
 
-  const topic =
-    `viz/${normalizeSerial(device.serialNumber)}/config`;
+  const configTopic =
+    `viz/${serialNumber}/config`;
 
-  // Current firmware's setCalibration ACK is retained and does not
-  // echo requestId. Clear the previous retained ACK before sending
-  // a new calibration apply, so an old ACK cannot satisfy it.
-  if (action === "setCalibration") {
-    await publishRetainedClear(
-      `viz/${normalizeSerial(device.serialNumber)}/configAck`
-    );
-  }
+  const acknowledgementTopic =
+    `viz/${serialNumber}/configAck`;
+
+  // The firmware publishes retained config acknowledgements.
+  // Clear any previous ACK before sending the new command.
+  await publishRetainedClear(acknowledgementTopic);
 
   return publishTrackedCommand({
     requestId,
-    serialNumber: device.serialNumber,
+    serialNumber,
     deviceId: device.deviceId,
     action,
     kind,
-    topic,
+    topic: configTopic,
     payload: message,
     metadata,
     createdBy,
@@ -401,59 +428,89 @@ async function handleAdminAck(parts, message) {
 // INCOMING: CONFIG ACK
 // viz/<SERIAL>/configAck
 // ==================================================
-
 async function handleConfigAck(parts, message) {
+  const topicSerial = normalizeSerial(parts[1]);
+
   const serialNumber = normalizeSerial(
     message.serialNumber || parts[1]
   );
 
-  if (!serialNumber) return;
+  if (!topicSerial || serialNumber !== topicSerial) {
+    console.warn(
+      "[Production V3 MQTT] Config ACK serial mismatch."
+    );
+    return;
+  }
 
-  const ackStatus = String(message.status || "").toLowerCase();
+  const ackStatus = String(
+    message.status || ""
+  ).toLowerCase();
 
-  if (!["ok", "error"].includes(ackStatus)) return;
+  if (!["ok", "error"].includes(ackStatus)) {
+    return;
+  }
 
-let command = null;
+  const nvsVersion = Number(message.nvsVersion);
 
-// setCalibration ACK does not echo requestId or a dedicated version.
-// Give the single pending calibration apply priority.
-command = await ProductionCommand.findOne({
-  serialNumber,
-  action: "setCalibration",
-  status: { $in: PENDING_COMMAND_STATUSES },
-}).sort({ createdAt: -1 });
+  if (
+    !Number.isSafeInteger(nvsVersion) ||
+    nvsVersion < 0
+  ) {
+    console.warn(
+      "[Production V3 MQTT] Invalid config ACK version."
+    );
+    return;
+  }
 
-const nvsVersion = Number(message.nvsVersion);
-
-if (!command && Number.isFinite(nvsVersion)) {
-  command = await ProductionCommand.findOne({
+  // Match setConfig strictly by the requested NVS version.
+  const configCommand = await ProductionCommand.findOne({
     serialNumber,
     action: "setConfig",
     "metadata.nvsVersion": nvsVersion,
     status: { $in: PENDING_COMMAND_STATUSES },
-  }).sort({ createdAt: -1 });
-}
+  });
 
-  // setCalibration currently does not echo requestId or an apply
-  // version. Only one pending setCalibration is permitted per serial.
-  if (!command) {
-    command = await ProductionCommand.findOne({
-      serialNumber,
-      action: "setCalibration",
-      status: { $in: PENDING_COMMAND_STATUSES },
-    }).sort({ createdAt: -1 });
-  }
+  // setCalibration does not increment NVS version.
+  // Its expected version is the currently applied configuration.
+  const calibrationCommand = await ProductionCommand.findOne({
+    serialNumber,
+    action: "setCalibration",
+    "metadata.expectedNvsVersion": nvsVersion,
+    status: { $in: PENDING_COMMAND_STATUSES },
+  });
 
-  if (!command) {
-    console.warn(
-      "[Production V3 MQTT] Unmatched config ACK:",
+  if (configCommand && calibrationCommand) {
+    console.error(
+      "[Production V3 MQTT] Ambiguous config ACK:",
       serialNumber,
       nvsVersion
     );
     return;
   }
 
-  const success = ackStatus === "ok";
+  const command = configCommand || calibrationCommand;
+
+  if (!command) {
+    console.warn(
+      "[Production V3 MQTT] No matching config command:",
+      serialNumber,
+      nvsVersion
+    );
+    return;
+  }
+
+  const ackMessage = String(message.message || "");
+
+  // Firmware reports an "ok" for an older/duplicate setConfig
+  // without actually applying the requested configuration.
+  const duplicateIgnored =
+    command.action === "setConfig" &&
+    /older or duplicate configuration ignored/i.test(
+      ackMessage
+    );
+
+  const success =
+    ackStatus === "ok" && !duplicateIgnored;
 
   await ProductionCommand.updateOne(
     { _id: command._id },
@@ -472,42 +529,51 @@ if (!command && Number.isFinite(nvsVersion)) {
 
   if (!device) return;
 
+  const now = new Date();
+
   if (command.action === "setConfig") {
     const operation = command.metadata?.operation;
 
     device.provisioning.status =
       success ? "acknowledged" : "failed";
 
-    device.provisioning.appliedConfigVersion =
-      success
-        ? Number(message.nvsVersion || command.metadata.nvsVersion || 0)
-        : device.provisioning.appliedConfigVersion;
-
-    device.provisioning.acknowledgedAt = new Date();
+    device.provisioning.acknowledgedAt = now;
 
     device.provisioning.lastError =
-      success ? null : message.message || "Device rejected configuration.";
+      success
+        ? null
+        : ackMessage || "Device rejected configuration.";
 
     if (success) {
+      device.provisioning.appliedConfigVersion =
+        nvsVersion;
+
       const acknowledgedDeviceId =
         normalizeDeviceId(message.deviceId) ||
         normalizeDeviceId(command.payload?.deviceId);
 
       if (operation === "identity_change") {
-        const oldDeviceId = command.metadata?.oldDeviceId;
-        const newDeviceId = acknowledgedDeviceId;
+        const oldDeviceId =
+          command.metadata?.oldDeviceId || null;
 
-        if (newDeviceId && newDeviceId !== oldDeviceId) {
-          device.identityHistory.push({
-            oldDeviceId: oldDeviceId || null,
-            newDeviceId,
-            requestId: command.requestId,
-            status: "acknowledged",
-            requestedBy: command.createdBy || "admin",
-            acknowledgedAt: new Date(),
-            deviceMessage: message.message || null,
-          });
+        const newDeviceId =
+          acknowledgedDeviceId;
 
+        const requestedDeviceId =
+          command.metadata?.requestedDeviceId ||
+          newDeviceId;
+
+        device.identityHistory.push({
+          oldDeviceId,
+          newDeviceId: requestedDeviceId,
+          requestId: command.requestId,
+          status: "acknowledged",
+          requestedBy: command.createdBy || "admin",
+          acknowledgedAt: now,
+          deviceMessage: ackMessage || null,
+        });
+
+        if (newDeviceId) {
           device.deviceId = newDeviceId;
         }
       } else {
@@ -519,15 +585,31 @@ if (!command && Number.isFinite(nvsVersion)) {
           operation === "promotion" ||
           operation === "retry"
         ) {
-          device.manufacturingStatus = "calibration_required";
-          device.calibration.status = "calibration_required";
+          device.manufacturingStatus =
+            "calibration_required";
+
+          device.calibration.status =
+            "calibration_required";
         }
       }
     }
-
-    device.updatedBy = command.createdBy || device.updatedBy;
-    await device.save();
   }
+
+  if (command.action === "setCalibration") {
+    device.calibration.status =
+      success ? "calibrating" : "failed";
+
+    if (!success) {
+      device.calibration.lastFailedAt = now;
+      device.calibration.lastFailureReason =
+        ackMessage || "Firmware rejected calibration.";
+    }
+  }
+
+  device.updatedBy =
+    command.createdBy || device.updatedBy;
+
+  await device.save();
 }
 
 
