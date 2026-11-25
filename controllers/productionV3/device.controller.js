@@ -467,7 +467,11 @@ exports.updateDeviceDetails = async (req, res) => {
       });
     }
 
-    if (existingDevice.manufacturingStatus !== "group_a") {
+    if (
+  !["group_a", "discovered"].includes(
+    existingDevice.manufacturingStatus
+  )
+) {
       return res.status(409).json({
         success: false,
         message: "Device details can only be edited while the device is in Group A.",
@@ -555,7 +559,9 @@ exports.updateDeviceDetails = async (req, res) => {
     const updatedDevice = await ProductionDevice.findOneAndUpdate(
       {
         serialNumber,
-        manufacturingStatus: "group_a",
+        manufacturingStatus: {
+  $in: ["group_a", "discovered"],
+},
       },
       {
         $set: updates,

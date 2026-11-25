@@ -7,6 +7,7 @@ const mqttClient = require('./mqttClient'); // shared connection
 const Receipt = require('./models/Receipt');
 const DeviceTelemetry = require('./models/deviceTelemetry');
 const DeviceProvision = require('./models/DeviceProvision');
+const ProductionDevice = require("./models/ProductionDevice");
 const {
   CONFIG_ACK_STATUS,
   PROVISION_STATUS,
@@ -206,6 +207,15 @@ if (
   };
 
   try {
+    // Production 3.0 config ACKs are handled by the V3 subscriber.
+// Never mutate legacy Device / DeviceProvision records for V3 devices.
+const productionV3Device = await ProductionDevice.findOne({
+  serialNumber: String(serialNumber).trim().toUpperCase(),
+}).select("_id").lean();
+
+if (productionV3Device) {
+  return;
+}
     const device = await Device.findOne({
       serialNumber,
     });
@@ -328,7 +338,15 @@ const devKey = normalizeDeviceId(deviceId);
 
 try {
 
+// Prevent Production 3.0 telemetry from entering the legacy
+// Device / DeviceProvision telemetry pipeline.
+const productionV3Device = await ProductionDevice.findOne({
+  deviceId: devKey,
+}).select("_id").lean();
 
+if (productionV3Device) {
+  return;
+}
 
       // If no Device document exists yet, auto-create from DeviceProvision
 
