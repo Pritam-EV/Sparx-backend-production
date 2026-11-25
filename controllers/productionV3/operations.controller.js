@@ -6,6 +6,9 @@ const FirmwareProfile = require("../../models/FirmwareProfile");
 const CalibrationProfile = require("../../models/CalibrationProfile");
 const ProductionCommand = require("../../models/ProductionCommand");
 const ProductionTelemetry = require("../../models/ProductionTelemetry");
+const {
+  refreshBatchCountsForDevice,
+} = require("../../services/productionV3Lifecycle.service");
 
 const {
   encryptSecret,
@@ -64,7 +67,11 @@ async function findDevice(serialNumber, options = {}) {
   });
 
   if (options.secrets) {
-    query.select("+wifiCredentials +identityHistory");
+    query.select(
+      "+wifiCredentials.encryptedSsid " +
+      "+wifiCredentials.encryptedPassword " +
+      "+identityHistory"
+    );
   }
 
   if (options.profiles) {
@@ -118,7 +125,9 @@ async function validateFirmwareCompatibility(device, firmwareProfile) {
     "";
 
   const meteringHardware =
-    device.productionProfileId?.meteringHardware || "";
+    device.productionProfileId?.meteringHardware ||
+    device.batchId?.meteringHardware ||
+    "";
 
   if (
     firmwareProfile.supportedHardwareRevisions?.length &&
@@ -322,7 +331,8 @@ exports.promoteDevice = async (req, res) => {
     device.updatedBy = req.user?.userId || null;
 
     await device.save();
-
+    await refreshBatchCountsForDevice(serialNumber);
+    
     try {
       const command = await publishConfigCommand({
         device,

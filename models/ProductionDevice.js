@@ -199,7 +199,10 @@ const productionDeviceSchema = new mongoose.Schema(
       default: [],
       select: false,
     },
-
+dispatch: {
+  type: mongoose.Schema.Types.Mixed,
+  default: null,
+},
     notes: { type: String, default: "" },
     createdBy: { type: String, default: null, trim: true },
     updatedBy: { type: String, default: null, trim: true },

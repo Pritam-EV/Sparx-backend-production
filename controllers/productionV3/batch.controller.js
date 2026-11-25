@@ -869,3 +869,156 @@ exports.updateBatch = async (req, res) => {
     await mongoSession.endSession();
   }
 };
+
+// ==================================================
+// COMPLETE BATCH
+// POST /batches/:batchId/complete
+// ==================================================
+
+exports.completeBatch = async (req, res) => {
+  try {
+    const { batchId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(batchId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid batch ID.",
+      });
+    }
+
+    const batch = await ProductionBatch.findById(batchId);
+
+    if (!batch) {
+      return res.status(404).json({
+        success: false,
+        message: "Production batch not found.",
+      });
+    }
+
+    if (["closed", "cancelled"].includes(batch.status)) {
+      return res.status(409).json({
+        success: false,
+        message: "Closed or cancelled batches cannot be completed.",
+      });
+    }
+
+    const totalDevices = await ProductionDevice.countDocuments({
+      batchId: batch._id,
+    });
+
+    if (!totalDevices) {
+      return res.status(409).json({
+        success: false,
+        message: "The batch has no devices.",
+      });
+    }
+
+    const incompleteDevices = await ProductionDevice.find({
+      batchId: batch._id,
+      manufacturingStatus: {
+        $nin: [
+          "production_ready",
+          "dispatched",
+          "retired",
+        ],
+      },
+    })
+      .select("serialNumber manufacturingStatus")
+      .limit(20)
+      .lean();
+
+    if (incompleteDevices.length) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "All devices must reach Production Ready, Dispatched or Retired before completing the batch.",
+        incompleteDevices,
+      });
+    }
+
+    const {
+      refreshBatchCounts,
+    } = require("../../services/productionV3Lifecycle.service");
+
+    await refreshBatchCounts(batch._id);
+
+    batch.status = "production_completed";
+    batch.actualCompletionDate = new Date();
+    batch.updatedBy = req.user?.userId || null;
+
+    await batch.save();
+
+    return res.json({
+      success: true,
+      message: "Production batch marked as completed.",
+      data: batch,
+    });
+  } catch (error) {
+    console.error("[Production V3] completeBatch:", error);
+
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.statusCode
+        ? error.message
+        : "Failed to complete production batch.",
+    });
+  }
+};
+
+
+// ==================================================
+// CLOSE BATCH
+// POST /batches/:batchId/close
+// ==================================================
+
+exports.closeBatch = async (req, res) => {
+  try {
+    const { batchId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(batchId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid batch ID.",
+      });
+    }
+
+    const batch = await ProductionBatch.findById(batchId);
+
+    if (!batch) {
+      return res.status(404).json({
+        success: false,
+        message: "Production batch not found.",
+      });
+    }
+
+    if (batch.status !== "production_completed") {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Only production-completed batches can be closed.",
+        currentStatus: batch.status,
+      });
+    }
+
+    batch.status = "closed";
+    batch.closedAt = new Date();
+    batch.updatedBy = req.user?.userId || null;
+
+    await batch.save();
+
+    return res.json({
+      success: true,
+      message: "Production batch closed successfully.",
+      data: batch,
+    });
+  } catch (error) {
+    console.error("[Production V3] closeBatch:", error);
+
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.statusCode
+        ? error.message
+        : "Failed to close production batch.",
+    });
+  }
+};

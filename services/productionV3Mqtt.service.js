@@ -5,6 +5,11 @@ const mqttClient = require("../mqttClient");
 const ProductionDevice = require("../models/ProductionDevice");
 const ProductionCommand = require("../models/ProductionCommand");
 const ProductionTelemetry = require("../models/ProductionTelemetry");
+const CalibrationSession = require("../models/CalibrationSession");
+
+const {
+  refreshBatchCountsForDevice,
+} = require("./productionV3Lifecycle.service");
 
 const ADMIN_ACTIONS = [
   "relayStart",
@@ -266,12 +271,25 @@ async function publishConfigCommand({
 
 async function handleDiscovery(parts, message) {
   const topicSerial = normalizeSerial(parts[1]);
+
   const reportedSerial = normalizeSerial(
     message.serial || message.serialNumber
   );
 
-  if (!topicSerial || !reportedSerial || topicSerial !== reportedSerial) {
-    console.warn("[Production V3 MQTT] Discovery serial mismatch.");
+  if (
+    !topicSerial ||
+    !reportedSerial ||
+    topicSerial !== reportedSerial
+  ) {
+    console.warn(
+      "[Production V3 MQTT] Discovery serial mismatch."
+    );
+    return;
+  }
+
+  // Current firmware announces discovery with status READY.
+  // Ignore all other statuses for lifecycle promotion.
+  if (String(message.status || "").toUpperCase() !== "READY") {
     return;
   }
 
@@ -308,7 +326,6 @@ async function handleDiscovery(parts, message) {
     }
   );
 
-  // Set firstSeenAt once, not on every heartbeat.
   await ProductionDevice.updateOne(
     {
       serialNumber: topicSerial,
@@ -320,6 +337,8 @@ async function handleDiscovery(parts, message) {
       },
     }
   );
+
+  await refreshBatchCountsForDevice(topicSerial);
 }
 
 
@@ -595,21 +614,54 @@ async function handleConfigAck(parts, message) {
     }
   }
 
-  if (command.action === "setCalibration") {
-    device.calibration.status =
-      success ? "calibrating" : "failed";
+if (command.action === "setCalibration") {
+  device.calibration.status =
+    success ? "calibrating" : "failed";
+
+  if (success) {
+    device.manufacturingStatus = "calibrating";
+  } else {
+    device.manufacturingStatus = "calibration_failed";
+    device.calibration.lastFailedAt = now;
+    device.calibration.lastFailureReason =
+      ackMessage || "Firmware rejected calibration.";
+  }
+}
+
+device.updatedBy =
+  command.createdBy || device.updatedBy;
+
+await device.save();
+
+// Update the linked calibration session when the firmware
+// acknowledges setCalibration.
+if (command.action === "setCalibration") {
+  const calibrationSession = await CalibrationSession.findOne({
+    serialNumber,
+    applyRequestId: command.requestId,
+  });
+
+  if (calibrationSession) {
+    calibrationSession.status = success
+      ? "awaiting_verification"
+      : "failed";
+
+    calibrationSession.appliedAt = success ? now : null;
+
+    calibrationSession.lastError = success
+      ? null
+      : ackMessage || "Firmware rejected calibration.";
 
     if (!success) {
-      device.calibration.lastFailedAt = now;
-      device.calibration.lastFailureReason =
-        ackMessage || "Firmware rejected calibration.";
+      calibrationSession.completedAt = now;
     }
+
+    await calibrationSession.save();
   }
+}
 
-  device.updatedBy =
-    command.createdBy || device.updatedBy;
-
-  await device.save();
+// Batch summary should reflect the new device lifecycle state.
+await refreshBatchCountsForDevice(serialNumber);
 }
 
 

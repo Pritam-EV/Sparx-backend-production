@@ -8,6 +8,8 @@ const batchController = require("../controllers/productionV3/batch.controller");
 const deviceController = require("../controllers/productionV3/device.controller");
 const operationsController = require("../controllers/productionV3/operations.controller");
 const profileController = require("../controllers/productionV3/profile.controller");
+const calibrationController = require("../controllers/productionV3/calibration.controller");
+const lifecycleController = require("../controllers/productionV3/lifecycle.controller");
 
 router.use(
   authMiddleware,
@@ -39,6 +41,16 @@ router.patch(
   batchController.updateBatch
 );
 
+router.post(
+  "/batches/:batchId/complete",
+  lifecycleController.completeBatch
+);
+
+router.post(
+  "/batches/:batchId/close",
+  lifecycleController.closeBatch
+);
+
 
 // ==================================================
 // PROFILE MANAGEMENT
@@ -62,6 +74,46 @@ router.post(
 router.patch(
   "/profiles/:profileType/:profileId",
   profileController.updateProfile
+);
+
+
+// ==================================================
+// CALIBRATION SESSION MANAGEMENT
+// ==================================================
+
+router.get(
+  "/calibration/sessions",
+  calibrationController.getSessions
+);
+
+router.get(
+  "/calibration/sessions/:sessionId",
+  calibrationController.getSessionById
+);
+
+router.post(
+  "/devices/:serialNumber/calibration/sessions",
+  calibrationController.createSession
+);
+
+router.post(
+  "/calibration/sessions/:sessionId/captures",
+  calibrationController.capturePoint
+);
+
+router.post(
+  "/calibration/sessions/:sessionId/apply",
+  calibrationController.applyCalibration
+);
+
+router.post(
+  "/calibration/sessions/:sessionId/verify",
+  calibrationController.verifyCalibration
+);
+
+router.post(
+  "/calibration/sessions/:sessionId/cancel",
+  calibrationController.cancelSession
 );
 
 
@@ -126,17 +178,12 @@ router.post(
 
 
 // ==================================================
-// CALIBRATION
+// DEVICE DISPATCH
 // ==================================================
 
 router.post(
-  "/devices/:serialNumber/calibration/apply",
-  operationsController.applyCalibration
-);
-
-router.post(
-  "/devices/:serialNumber/calibration/verify",
-  operationsController.verifyCalibration
+  "/devices/:serialNumber/dispatch",
+  lifecycleController.dispatchDevice
 );
 
 module.exports = router;
