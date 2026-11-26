@@ -92,6 +92,18 @@ const calibrationSessionSchema = new mongoose.Schema(
       default: [],
     },
 
+    // Automatically calculated constants and full calculation provenance.
+    // These are proposals only until applyCalibration is explicitly invoked.
+    calculatedConstants: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+
+    calculation: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+
     appliedConstants: {
       type: mongoose.Schema.Types.Mixed,
       default: null,
