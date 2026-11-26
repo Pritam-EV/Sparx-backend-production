@@ -816,11 +816,11 @@ exports.sendAdminCommand = async (req, res) => {
       if (
         !Number.isInteger(durationSeconds) ||
         durationSeconds < 1 ||
-        durationSeconds > 15
+        durationSeconds > 300
       ) {
         return res.status(400).json({
           success: false,
-          message: "durationSeconds must be between 1 and 15.",
+          message: "durationSeconds must be between 1 and 300.",
         });
       }
 
