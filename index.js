@@ -11,10 +11,6 @@ app.use(cors({ origin: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
-app.use(
-  "/api/production/v3",
-  require("./routes/productionV3.routes")
-);
 // -----------------------------------------------------
 // SINGLE non-blocking mongoose connect (connect once only)
 // -----------------------------------------------------
@@ -68,6 +64,7 @@ function mountApiRoutes() {
     app.use("/api/payment", require("./routes/payment"));
     app.use("/api/receipts", require("./routes/receipts"));
     app.use("/api/wallet", require("./routes/wallet"));
+    app.use("/api/production/v3", require("./routes/productionV3.routes"));
    // console.log("API routes mounted.");
   } catch (e) {
     console.error("Failed to mount routes:", e && e.stack ? e.stack : e);
