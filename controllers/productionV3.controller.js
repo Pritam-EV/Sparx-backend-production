@@ -1374,11 +1374,15 @@ async function sendProductionCommand(req, res) {
     }
 
     try {
-      const result = await publishProductionCommand({
-        deviceId: device.groupB.deviceId,
-        action,
-        requestId,
-      });
+const result = await publishProductionCommand({
+  deviceId: device.groupB.deviceId,
+  action,
+  requestId,
+
+  testMode: req.body?.testMode,
+  durationSeconds: req.body?.durationSeconds,
+  intervalMs: req.body?.intervalMs,
+});
 
       return res.status(202).json({
         success: true,

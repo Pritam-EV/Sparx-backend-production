@@ -179,10 +179,14 @@ async function publishCalibration({
 // Topic: viz/<DEVICE_ID>/admincmd
 // --------------------------------------------------
 
+
 async function publishProductionCommand({
   deviceId,
   action,
   requestId,
+  testMode,
+  durationSeconds,
+  intervalMs,
 }) {
   const normalizedDeviceId = normalizeDeviceId(deviceId);
 
@@ -207,18 +211,74 @@ async function publishProductionCommand({
 
   const topic = `viz/${normalizedDeviceId}/admincmd`;
 
-  await publishAsync(topic, {
+  const payload = {
     action,
     requestId: correlationId,
-  });
+  };
+
+  if (action === "relayStart") {
+    const duration = Number(durationSeconds);
+
+    if (testMode !== true) {
+      throw new Error("Relay start requires testMode=true.");
+    }
+
+    if (
+      !Number.isInteger(duration) ||
+      duration < 1 ||
+      duration > 120
+    ) {
+      throw new Error(
+        "Relay test duration must be between 1 and 120 seconds."
+      );
+    }
+
+    payload.testMode = true;
+    payload.durationSeconds = duration;
+  }
+
+  if (action === "startFastTelemetry") {
+    const duration = Number(durationSeconds);
+    const interval =
+      intervalMs === undefined || intervalMs === null
+        ? 500
+        : Number(intervalMs);
+
+    if (
+      !Number.isInteger(duration) ||
+      duration < 1 ||
+      duration > 300
+    ) {
+      throw new Error(
+        "Fast telemetry duration must be between 1 and 300 seconds."
+      );
+    }
+
+    if (
+      !Number.isInteger(interval) ||
+      interval < 250 ||
+      interval > 5000
+    ) {
+      throw new Error(
+        "Fast telemetry interval must be between 250 and 5000 ms."
+      );
+    }
+
+    payload.intervalMs = interval;
+    payload.durationSeconds = duration;
+  }
+
+  await publishAsync(topic, payload);
 
   return {
     topic,
     requestId: correlationId,
     deviceId: normalizedDeviceId,
     action,
+    payload,
   };
 }
+
 
 // --------------------------------------------------
 // GROUP B CONFIG ACK
@@ -615,7 +675,7 @@ async function handleProductionAdminAck({
   let commandStatus = null;
 
   if (
-    ["ok", "success", "acknowledged", "accepted"].includes(rawStatus) ||
+    ["ok", "success", "acknowledged", "accepted", "duplicate",].includes(rawStatus) ||
     ack.success === true ||
     ack.ok === true
   ) {
