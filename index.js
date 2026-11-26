@@ -11,10 +11,7 @@ app.use(cors({ origin: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
-app.use(
-  "/api/production/v3",
-  require("./routes/productionV3.routes")
-);
+
 // -----------------------------------------------------
 // SINGLE non-blocking mongoose connect (connect once only)
 // -----------------------------------------------------

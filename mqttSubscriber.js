@@ -7,7 +7,6 @@ const mqttClient = require('./mqttClient'); // shared connection
 const Receipt = require('./models/Receipt');
 const DeviceTelemetry = require('./models/deviceTelemetry');
 const DeviceProvision = require('./models/DeviceProvision');
-const ProductionDevice = require("./models/ProductionDevice");
 const {
   CONFIG_ACK_STATUS,
   PROVISION_STATUS,
@@ -209,11 +208,15 @@ if (
   try {
     // Production 3.0 config ACKs are handled by the V3 subscriber.
 // Never mutate legacy Device / DeviceProvision records for V3 devices.
-const productionV3Device = await ProductionDevice.findOne({
-  serialNumber: String(serialNumber).trim().toUpperCase(),
-}).select("_id").lean();
+const productionAck = await handleGroupBConfigAck({
+  serialNumber,
+  ack,
+});
 
-if (productionV3Device) {
+if (
+  productionAck.matched ||
+  ["stale_request_id", "stale_nvs_version"].includes(productionAck.reason)
+) {
   return;
 }
     const device = await Device.findOne({
