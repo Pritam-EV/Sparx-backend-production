@@ -33,9 +33,6 @@ const adminProvisionRoutes = require("./routes/adminProvision");
 const cashfreeRouter          = require("./routes/cashfree");
 const accountantRoutes        = require("./routes/accountant");
 const adminOwnerFinanceRoutes = require("./routes/adminOwnerFinance");
-const {
-  startProductionV3MqttSubscriber,
-} = require("./services/productionV3Mqtt.service");
 const productionV3Routes = require("./routes/productionV3.routes");
 
 // MQTT Subscriber
@@ -174,9 +171,6 @@ setInterval(async () => {
 
 // Start legacy MQTT subscriber.
 startMqttSubscriber();
-
-// Start isolated Production 3.0 MQTT subscriber.
-startProductionV3MqttSubscriber();
 
 // ─── START SERVER ─────────────────────────────────────────────────────────────
 const port = process.env.PORT || 5000;
