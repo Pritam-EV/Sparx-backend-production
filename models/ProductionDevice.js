@@ -34,6 +34,7 @@ const CALIBRATION_STATUS = Object.freeze({
   CALCULATED: "calculated",
   SUBMITTED: "submitted",
   APPLIED: "applied",
+   MANUALLY_COMPLETED: "manually_completed",
   FAILED: "failed",
 });
 
@@ -499,6 +500,23 @@ const calibrationSchema = new mongoose.Schema(
     testNotes: {
       type: String,
       default: "",
+    },
+        manualCompletion: {
+      completedAt: {
+        type: Date,
+        default: null,
+      },
+
+      completedBy: {
+        type: String,
+        default: null,
+      },
+
+      reason: {
+        type: String,
+        default: "",
+        maxlength: 1000,
+      },
     },
   },
   { _id: false }

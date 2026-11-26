@@ -1888,6 +1888,110 @@ async function markCalibrationTest(req, res) {
 
 
 // --------------------------------------------------
+// MANUAL CALIBRATION COMPLETION
+// POST /devices/:id/calibration/manual-complete
+//
+// Skips firmware ACK and post-calibration testing.
+// Moves the device directly to Dispatch-ready.
+// --------------------------------------------------
+
+async function markCalibrationManuallyComplete(req, res) {
+  try {
+    const device = await findProductionDevice(req.params.id);
+
+    if (!device) {
+      return res.status(404).json({
+        success: false,
+        message: "Production device not found.",
+      });
+    }
+
+    if (device.stage !== ProductionDevice.STAGE.CALIBRATION) {
+      return res.status(409).json({
+        success: false,
+        message: "Device is not in Calibration stage.",
+      });
+    }
+
+    // Only allow the override after calibration was submitted.
+    if (
+      device.calibration.status !==
+      ProductionDevice.CALIBRATION_STATUS.SUBMITTED
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Manual completion is available only after calibration has been submitted and is awaiting firmware ACK.",
+      });
+    }
+
+    const reason = String(req.body?.reason || "")
+      .trim()
+      .slice(0, 1000);
+
+    if (!reason) {
+      return res.status(400).json({
+        success: false,
+        message: "A reason is required for manual completion.",
+      });
+    }
+
+    const now = new Date();
+    const completedBy = actorId(req);
+
+    // Keep the firmware ACK state unchanged.
+    // Do not claim that firmware applied the coefficients.
+    device.calibration.status =
+      ProductionDevice.CALIBRATION_STATUS.MANUALLY_COMPLETED;
+
+    device.calibration.manualCompletion = {
+      completedAt: now,
+      completedBy,
+      reason,
+    };
+
+    // Testing is explicitly bypassed, not marked as passed.
+    device.calibration.testStatus =
+      ProductionDevice.TEST_STATUS.NOT_TESTED;
+
+    device.calibration.testedAt = null;
+    device.calibration.testedBy = null;
+    device.calibration.testNotes =
+      "Skipped through authorized manual calibration completion.";
+
+    // Move directly to Dispatch-ready.
+    device.stage = ProductionDevice.STAGE.DISPATCH;
+    device.stageUpdatedAt = now;
+
+    device.dispatch.status = "ready";
+    device.dispatch.notes =
+      `Manual calibration completion. Reason: ${reason}`;
+
+    device.updatedBy = completedBy;
+
+    await device.save();
+
+    return res.json({
+      success: true,
+      message:
+        "Calibration manually completed. Device moved directly to Dispatch-ready. Firmware application and independent testing remain unverified.",
+      data: publicDevice(device),
+    });
+
+  } catch (error) {
+    console.error(
+      "[MANUAL CALIBRATION COMPLETION]",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+}
+
+// --------------------------------------------------
 // EXPORTS
 // --------------------------------------------------
 
@@ -1902,4 +2006,5 @@ module.exports = {
   submitCalibration,
   sendProductionCommand,
   markCalibrationTest,
+   markCalibrationManuallyComplete,
 };

@@ -42,7 +42,10 @@ router.post(
   "/devices/:id/calibration/test",
   controller.markCalibrationTest
 );
-
+router.post(
+  "/devices/:id/calibration/manual-complete",
+  controller.markCalibrationManuallyComplete
+);
 // CALIBRATION WORKBENCH CONTROLS
 router.post(
   "/devices/:id/commands",

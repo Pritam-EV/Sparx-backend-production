@@ -457,7 +457,10 @@ async function handleProductionConfigAck({
         _id: device._id,
         "groupB.configAck.requestId": requestId,
         "groupB.provisionStatus": {
-          $ne: ProductionDevice.PROVISION_STATUS.ACKNOWLEDGED,
+         $nin: [
+        ProductionDevice.CALIBRATION_STATUS.APPLIED,
+        ProductionDevice.CALIBRATION_STATUS.MANUALLY_COMPLETED,
+      ],
         },
       },
       {
