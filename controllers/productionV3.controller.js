@@ -1184,26 +1184,16 @@ if (
     }
 
 
+
 const latest = getLatestProductionTelemetry(
   device.serialNumber
 );
 
-// STOP commands must remain available even when telemetry is stale.
-// This lets the operator send a stop command without waiting for
-// another telemetry packet.
-
-const isStopCommand = [
-  "relayStop",
-  "stopFastTelemetry",
-].includes(action);
-
-if (
-  !isStopCommand &&
-  (!latest || latest.ageMs > 60000)
-) {
+// Calibration submission requires fresh device telemetry.
+if (!latest || latest.ageMs > 60000) {
   return res.status(409).json({
     success: false,
-    message: "Device is offline or has stale telemetry.",
+    message: "Device is not reporting fresh telemetry.",
   });
 }
 
@@ -1348,16 +1338,27 @@ async function sendProductionCommand(req, res) {
       });
     }
 
-    const latest = getLatestProductionTelemetry(
-      device.serialNumber
-    );
 
-    if (!latest || latest.ageMs > 60000) {
-      return res.status(409).json({
-        success: false,
-        message: "Device is offline or has stale telemetry.",
-      });
-    }
+const latest = getLatestProductionTelemetry(
+  device.serialNumber
+);
+
+// STOP commands are allowed even when telemetry is stale.
+const isStopCommand = [
+  "relayStop",
+  "stopFastTelemetry",
+].includes(action);
+
+if (
+  !isStopCommand &&
+  (!latest || latest.ageMs > 60000)
+) {
+  return res.status(409).json({
+    success: false,
+    message: "Device is offline or has stale telemetry.",
+  });
+}
+
 
     const requestId = crypto.randomUUID();
     const now = new Date();
