@@ -55,6 +55,16 @@ function publicDevice(device) {
     delete output.groupB.wifiSSIDEncrypted;
     delete output.groupB.wifiPasswordEncrypted;
   }
+  if (output.groupA?.connection) {
+  const lastSeen = output.groupA.connection.lastSeen
+    ? new Date(output.groupA.connection.lastSeen).getTime()
+    : 0;
+
+  output.groupA.connection.status =
+    lastSeen && Date.now() - lastSeen <= 90000
+      ? "online"
+      : "offline";
+}
 if (output.groupB?.connection) {
   const lastSeen = output.groupB.connection.lastSeen
     ? new Date(output.groupB.connection.lastSeen).getTime()

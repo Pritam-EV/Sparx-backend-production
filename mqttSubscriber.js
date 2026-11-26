@@ -76,6 +76,7 @@ function startMqttSubscriber() {
 
 const topics = [
   'viz/+/Telemetry',
+  'viz/+/status',
   'device/+/session/end',
   'viz/+/sessionend',
   'viz/+/adminAck',
@@ -373,6 +374,106 @@ if (productionAck.matched) {
 
   return;
 }
+
+// --------------------------------------------------
+// PRODUCTION GROUP A STATUS BEACON
+// Topic: viz/<SERIAL_NUMBER>/status
+// Payload: { serial, status, fwVersion }
+// --------------------------------------------------
+
+if (
+  parts.length === 3 &&
+  parts[0] === "viz" &&
+  parts[2] === "status"
+) {
+  let statusMessage;
+
+  try {
+    statusMessage = JSON.parse(payload);
+  } catch (error) {
+    console.error(
+      "[PRODUCTION STATUS] Invalid JSON:",
+      error.message
+    );
+    return;
+  }
+
+  if (
+    !statusMessage ||
+    typeof statusMessage !== "object" ||
+    Array.isArray(statusMessage)
+  ) {
+    return;
+  }
+
+  const topicSerial = String(parts[1] || "")
+    .trim()
+    .toUpperCase();
+
+  const payloadSerial = String(
+    statusMessage.serial || ""
+  ).trim().toUpperCase();
+
+  // Both serial identifiers must agree.
+  if (
+    !topicSerial ||
+    !payloadSerial ||
+    topicSerial !== payloadSerial
+  ) {
+    console.warn(
+      "[PRODUCTION STATUS] Serial mismatch:",
+      { topicSerial, payloadSerial }
+    );
+    return;
+  }
+
+  if (
+    String(statusMessage.status || "")
+      .trim()
+      .toUpperCase() !== "READY"
+  ) {
+    return;
+  }
+
+  try {
+    const receivedAt = new Date();
+
+    const update = await ProductionDevice.updateOne(
+      {
+        serialNumber: topicSerial,
+        stage: ProductionDevice.STAGE.GROUP_A,
+      },
+      {
+        $set: {
+          "groupA.connection.status": "online",
+          "groupA.connection.lastSeen": receivedAt,
+
+          ...(statusMessage.fwVersion
+            ? {
+                "groupA.lastKnownFirmwareVersion":
+                  String(statusMessage.fwVersion).slice(0, 100),
+              }
+            : {}),
+        },
+      }
+    );
+
+    if (update.matchedCount === 0) {
+      console.warn(
+        "[PRODUCTION STATUS] No Group A record found:",
+        topicSerial
+      );
+    }
+  } catch (error) {
+    console.error(
+      "[PRODUCTION STATUS] Database update failed:",
+      error
+    );
+  }
+
+  return;
+}
+
 
     // ─────────────────────────────────────────────────────────────────────────
     // BLOCK B: Telemetry — viz/<deviceId>/Telemetry

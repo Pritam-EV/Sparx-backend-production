@@ -610,6 +610,15 @@ const productionDeviceSchema = new mongoose.Schema(
         required: true,
         trim: true,
       },
+      connection: {
+        type: connectionStatusSchema,
+        default: () => ({}),
+        },
+
+        lastKnownFirmwareVersion: {
+        type: String,
+        default: null,
+        },
 
       createdBy: {
         type: String,
