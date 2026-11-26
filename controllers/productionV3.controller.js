@@ -135,19 +135,33 @@ async function createGroupAEntries(req, res) {
     dbSession = await mongoose.startSession();
 
     await dbSession.withTransaction(async () => {
-      const existing = await ProductionDevice.find({
-        serialNumber: { $in: generated.serialNumbers },
-      })
-        .select("serialNumber")
-        .session(dbSession)
-        .lean();
+      const [
+        existingProduction,
+        existingLegacyProvision,
+        existingLegacyDevices,
+      ] = await Promise.all([
+        ProductionDevice.find({
+          serialNumber: { $in: generated.serialNumbers },
+        }).select("serialNumber").session(dbSession).lean(),
+        DeviceProvision.find({
+          serialNumber: { $in: generated.serialNumbers },
+        }).select("serialNumber").session(dbSession).lean(),
+        Device.find({
+          serialNumber: { $in: generated.serialNumbers },
+        }).select("serialNumber").session(dbSession).lean(),
+      ]);
 
-      if (existing.length > 0) {
+      const conflictingSerials = [
+        ...new Set([
+          ...existingProduction.map((item) => item.serialNumber),
+          ...existingLegacyProvision.map((item) => item.serialNumber),
+          ...existingLegacyDevices.map((item) => item.serialNumber),
+        ]),
+      ];
+
+      if (conflictingSerials.length > 0) {
         const error = new Error(
-          `Serial numbers already exist: ${existing
-            .slice(0, 10)
-            .map((item) => item.serialNumber)
-            .join(", ")}`
+          `Serial numbers already exist: ${conflictingSerials.slice(0, 10).join(", ")}`
         );
         error.statusCode = 409;
         throw error;
@@ -285,10 +299,15 @@ async function promoteToGroupB(req, res) {
       });
     }
 
-    if (device.stage !== ProductionDevice.STAGE.GROUP_A) {
+    const isGroupA = device.stage === ProductionDevice.STAGE.GROUP_A;
+    const isRetryableGroupB =
+      device.stage === ProductionDevice.STAGE.GROUP_B &&
+      device.groupB?.provisionStatus === ProductionDevice.PROVISION_STATUS.FAILED;
+
+    if (!isGroupA && !isRetryableGroupB) {
       return res.status(409).json({
         success: false,
-        message: "Only Group A devices can be promoted to Group B",
+        message: "Only Group A devices or Group B devices with failed provisioning can use this action",
       });
     }
 
