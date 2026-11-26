@@ -102,6 +102,11 @@ router.post(
 );
 
 router.post(
+  "/calibration/sessions/:sessionId/calculate",
+  calibrationController.calculateCalibration
+);
+
+router.post(
   "/calibration/sessions/:sessionId/apply",
   calibrationController.applyCalibration
 );

@@ -7,6 +7,10 @@ const CalibrationSession = require("../../models/CalibrationSession");
 const CalibrationProfile = require("../../models/CalibrationProfile");
 
 const {
+  calculateHlw8032Calibration,
+} = require("../../services/productionV3CalibrationCalculator");
+
+const {
   createRequestId,
   publishConfigCommand,
 } = require("../../services/productionV3Mqtt.service");
@@ -40,6 +44,10 @@ function normalizeSerial(value) {
 }
 
 function finiteValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -607,6 +615,11 @@ exports.capturePoint = async (req, res) => {
     };
 
     session.captures.push(capture);
+
+    // A new or replacement reference capture invalidates any previous fit.
+    session.calculatedConstants = null;
+    session.calculation = null;
+
     session.updatedBy = req.user?.userId || null;
 
     await session.save();
@@ -628,17 +641,81 @@ exports.capturePoint = async (req, res) => {
 
 
 // ==================================================
+// CALCULATE CALIBRATION CONSTANTS
+// POST /calibration/sessions/:sessionId/calculate
+//
+// Fits the V3 firmware equations against the captured raw HLW8032
+// ratios and the reference-meter values. This only saves a proposal;
+// it does not send a command to the ESP32.
+// ==================================================
+
+exports.calculateCalibration = async (req, res) => {
+  try {
+    const session = await getSession(req.params.sessionId);
+
+    if (session.status !== "in_progress") {
+      return res.status(409).json({
+        success: false,
+        message: "Calibration constants can only be calculated while the session is in progress.",
+        currentStatus: session.status,
+      });
+    }
+
+    const device = await ProductionDevice.findOne({
+      serialNumber: session.serialNumber,
+    })
+      .populate("productionProfileId", "meteringHardware")
+      .populate("batchId", "meteringHardware");
+
+    if (!device) {
+      return res.status(404).json({
+        success: false,
+        message: "Production device not found for this calibration session.",
+      });
+    }
+
+    const meteringHardware = String(
+      device.productionProfileId?.meteringHardware ||
+      device.batchId?.meteringHardware ||
+      session.profileSnapshot?.meteringHardware ||
+      ""
+    ).trim();
+
+    const result = await calculateHlw8032Calibration({
+      session,
+      ProductionTelemetry,
+      meteringHardware,
+    });
+
+    session.calculatedConstants = result.constants;
+    session.calculation = result.calculation;
+    session.lastError = null;
+    session.updatedBy = req.user?.userId || null;
+
+    await session.save();
+
+    return res.json({
+      success: true,
+      message: "Calibration constants calculated and saved. Review them before applying to the device.",
+      data: {
+        sessionId: session._id,
+        calculatedConstants: result.constants,
+        calculation: result.calculation,
+      },
+    });
+  } catch (error) {
+    console.error("[Production V3] calculateCalibration:", error);
+    return sendError(res, error);
+  }
+};
+
+
+// ==================================================
 // APPLY CALIBRATION
 // POST /calibration/sessions/:sessionId/apply
 //
-// Body:
-// {
-//   "vf": 1.88,
-//   "currentZero": 0.001,
-//   "currentGain": 0.231,
-//   "powerZero": 0.001,
-//   "powerGain": 0.435
-// }
+// Coefficients are read from the server-persisted session.calculatedConstants.
+// The request body is intentionally ignored; the browser cannot override them.
 // ==================================================
 
 exports.applyCalibration = async (req, res) => {
@@ -700,15 +777,23 @@ exports.applyCalibration = async (req, res) => {
       });
     }
 
+    if (!session.calculatedConstants || !session.calculation?.calculatedAt) {
+      return res.status(409).json({
+        success: false,
+        message: "Calculate and review calibration constants before applying them.",
+      });
+    }
+
     const profileValues = new Map(
       (session.profileSnapshot.calibrationValues || []).map(
         (item) => [item.firmwareKey, item]
       )
     );
 
-    const supplied = req.body || {};
     const constants = {};
 
+    // Use the server-persisted calculation result. Do not accept arbitrary
+    // calibration coefficients from the browser.
     for (const key of CALIBRATION_KEYS) {
       const definition = profileValues.get(key);
 
@@ -719,12 +804,12 @@ exports.applyCalibration = async (req, res) => {
         });
       }
 
-      const value = finiteValue(supplied[key]);
+      const value = finiteValue(session.calculatedConstants[key]);
 
       if (value === null) {
-        return res.status(400).json({
+        return res.status(409).json({
           success: false,
-          message: `${key} must be a finite number.`,
+          message: `Calculated value for ${key} is missing. Recalculate constants.`,
         });
       }
 
@@ -735,7 +820,7 @@ exports.applyCalibration = async (req, res) => {
       ) {
         return res.status(400).json({
           success: false,
-          message: `${key} is below the allowed profile minimum.`,
+          message: `Calculated ${key} is below the allowed profile minimum.`,
         });
       }
 
@@ -746,7 +831,7 @@ exports.applyCalibration = async (req, res) => {
       ) {
         return res.status(400).json({
           success: false,
-          message: `${key} exceeds the allowed profile maximum.`,
+          message: `Calculated ${key} exceeds the allowed profile maximum.`,
         });
       }
 
@@ -1137,12 +1222,18 @@ for (const pointCode of requiredPointCodes) {
       continue;
     }
 
-    const tolerance = Number(toleranceMap[channel]);
+    const configuredTolerance = toleranceMap[channel];
+    const tolerance =
+      configuredTolerance === null ||
+      configuredTolerance === undefined ||
+      configuredTolerance === ""
+        ? NaN
+        : Number(configuredTolerance);
 
-    if (!Number.isFinite(tolerance)) {
+    if (!Number.isFinite(tolerance) || tolerance < 0) {
       return res.status(409).json({
         success: false,
-        message: `Missing ${channel} verification tolerance.`,
+        message: `Missing or invalid ${channel} verification tolerance. Configure the tolerance in the Calibration Profile before completing verification.`,
       });
     }
 
