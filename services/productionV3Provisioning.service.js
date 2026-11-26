@@ -237,6 +237,19 @@ async function handleProductionConfigAck({
       return { matched: true, reason: "stale_nvs_version" };
     }
 
+    // Ignore duplicate successful provisioning ACKs.
+// Do not move a device backwards from Calibration/Dispatch.
+if (
+  expectedProvisionAck.status === CONFIG_ACK_STATUS.OK &&
+  device.groupB.provisionStatus ===
+    ProductionDevice.PROVISION_STATUS.ACKNOWLEDGED
+) {
+  return {
+    matched: true,
+    reason: "duplicate_provision_ack",
+  };
+}
+
     device.groupB.provisionStatus = successful
       ? ProductionDevice.PROVISION_STATUS.ACKNOWLEDGED
       : ProductionDevice.PROVISION_STATUS.FAILED;

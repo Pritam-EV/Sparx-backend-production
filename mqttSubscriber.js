@@ -77,6 +77,7 @@ const topics = [
   'viz/+/Telemetry',
   'device/+/session/end',
   'viz/+/sessionend',
+  'viz/+/adminAck',
   'viz/+/configAck',          // ← NEW: firmware ACK after receiving config payload
 ];
 mqttClient.subscribe(topics, { qos: 1 }, (err) => {
@@ -224,18 +225,6 @@ const productionAck = await handleProductionConfigAck({
   ack,
 });
 
-if (
-  expectedProvisionAck.status === CONFIG_ACK_STATUS.OK &&
-  device.groupB.provisionStatus ===
-    ProductionDevice.PROVISION_STATUS.ACKNOWLEDGED &&
-  device.stage !== ProductionDevice.STAGE.GROUP_B
-) {
-  return {
-    matched: true,
-    reason: "duplicate_provision_ack",
-  };
-}
-
 if (productionAck.matched) {
   return;
 }
@@ -313,7 +302,23 @@ if (productionAck.matched) {
    //   console.warn('[MQTT RX] Ignoring unexpected topic:', topic);
       return;
     }
+// Extract Device ID from viz/<DEVICE_ID>/Telemetry
+const deviceId = parts[1];
 
+// Parse telemetry payload before Production or legacy processing.
+let msg;
+
+try {
+  msg = JSON.parse(payload);
+} catch (error) {
+  console.error("[MQTT TELEMETRY] Invalid JSON:", error.message);
+  return;
+}
+
+if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
+  console.error("[MQTT TELEMETRY] Invalid telemetry payload");
+  return;
+}
 
 // --------------------------------------------------
 // PRODUCTION TELEMETRY

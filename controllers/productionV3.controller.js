@@ -1139,6 +1139,21 @@ async function submitCalibration(req, res) {
       });
     }
 
+    const retryableStatuses = [
+  ProductionDevice.CALIBRATION_STATUS.CALCULATED,
+  ProductionDevice.CALIBRATION_STATUS.FAILED,
+];
+
+if (
+  !retryableStatuses.includes(device.calibration.status) ||
+  !device.calibration.calculatedAt
+) {
+  return res.status(409).json({
+    success: false,
+    message: "Calculate calibration before submitting.",
+  });
+}
+
     const coefficients = device.calibration.coefficients || {};
 
     const keys = [
