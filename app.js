@@ -33,7 +33,8 @@ const adminProvisionRoutes = require("./routes/adminProvision");
 const cashfreeRouter          = require("./routes/cashfree");
 const accountantRoutes        = require("./routes/accountant");
 const adminOwnerFinanceRoutes = require("./routes/adminOwnerFinance");
-
+const productionV3Routes =
+  require("./routes/productionV3.routes");
 
 // MQTT Subscriber
 const startMqttSubscriber = require("./mqttSubscriber");
@@ -141,7 +142,11 @@ app.use("/api/activity",           activityRoutes);
 app.use('/api/provision',           require('./routes/deviceProvision.routes'));
 app.use("/api/accountant",         accountantRoutes);
 app.use("/api/admin/owners", adminOwnerFinanceRoutes);
-
+// VIZ Production — simplified single-document workflow
+app.use(
+  "/api/production/v3",
+  productionV3Routes
+);
 
 
 app.get("/api/getDevice", async (req, res) => {

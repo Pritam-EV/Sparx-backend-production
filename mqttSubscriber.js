@@ -7,6 +7,15 @@ const mqttClient = require('./mqttClient'); // shared connection
 const Receipt = require('./models/Receipt');
 const DeviceTelemetry = require('./models/deviceTelemetry');
 const DeviceProvision = require('./models/DeviceProvision');
+const ProductionDevice = require("./models/ProductionDevice");
+
+const {
+  handleProductionConfigAck,
+} = require("./services/productionV3Provisioning.service");
+
+const {
+  setLatestProductionTelemetry,
+} = require("./services/productionTelemetryCache");
 const {
   CONFIG_ACK_STATUS,
   PROVISION_STATUS,
@@ -208,15 +217,26 @@ if (
   try {
     // Production 3.0 config ACKs are handled by the V3 subscriber.
 // Never mutate legacy Device / DeviceProvision records for V3 devices.
-const productionAck = await handleGroupBConfigAck({
+// Process Production ACK before legacy provisioning ACKs.
+// Matching Production records must never fall through to legacy updates.
+const productionAck = await handleProductionConfigAck({
   serialNumber,
   ack,
 });
 
 if (
-  productionAck.matched ||
-  ["stale_request_id", "stale_nvs_version"].includes(productionAck.reason)
+  expectedProvisionAck.status === CONFIG_ACK_STATUS.OK &&
+  device.groupB.provisionStatus ===
+    ProductionDevice.PROVISION_STATUS.ACKNOWLEDGED &&
+  device.stage !== ProductionDevice.STAGE.GROUP_B
 ) {
+  return {
+    matched: true,
+    reason: "duplicate_provision_ack",
+  };
+}
+
+if (productionAck.matched) {
   return;
 }
     const device = await Device.findOne({
@@ -294,21 +314,132 @@ if (
       return;
     }
 
-    const deviceId = parts[1];
 
-    let msg;
-    try {
-      msg = JSON.parse(payload);
-      // console.log('[MQTT RX] Parsed Telemetry payload:', msg);
-    } catch (e) {
-      // console.error('❌ Invalid JSON on Telemetry:', e, payload);
-      return;
+// --------------------------------------------------
+// PRODUCTION TELEMETRY
+// Handle Production records BEFORE legacy duplicate
+// filtering and legacy Device/Session updates.
+//
+// Topic: viz/<DEVICE_ID>/Telemetry
+// --------------------------------------------------
+
+const productionDeviceId = normalizeDeviceId(deviceId);
+
+try {
+  const productionDevice = await ProductionDevice.findOne({
+    "groupB.deviceId": productionDeviceId,
+  })
+    .select("_id serialNumber groupB.deviceId")
+    .lean();
+
+  if (productionDevice) {
+    const receivedAt = new Date();
+
+    const toFiniteOrNull = (value) => {
+      if (
+        value === undefined ||
+        value === null ||
+        value === ""
+      ) {
+        return null;
+      }
+
+      const number = Number(value);
+
+      return Number.isFinite(number) ? number : null;
+    };
+
+    let relayOn = null;
+
+    if (typeof msg.relay === "boolean") {
+      relayOn = msg.relay;
+    } else {
+      const relay = String(msg.relay || "").trim().toUpperCase();
+
+      if (relay === "ON") relayOn = true;
+      if (relay === "OFF") relayOn = false;
     }
 
-    if (!msg || typeof msg !== 'object') {
-      console.error('❌ Non-object Telemetry payload:', msg);
-      return;
-    }
+    const sample = {
+      serialNumber: productionDevice.serialNumber,
+      deviceId: productionDeviceId,
+
+      receivedAt,
+
+      voltage: toFiniteOrNull(msg.voltage),
+      current: toFiniteOrNull(msg.current),
+      power: toFiniteOrNull(msg.power),
+
+      relay: msg.relay ?? null,
+      relayOn,
+
+      state: msg.state || null,
+      totalEnergyKwh: toFiniteOrNull(msg.totalEnergy_kWh),
+
+      rawVoltageRatio: toFiniteOrNull(
+        msg.rawVoltageRatio
+      ),
+
+      rawCurrentRatio: toFiniteOrNull(
+        msg.rawCurrentRatio
+      ),
+
+      rawPowerRatio: toFiniteOrNull(
+        msg.rawPowerRatio
+      ),
+
+      sampleAgeMs: toFiniteOrNull(msg.sampleAgeMs),
+
+      sampleFresh:
+        typeof msg.sampleFresh === "boolean"
+          ? msg.sampleFresh
+          : undefined,
+
+      telemetryMode: msg.telemetryMode || null,
+      telemetryRequestId: msg.telemetryRequestId || null,
+      telemetrySequence: toFiniteOrNull(msg.telemetrySequence),
+
+      fwVersion: msg.fwVersion || null,
+
+      rawPayload: msg,
+    };
+
+    // Store only the latest production sample in memory.
+    // Do NOT create DeviceTelemetry documents for every tick.
+    setLatestProductionTelemetry(sample);
+
+    // Persist connection metadata only.
+    await ProductionDevice.updateOne(
+      { _id: productionDevice._id },
+      {
+        $set: {
+          "groupB.connection.status": "online",
+          "groupB.connection.lastSeen": receivedAt,
+
+          ...(msg.fwVersion
+            ? {
+                "groupB.lastKnownFirmwareVersion":
+                  String(msg.fwVersion),
+              }
+            : {}),
+        },
+      }
+    );
+
+    return;
+  }
+
+} catch (productionTelemetryError) {
+  console.error(
+    "[PRODUCTION TELEMETRY] Processing failed:",
+    productionTelemetryError
+  );
+
+  // Fail closed: do not accidentally process uncertain
+  // Production telemetry as a legacy charging device.
+  return;
+}
+
 
     // Duplicate filter — skip if exact same message seen within 30s
     const msgKey = topic + JSON.stringify(msg);
@@ -341,15 +472,7 @@ const devKey = normalizeDeviceId(deviceId);
 
 try {
 
-// Prevent Production 3.0 telemetry from entering the legacy
-// Device / DeviceProvision telemetry pipeline.
-const productionV3Device = await ProductionDevice.findOne({
-  deviceId: devKey,
-}).select("_id").lean();
 
-if (productionV3Device) {
-  return;
-}
 
       // If no Device document exists yet, auto-create from DeviceProvision
 

@@ -112,6 +112,10 @@ const calibrationSchema = new mongoose.Schema(
       default: () => ({}),
     },
     calculatedAt: { type: Date, default: null },
+    calculationDetails: {
+  type: mongoose.Schema.Types.Mixed,
+  default: null,
+},
     submittedAt: { type: Date, default: null },
     appliedAt: { type: Date, default: null },
     requestId: { type: String, default: null },
@@ -192,6 +196,16 @@ const productionDeviceSchema = new mongoose.Schema(
         default: PROVISION_STATUS.NOT_SENT,
       },
       provisionSentAt: { type: Date, default: null },
+      nvsVersion: {
+  type: Number,
+  default: 0,
+  min: 0,
+},
+
+lastKnownFirmwareVersion: {
+  type: String,
+  default: null,
+},
       provisionedBy: { type: String, default: null },
       configAck: { type: configAckSchema, default: () => ({}) },
       connection: {
