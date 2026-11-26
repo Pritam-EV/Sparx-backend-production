@@ -1183,16 +1183,30 @@ if (
       }
     }
 
-    const latest = getLatestProductionTelemetry(
-      device.serialNumber
-    );
 
-    if (!latest || latest.ageMs > 60000) {
-      return res.status(409).json({
-        success: false,
-        message: "Device is not reporting fresh telemetry.",
-      });
-    }
+const latest = getLatestProductionTelemetry(
+  device.serialNumber
+);
+
+// STOP commands must remain available even when telemetry is stale.
+// This lets the operator send a stop command without waiting for
+// another telemetry packet.
+
+const isStopCommand = [
+  "relayStop",
+  "stopFastTelemetry",
+].includes(action);
+
+if (
+  !isStopCommand &&
+  (!latest || latest.ageMs > 60000)
+) {
+  return res.status(409).json({
+    success: false,
+    message: "Device is offline or has stale telemetry.",
+  });
+}
+
 
     const requestId = crypto.randomUUID();
     const now = new Date();
@@ -1348,42 +1362,44 @@ async function sendProductionCommand(req, res) {
     const requestId = crypto.randomUUID();
     const now = new Date();
 
-    // Atomically reserve the command slot.
-    // A second command cannot overwrite an unacknowledged command.
-    const updatedDevice = await ProductionDevice.findOneAndUpdate(
-      {
-        _id: device._id,
-        "groupB.lastCommand.status": {
-          $ne: "pending",
-        },
-      },
-      {
-        $set: {
-          "groupB.lastCommand": {
-            requestId,
-            deviceId: device.groupB.deviceId,
-            action,
-            status: "pending",
-            sentAt: now,
-            acknowledgedAt: null,
-            message: null,
-          },
-          updatedBy: actorId(req),
-        },
-      },
-      {
-        new: true,
-        runValidators: true,
-      }
-    );
 
-    if (!updatedDevice) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "Another device command is still waiting for an ACK.",
-      });
-    }
+// Always allow a new command.
+// The latest command replaces the previous command record.
+//
+// Old ACKs cannot overwrite the latest command because
+// handleProductionAdminAck() matches the exact requestId.
+
+const updatedDevice = await ProductionDevice.findOneAndUpdate(
+  {
+    _id: device._id,
+  },
+  {
+    $set: {
+      "groupB.lastCommand": {
+        requestId,
+        deviceId: device.groupB.deviceId,
+        action,
+        status: "pending",
+        sentAt: now,
+        acknowledgedAt: null,
+        message: null,
+      },
+      updatedBy: actorId(req),
+    },
+  },
+  {
+    new: true,
+    runValidators: true,
+  }
+);
+
+if (!updatedDevice) {
+  return res.status(404).json({
+    success: false,
+    message: "Production device record no longer exists.",
+  });
+}
+
 
     try {
 const result = await publishProductionCommand({

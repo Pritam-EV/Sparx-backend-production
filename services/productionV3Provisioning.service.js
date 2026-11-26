@@ -672,21 +672,63 @@ async function handleProductionAdminAck({
     ack.status || ""
   ).trim().toLowerCase();
 
-  let commandStatus = null;
 
-  if (
-    ["ok", "success", "acknowledged", "accepted", "duplicate",].includes(rawStatus) ||
-    ack.success === true ||
-    ack.ok === true
-  ) {
-    commandStatus = "acknowledged";
-  } else if (
-    ["error", "failed", "failure", "rejected"].includes(rawStatus) ||
-    ack.success === false ||
-    ack.ok === false
-  ) {
-    commandStatus = "failed";
-  }
+let commandStatus = null;
+
+const isTimedCommand = [
+  "relayStart",
+  "startFastTelemetry",
+].includes(pending.action);
+
+const isErrorAck =
+  [
+    "error",
+    "failed",
+    "failure",
+    "rejected",
+  ].includes(rawStatus) ||
+  ack.success === false ||
+  ack.ok === false;
+
+if (isErrorAck) {
+  commandStatus = "failed";
+
+} else if (
+  isTimedCommand &&
+  [
+    "accepted",
+    "started",
+    "running",
+  ].includes(rawStatus)
+) {
+  // Firmware accepted the command, but the timed operation
+  // has not completed yet.
+  commandStatus = "pending";
+
+} else if (
+  [
+    "ok",
+    "success",
+    "acknowledged",
+    "accepted",
+    "duplicate",
+    "stopped",
+    "completed",
+    "done",
+  ].includes(rawStatus) ||
+  ack.success === true ||
+  ack.ok === true
+) {
+  commandStatus = "acknowledged";
+}
+
+if (!commandStatus) {
+  return {
+    matched: true,
+    reason: "invalid_command_ack_status",
+  };
+}
+
 
   if (!commandStatus) {
     return {
@@ -702,24 +744,33 @@ async function handleProductionAdminAck({
     };
   }
 
-  const now = new Date();
 
-  // Atomic correlation: update only the exact pending command.
-  const update = await ProductionDevice.updateOne(
-    {
-      _id: device._id,
-      "groupB.lastCommand.requestId": requestId,
-      "groupB.lastCommand.status": "pending",
+const now = new Date();
+
+// Update only the latest command with the matching request ID.
+// Intermediate ACKs keep the command pending.
+
+const update = await ProductionDevice.updateOne(
+  {
+    _id: device._id,
+    "groupB.lastCommand.requestId": requestId,
+    "groupB.lastCommand.status": "pending",
+  },
+  {
+    $set: {
+      "groupB.lastCommand.status": commandStatus,
+
+      "groupB.lastCommand.acknowledgedAt":
+        commandStatus === "pending" ? null : now,
+
+      "groupB.lastCommand.message":
+        cleanMessage(ack.message),
+
+      updatedBy: "mqtt",
     },
-    {
-      $set: {
-        "groupB.lastCommand.status": commandStatus,
-        "groupB.lastCommand.acknowledgedAt": now,
-        "groupB.lastCommand.message": cleanMessage(ack.message),
-        updatedBy: "mqtt",
-      },
-    }
-  );
+  }
+);
+
 
   if (matchedCount(update) === 0) {
     return {
