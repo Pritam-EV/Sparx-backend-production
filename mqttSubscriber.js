@@ -11,6 +11,7 @@ const ProductionDevice = require("./models/ProductionDevice");
 
 const {
   handleProductionConfigAck,
+  handleProductionAdminAck,
 } = require("./services/productionV3Provisioning.service");
 
 const {
@@ -144,6 +145,76 @@ mqttClient.subscribe(topics, { qos: 1 }, (err) => {
       return; // do NOT fall through to Telemetry handler
     }
 
+    // --------------------------------------------------
+// PRODUCTION ADMIN COMMAND ACK
+// Topic: viz/<DEVICE_ID>/adminAck
+//
+// Expected payload:
+// {
+//   "requestId": "...",
+//   "action": "relayStart",
+//   "status": "ok",
+//   "message": "Command executed"
+// }
+// --------------------------------------------------
+
+if (
+  parts.length === 3 &&
+  parts[0] === "viz" &&
+  parts[2] === "adminAck"
+) {
+  let ack;
+
+  try {
+    ack = JSON.parse(payload);
+  } catch (error) {
+    console.error(
+      "[PRODUCTION ADMIN ACK] Invalid JSON:",
+      error.message
+    );
+    return;
+  }
+
+  if (
+    !ack ||
+    typeof ack !== "object" ||
+    Array.isArray(ack)
+  ) {
+    console.error(
+      "[PRODUCTION ADMIN ACK] Invalid ACK payload."
+    );
+    return;
+  }
+
+  try {
+    const result = await handleProductionAdminAck({
+      deviceId: parts[1],
+      ack,
+    });
+
+    if (!result.matched) {
+      console.warn(
+        "[PRODUCTION ADMIN ACK] No production device matched:",
+        parts[1]
+      );
+    } else if (result.reason) {
+      console.warn(
+        "[PRODUCTION ADMIN ACK]",
+        result.reason,
+        parts[1]
+      );
+    }
+  } catch (error) {
+    console.error(
+      "[PRODUCTION ADMIN ACK] Processing failed:",
+      error
+    );
+  }
+
+  // Never allow a production admin ACK to enter legacy handling.
+  return;
+}
+
     // ─────────────────────────────────────────────────────────────────────────
     // BLOCK A2: Config ACK — viz/<deviceId>/configAck
     // Firmware publishes this after successfully receiving + applying a config
@@ -159,6 +230,14 @@ if (
 
   try {
     ack = JSON.parse(payload);
+    if (
+  !ack ||
+  typeof ack !== "object" ||
+  Array.isArray(ack)
+) {
+  console.error("[CONFIG ACK] Invalid ACK payload.");
+  return;
+}
   } catch (error) {
     console.error(
       '[CONFIG ACK] Invalid JSON:',

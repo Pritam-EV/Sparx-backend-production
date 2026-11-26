@@ -868,6 +868,13 @@ async function captureCalibrationPoint(req, res) {
     device.calibration.appliedAt = null;
     device.calibration.requestId = null;
     device.calibration.acknowledgement = {};
+    // A changed calibration input invalidates old post-calibration verification.
+device.calibration.verification = {
+  noLoad: null,
+  load: null,
+  passed: null,
+  verifiedAt: null,
+};
     device.calibration.lastError = null;
     device.calibration.testStatus =
       ProductionDevice.TEST_STATUS.NOT_TESTED;
@@ -1129,15 +1136,6 @@ async function submitCalibration(req, res) {
       });
     }
 
-    if (
-      device.calibration.status !==
-      ProductionDevice.CALIBRATION_STATUS.CALCULATED
-    ) {
-      return res.status(409).json({
-        success: false,
-        message: "Calculate the coefficients before submitting.",
-      });
-    }
 
     const retryableStatuses = [
   ProductionDevice.CALIBRATION_STATUS.CALCULATED,
@@ -1205,6 +1203,23 @@ if (
     device.calibration.lastError = null;
     device.updatedBy = actorId(req);
 
+    // A new calibration request needs a new post-calibration test.
+device.calibration.appliedAt = null;
+
+device.calibration.verification = {
+  noLoad: null,
+  load: null,
+  passed: null,
+  verifiedAt: null,
+};
+
+device.calibration.testStatus =
+  ProductionDevice.TEST_STATUS.NOT_TESTED;
+
+device.calibration.testedAt = null;
+device.calibration.testedBy = null;
+device.calibration.testNotes = "";
+
     // Save request correlation before MQTT publish.
     await device.save();
 
@@ -1264,6 +1279,7 @@ if (
 // POST /devices/:id/commands
 // --------------------------------------------------
 
+
 async function sendProductionCommand(req, res) {
   try {
     const device = await findProductionDevice(req.params.id);
@@ -1278,7 +1294,31 @@ async function sendProductionCommand(req, res) {
     if (device.stage !== ProductionDevice.STAGE.CALIBRATION) {
       return res.status(409).json({
         success: false,
-        message: "Device controls are available in Calibration stage.",
+        message:
+          "Device controls are available in Calibration stage.",
+      });
+    }
+
+    const allowedActions = [
+      "relayStart",
+      "relayStop",
+      "startFastTelemetry",
+      "stopFastTelemetry",
+    ];
+
+    const action = String(req.body?.action || "").trim();
+
+    if (!allowedActions.includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: "Unsupported production device command.",
+      });
+    }
+
+    if (!device.groupB?.deviceId) {
+      return res.status(409).json({
+        success: false,
+        message: "Device has not been provisioned with a Device ID.",
       });
     }
 
@@ -1293,24 +1333,97 @@ async function sendProductionCommand(req, res) {
       });
     }
 
-    const result = await publishProductionCommand({
-      deviceId: device.groupB.deviceId,
-      action: req.body.action,
-    });
+    const requestId = crypto.randomUUID();
+    const now = new Date();
 
-    return res.status(202).json({
-      success: true,
-      message: `${result.action} command published.`,
-      data: result,
-    });
+    // Atomically reserve the command slot.
+    // A second command cannot overwrite an unacknowledged command.
+    const updatedDevice = await ProductionDevice.findOneAndUpdate(
+      {
+        _id: device._id,
+        "groupB.lastCommand.status": {
+          $ne: "pending",
+        },
+      },
+      {
+        $set: {
+          "groupB.lastCommand": {
+            requestId,
+            deviceId: device.groupB.deviceId,
+            action,
+            status: "pending",
+            sentAt: now,
+            acknowledgedAt: null,
+            message: null,
+          },
+          updatedBy: actorId(req),
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
+
+    if (!updatedDevice) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Another device command is still waiting for an ACK.",
+      });
+    }
+
+    try {
+      const result = await publishProductionCommand({
+        deviceId: device.groupB.deviceId,
+        action,
+        requestId,
+      });
+
+      return res.status(202).json({
+        success: true,
+        message:
+          "Command published. Waiting for device acknowledgement.",
+        data: {
+          ...result,
+          status: "pending",
+        },
+      });
+
+    } catch (publishError) {
+      // Preserve the failed attempt for the production record.
+      await ProductionDevice.updateOne(
+        {
+          _id: device._id,
+          "groupB.lastCommand.requestId": requestId,
+        },
+        {
+          $set: {
+            "groupB.lastCommand.status": "failed",
+            "groupB.lastCommand.acknowledgedAt": new Date(),
+            "groupB.lastCommand.message":
+              String(publishError.message || "MQTT publish failed")
+                .slice(0, 500),
+          },
+        }
+      );
+
+      return res.status(502).json({
+        success: false,
+        message: "Could not publish command to the device.",
+      });
+    }
 
   } catch (error) {
-    return res.status(400).json({
+    console.error("[PRODUCTION COMMAND]", error);
+
+    return res.status(500).json({
       success: false,
       message: error.message,
     });
   }
 }
+
 
 // --------------------------------------------------
 // 10. CALIBRATION TEST CONFIRMATION
@@ -1323,6 +1436,7 @@ async function sendProductionCommand(req, res) {
 // It does NOT execute the Dispatch workflow.
 // --------------------------------------------------
 
+
 async function markCalibrationTest(req, res) {
   try {
     const device = await findProductionDevice(req.params.id);
@@ -1331,6 +1445,13 @@ async function markCalibrationTest(req, res) {
       return res.status(404).json({
         success: false,
         message: "Production device not found.",
+      });
+    }
+
+    if (device.stage !== ProductionDevice.STAGE.CALIBRATION) {
+      return res.status(409).json({
+        success: false,
+        message: "Device is not in Calibration stage.",
       });
     }
 
@@ -1345,13 +1466,340 @@ async function markCalibrationTest(req, res) {
       });
     }
 
-    const result = String(req.body.result || "").toLowerCase();
+    const point = String(
+      req.body?.point || ""
+    ).trim().toLowerCase();
+
+    // ------------------------------------------------
+    // A. CAPTURE POST-CALIBRATION VERIFICATION
+    // ------------------------------------------------
+
+    if (point === "no-load" || point === "load") {
+      const telemetry = getLatestProductionTelemetry(
+        device.serialNumber
+      );
+
+      if (!telemetry) {
+        return res.status(409).json({
+          success: false,
+          message: "No telemetry received from this device.",
+        });
+      }
+
+      if (telemetry.ageMs > 5000) {
+        return res.status(409).json({
+          success: false,
+          message: "Telemetry is stale. Wait for a fresh reading.",
+        });
+      }
+
+      if (
+        telemetry.sampleFresh === false ||
+        (
+          telemetry.sampleAgeMs !== null &&
+          telemetry.sampleAgeMs !== undefined &&
+          Number(telemetry.sampleAgeMs) > 2000
+        )
+      ) {
+        return res.status(409).json({
+          success: false,
+          message: "Firmware reported a stale telemetry sample.",
+        });
+      }
+
+      if (typeof telemetry.relayOn !== "boolean") {
+        return res.status(409).json({
+          success: false,
+          message: "Relay state is missing from telemetry.",
+        });
+      }
+
+      const expectedRelayOn = point === "load";
+
+      if (telemetry.relayOn !== expectedRelayOn) {
+        return res.status(409).json({
+          success: false,
+          message: expectedRelayOn
+            ? "Turn the relay ON before capturing the load verification."
+            : "Turn the relay OFF before capturing the no-load verification.",
+        });
+      }
+
+      // These are actual device measurements from MQTT.
+      const measured = {
+        voltage: finiteNumber(
+          telemetry.voltage,
+          "Measured voltage"
+        ),
+        current: finiteNumber(
+          telemetry.current,
+          "Measured current"
+        ),
+        power: finiteNumber(
+          telemetry.power,
+          "Measured power"
+        ),
+      };
+
+      // These are reference values read from the ER300P.
+      const referenceInput = req.body?.reference || {};
+
+      const reference = {
+        voltage: finiteNumber(
+          referenceInput.voltage,
+          "ER300P reference voltage"
+        ),
+        current: finiteNumber(
+          referenceInput.current,
+          "ER300P reference current"
+        ),
+        power: finiteNumber(
+          referenceInput.power,
+          "ER300P reference power"
+        ),
+      };
+
+      if (reference.voltage <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Reference voltage must be greater than zero.",
+        });
+      }
+
+      if (reference.current < 0 || reference.power < 0) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Reference current and power cannot be negative.",
+        });
+      }
+
+      if (
+        point === "load" &&
+        (reference.current <= 0 || reference.power <= 0)
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Load verification requires positive reference current and power.",
+        });
+      }
+
+      // Read controlled acceptance limits from environment.
+      // Invalid environment values fall back to the defaults.
+      const configuredTolerance = Number(
+        process.env.PRODUCTION_CALIBRATION_TOLERANCE_PERCENT
+      );
+
+      const tolerancePercent =
+        Number.isFinite(configuredTolerance) &&
+        configuredTolerance > 0 &&
+        configuredTolerance <= 10
+          ? configuredTolerance
+          : 2;
+
+      const configuredNoLoadCurrent = Number(
+        process.env.PRODUCTION_NO_LOAD_MAX_CURRENT_A
+      );
+
+      const noLoadMaxCurrentA =
+        Number.isFinite(configuredNoLoadCurrent) &&
+        configuredNoLoadCurrent >= 0
+          ? configuredNoLoadCurrent
+          : 0.10;
+
+      const configuredNoLoadPower = Number(
+        process.env.PRODUCTION_NO_LOAD_MAX_POWER_W
+      );
+
+      const noLoadMaxPowerW =
+        Number.isFinite(configuredNoLoadPower) &&
+        configuredNoLoadPower >= 0
+          ? configuredNoLoadPower
+          : 5;
+
+      const percentError = (actual, expected) => {
+        if (!Number.isFinite(actual) ||
+            !Number.isFinite(expected) ||
+            expected <= 0) {
+          return null;
+        }
+
+        return Number(
+          (Math.abs(actual - expected) / expected * 100)
+            .toFixed(4)
+        );
+      };
+
+      const errorPercent = {
+        voltage: percentError(
+          measured.voltage,
+          reference.voltage
+        ),
+        current: percentError(
+          measured.current,
+          reference.current
+        ),
+        power: percentError(
+          measured.power,
+          reference.power
+        ),
+      };
+
+      let checks;
+
+      if (point === "no-load") {
+        // Voltage is compared against ER300P.
+        // Current and power use absolute zero-load limits.
+        checks = {
+          voltage:
+            errorPercent.voltage !== null &&
+            errorPercent.voltage <= tolerancePercent,
+
+          current:
+            Math.abs(measured.current) <= noLoadMaxCurrentA,
+
+          power:
+            Math.abs(measured.power) <= noLoadMaxPowerW,
+        };
+
+      } else {
+        // Load verification compares all three measurements
+        // against the ER300P percentage tolerance.
+        checks = {
+          voltage:
+            errorPercent.voltage !== null &&
+            errorPercent.voltage <= tolerancePercent,
+
+          current:
+            errorPercent.current !== null &&
+            errorPercent.current <= tolerancePercent,
+
+          power:
+            errorPercent.power !== null &&
+            errorPercent.power <= tolerancePercent,
+        };
+      }
+
+      const passed = Object.values(checks).every(Boolean);
+
+      const now = new Date();
+
+      const capture = {
+        capturedAt: now,
+        telemetryReceivedAt: telemetry.receivedAt,
+
+        measured,
+        reference,
+        errorPercent,
+        checks,
+
+        tolerancePercent,
+        noLoadMaxCurrentA,
+        noLoadMaxPowerW,
+
+        passed,
+      };
+
+      if (!device.calibration.verification) {
+        device.calibration.verification = {};
+      }
+
+      if (point === "no-load") {
+        device.calibration.verification.noLoad = capture;
+      } else {
+        device.calibration.verification.load = capture;
+      }
+
+      const verification =
+        device.calibration.verification;
+
+      const bothCaptured =
+        Boolean(verification.noLoad) &&
+        Boolean(verification.load);
+
+      verification.passed = bothCaptured
+        ? Boolean(
+            verification.noLoad.passed &&
+            verification.load.passed
+          )
+        : null;
+
+      verification.verifiedAt = bothCaptured ? now : null;
+
+      // A new capture requires a new final test decision.
+      device.calibration.testStatus =
+        ProductionDevice.TEST_STATUS.NOT_TESTED;
+
+      device.calibration.testedAt = null;
+      device.calibration.testedBy = null;
+      device.calibration.testNotes = "";
+
+      device.updatedBy = actorId(req);
+
+      await device.save();
+
+      return res.status(201).json({
+        success: true,
+        message: `${point} verification captured.`,
+        data: {
+          serialNumber: device.serialNumber,
+          point,
+          capture,
+          verification: {
+            noLoadPassed:
+              verification.noLoad?.passed ?? null,
+            loadPassed:
+              verification.load?.passed ?? null,
+            overallPassed:
+              verification.passed,
+          },
+        },
+      });
+    }
+
+    // ------------------------------------------------
+    // B. FINALIZE CALIBRATION TEST
+    // ------------------------------------------------
+
+    const result = String(
+      req.body?.result || ""
+    ).trim().toLowerCase();
 
     if (!["passed", "failed"].includes(result)) {
       return res.status(400).json({
         success: false,
-        message: "Test result must be passed or failed.",
+        message:
+          'Provide point="no-load"/"load" to capture readings, or result="passed"/"failed" to finalize.',
       });
+    }
+
+    const verification =
+      device.calibration.verification || {};
+
+    if (result === "passed") {
+      if (!verification.noLoad || !verification.load) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Capture both no-load and load verification readings before passing the test.",
+        });
+      }
+
+      if (
+        verification.noLoad.passed !== true ||
+        verification.load.passed !== true
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Verification failed. Both no-load and load checks must pass before Dispatch.",
+          data: {
+            noLoad: verification.noLoad,
+            load: verification.load,
+          },
+        });
+      }
     }
 
     const now = new Date();
@@ -1363,14 +1811,20 @@ async function markCalibrationTest(req, res) {
 
     device.calibration.testedAt = now;
     device.calibration.testedBy = actorId(req);
+
     device.calibration.testNotes = String(
-      req.body.notes || ""
-    ).trim();
+      req.body?.notes || ""
+    ).trim().slice(0, 1000);
 
     if (result === "passed") {
+      device.calibration.verification.passed = true;
+      device.calibration.verification.verifiedAt =
+        device.calibration.verification.verifiedAt || now;
+
       device.stage = ProductionDevice.STAGE.DISPATCH;
       device.stageUpdatedAt = now;
       device.dispatch.status = "ready";
+
     } else {
       device.stage = ProductionDevice.STAGE.CALIBRATION;
       device.dispatch.status = "not_ready";
@@ -1384,18 +1838,21 @@ async function markCalibrationTest(req, res) {
       success: true,
       message:
         result === "passed"
-          ? "Calibration test passed. Device is ready for Dispatch."
+          ? "Calibration verification passed. Device is ready for Dispatch."
           : "Calibration test failed. Device remains in Calibration.",
       data: publicDevice(device),
     });
 
   } catch (error) {
-    return res.status(500).json({
+    console.error("[CALIBRATION TEST]", error);
+
+    return res.status(400).json({
       success: false,
       message: error.message,
     });
   }
 }
+
 
 // --------------------------------------------------
 // EXPORTS

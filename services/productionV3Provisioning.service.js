@@ -1,6 +1,8 @@
 
 // services/productionV3Provisioning.service.js
 
+const crypto = require("crypto");
+
 const mqttClient = require("../mqttClient");
 const ProductionDevice = require("../models/ProductionDevice");
 
@@ -13,6 +15,27 @@ const {
   normalizeDeviceId,
 } = require("../config/deviceProtocol");
 
+// --------------------------------------------------
+// COMMON HELPERS
+// --------------------------------------------------
+
+function cleanMessage(value, maxLength = 500) {
+  return String(value || "").trim().slice(0, maxLength) || null;
+}
+
+function matchedCount(result) {
+  return result?.matchedCount ?? result?.n ?? 0;
+}
+
+function modifiedCount(result) {
+  return result?.modifiedCount ?? result?.nModified ?? 0;
+}
+
+// --------------------------------------------------
+// MQTT PUBLISH
+// Uses the application's existing shared MQTT client.
+// --------------------------------------------------
+
 function publishAsync(topic, payload) {
   if (!mqttClient.connected) {
     return Promise.reject(
@@ -24,9 +47,15 @@ function publishAsync(topic, payload) {
     mqttClient.publish(
       topic,
       JSON.stringify(payload),
-      { qos: 1, retain: false },
+      {
+        qos: 1,
+        retain: false,
+      },
       (error) => {
-        if (error) return reject(error);
+        if (error) {
+          return reject(error);
+        }
+
         resolve();
       }
     );
@@ -34,7 +63,8 @@ function publishAsync(topic, payload) {
 }
 
 // --------------------------------------------------
-// GROUP B: Provision Wi-Fi + Device ID
+// GROUP B: PROVISION WIFI + DEVICE ID
+//
 // Topic: viz/<SERIAL>/config
 // --------------------------------------------------
 
@@ -55,6 +85,16 @@ async function publishGroupBProvisionConfig({
     );
   }
 
+  if (!wifiSSID || !wifiPassword) {
+    throw new Error("Wi-Fi SSID and password are required.");
+  }
+
+  const version = Number(nvsVersion);
+
+  if (!Number.isInteger(version) || version < 0) {
+    throw new Error("Invalid NVS version.");
+  }
+
   const topic = buildConfigTopic(serial);
 
   const payload = {
@@ -65,21 +105,22 @@ async function publishGroupBProvisionConfig({
     deviceId: normalizedDeviceId,
     ssid: wifiSSID,
     password: wifiPassword,
-    nvsVersion: Number(nvsVersion),
+    nvsVersion: version,
   };
 
   await publishAsync(topic, payload);
 
-  // Never log or return the Wi-Fi credentials.
+  // Never log or return Wi-Fi credentials.
   return {
     topic,
     requestId,
-    nvsVersion: Number(nvsVersion),
+    nvsVersion: version,
   };
 }
 
 // --------------------------------------------------
-// CALIBRATION: Send five calculated coefficients
+// CALIBRATION: SEND FIVE COEFFICIENTS
+//
 // Topic: viz/<SERIAL>/config
 // --------------------------------------------------
 
@@ -91,7 +132,9 @@ async function publishCalibration({
   const serial = normalizeSerialNumber(serialNumber).toUpperCase();
 
   if (!serial || !requestId) {
-    throw new Error("Serial number and request ID are required.");
+    throw new Error(
+      "Serial number and request ID are required."
+    );
   }
 
   const keys = [
@@ -112,7 +155,9 @@ async function publishCalibration({
     const value = Number(coefficients?.[key]);
 
     if (!Number.isFinite(value)) {
-      throw new Error(`Invalid calibration coefficient: ${key}`);
+      throw new Error(
+        `Invalid calibration coefficient: ${key}`
+      );
     }
 
     payload[key] = value;
@@ -122,17 +167,22 @@ async function publishCalibration({
 
   await publishAsync(topic, payload);
 
-  return { topic, requestId };
+  return {
+    topic,
+    requestId,
+  };
 }
 
 // --------------------------------------------------
 // DEVICE CONTROLS
+//
 // Topic: viz/<DEVICE_ID>/admincmd
 // --------------------------------------------------
 
 async function publishProductionCommand({
   deviceId,
   action,
+  requestId,
 }) {
   const normalizedDeviceId = normalizeDeviceId(deviceId);
 
@@ -143,33 +193,37 @@ async function publishProductionCommand({
     "stopFastTelemetry",
   ];
 
-  if (!allowedActions.includes(action)) {
-    throw new Error("Unsupported production device command.");
-  }
-
   if (!normalizedDeviceId) {
     throw new Error("Valid Device ID is required.");
   }
 
-  const requestId = require("crypto").randomUUID();
+  if (!allowedActions.includes(action)) {
+    throw new Error("Unsupported production device command.");
+  }
+
+  const correlationId = String(
+    requestId || crypto.randomUUID()
+  ).trim();
 
   const topic = `viz/${normalizedDeviceId}/admincmd`;
 
   await publishAsync(topic, {
     action,
-    requestId,
+    requestId: correlationId,
   });
 
   return {
     topic,
-    requestId,
+    requestId: correlationId,
+    deviceId: normalizedDeviceId,
     action,
   };
 }
 
 // --------------------------------------------------
-// INCOMING PRODUCTION CONFIG ACK
-// Called by mqttSubscriber.js
+// GROUP B CONFIG ACK
+//
+// Topic: viz/<SERIAL>/configAck
 // --------------------------------------------------
 
 async function handleProductionConfigAck({
@@ -179,27 +233,48 @@ async function handleProductionConfigAck({
   const serial = normalizeSerialNumber(serialNumber).toUpperCase();
 
   if (!serial) {
-    return { matched: false, reason: "missing_serial" };
+    return {
+      matched: false,
+      reason: "missing_serial",
+    };
   }
 
   const device = await ProductionDevice.findOne({
     serialNumber: serial,
-  });
+  })
+    .select(
+      [
+        "_id",
+        "serialNumber",
+        "groupB.provisionStatus",
+        "groupB.configAck",
+        "groupB.lastKnownFirmwareVersion",
+        "calibration.status",
+        "calibration.requestId",
+      ].join(" ")
+    )
+    .lean();
 
   if (!device) {
-    return { matched: false, reason: "device_not_found" };
+    return {
+      matched: false,
+      reason: "device_not_found",
+    };
   }
 
   const requestId = String(ack?.requestId || "").trim();
 
   const status = String(
     ack?.status || ""
-  ).toLowerCase();
+  ).trim().toLowerCase();
 
-  // The production record matched. Never send its ACK through
-  // the legacy Device/DeviceProvision ACK update path.
+  // A production serial has matched.
+  // Never pass malformed production ACKs into legacy updates.
   if (!requestId) {
-    return { matched: true, reason: "missing_request_id" };
+    return {
+      matched: true,
+      reason: "missing_request_id",
+    };
   }
 
   if (
@@ -208,82 +283,136 @@ async function handleProductionConfigAck({
       CONFIG_ACK_STATUS.ERROR,
     ].includes(status)
   ) {
-    return { matched: true, reason: "invalid_status" };
+    return {
+      matched: true,
+      reason: "invalid_status",
+    };
   }
 
   const now = new Date();
 
-  const wasIgnored = /older or duplicate configuration ignored/i.test(
-    String(ack.message || "")
-  );
+  const message = cleanMessage(ack.message);
+
+  const wasIgnored =
+    /older or duplicate configuration ignored/i.test(
+      String(ack.message || "")
+    );
 
   const successful =
-    status === CONFIG_ACK_STATUS.OK && !wasIgnored;
+    status === CONFIG_ACK_STATUS.OK &&
+    !wasIgnored;
 
+  // ------------------------------------------------
   // GROUP B ACK
-  const expectedProvisionAck = device.groupB?.configAck || {};
+  // ------------------------------------------------
+
+  const expectedProvisionAck =
+    device.groupB?.configAck || {};
 
   if (
-    requestId &&
     requestId === expectedProvisionAck.requestId
   ) {
-    const expectedNvsVersion = Number(expectedProvisionAck.nvsVersion);
+    const expectedNvsVersion = Number(
+      expectedProvisionAck.nvsVersion
+    );
 
     if (
       ack.nvsVersion !== undefined &&
-      ack.nvsVersion !== null &&
-      Number(ack.nvsVersion) !== expectedNvsVersion
+      ack.nvsVersion !== null
     ) {
-      return { matched: true, reason: "stale_nvs_version" };
+      const receivedNvsVersion = Number(ack.nvsVersion);
+
+      if (!Number.isFinite(receivedNvsVersion)) {
+        return {
+          matched: true,
+          reason: "invalid_nvs_version",
+        };
+      }
+
+      if (
+        Number.isFinite(expectedNvsVersion) &&
+        receivedNvsVersion !== expectedNvsVersion
+      ) {
+        return {
+          matched: true,
+          reason: "stale_nvs_version",
+        };
+      }
     }
 
-    // Ignore duplicate successful provisioning ACKs.
-// Do not move a device backwards from Calibration/Dispatch.
-if (
-  expectedProvisionAck.status === CONFIG_ACK_STATUS.OK &&
-  device.groupB.provisionStatus ===
-    ProductionDevice.PROVISION_STATUS.ACKNOWLEDGED
-) {
-  return {
-    matched: true,
-    reason: "duplicate_provision_ack",
-  };
-}
+    // Duplicate successful ACK:
+    // Do not move the device backwards from Calibration or Dispatch.
+    if (
+      expectedProvisionAck.status === CONFIG_ACK_STATUS.OK &&
+      device.groupB?.provisionStatus ===
+        ProductionDevice.PROVISION_STATUS.ACKNOWLEDGED
+    ) {
+      return {
+        matched: true,
+        reason: "duplicate_provision_ack",
+      };
+    }
 
-    device.groupB.provisionStatus = successful
-      ? ProductionDevice.PROVISION_STATUS.ACKNOWLEDGED
-      : ProductionDevice.PROVISION_STATUS.FAILED;
+    const updateFields = {
+      "groupB.provisionStatus": successful
+        ? ProductionDevice.PROVISION_STATUS.ACKNOWLEDGED
+        : ProductionDevice.PROVISION_STATUS.FAILED,
 
-    device.groupB.configAck = {
-      status,
-      action: CONFIG_ACTION,
-      requestId,
-      message: ack.message || null,
-      fwVersion: ack.fwVersion || null,
-      nvsVersion: expectedNvsVersion,
-      receivedAt: now,
+      "groupB.configAck": {
+        status,
+        action: CONFIG_ACTION,
+        requestId,
+        message,
+        fwVersion: cleanMessage(ack.fwVersion, 100),
+        nvsVersion: Number.isFinite(expectedNvsVersion)
+          ? expectedNvsVersion
+          : null,
+        receivedAt: now,
+      },
+
+      "groupB.lastError": successful
+        ? null
+        : (
+            message ||
+            "Device rejected provisioning configuration."
+          ),
+
+      updatedBy: "mqtt",
     };
 
-    device.groupB.lastError = successful
-      ? null
-      : String(
-          ack.message ||
-          (wasIgnored
-            ? "Device ignored an older or duplicate configuration."
-            : "Device rejected provisioning configuration.")
-        );
+    if (successful) {
+      updateFields.stage = ProductionDevice.STAGE.CALIBRATION;
+      updateFields.stageUpdatedAt = now;
+    }
 
     if (ack.fwVersion) {
-      device.groupB.lastKnownFirmwareVersion = String(ack.fwVersion);
+      updateFields["groupB.lastKnownFirmwareVersion"] =
+        String(ack.fwVersion).slice(0, 100);
     }
 
-    if (successful) {
-      device.stage = ProductionDevice.STAGE.CALIBRATION;
-      device.stageUpdatedAt = now;
-    }
+    // The request ID in the database must still match.
+    // An older delayed ACK cannot overwrite a newer provision request.
+    const update = await ProductionDevice.updateOne(
+      {
+        _id: device._id,
+        "groupB.configAck.requestId": requestId,
+        "groupB.provisionStatus": {
+          $ne: ProductionDevice.PROVISION_STATUS.ACKNOWLEDGED,
+        },
+      },
+      {
+        $set: updateFields,
+      }
+    );
 
-    device.updatedBy = "mqtt";
-    await device.save();
+    if (matchedCount(update) === 0) {
+      return {
+        matched: true,
+        reason: modifiedCount(update) === 0
+          ? "duplicate_or_stale_provision_ack"
+          : "provision_ack_not_applied",
+      };
+    }
 
     return {
       matched: true,
@@ -293,41 +422,94 @@ if (
     };
   }
 
+  // ------------------------------------------------
   // CALIBRATION ACK
-  if (requestId === device.calibration?.requestId) {
-    device.calibration.acknowledgement = {
-      status,
-      action: "setCalibration",
-      requestId,
-      message: ack.message || null,
-      fwVersion: ack.fwVersion || null,
-      nvsVersion:
-        ack.nvsVersion !== undefined && ack.nvsVersion !== null
-          ? Number(ack.nvsVersion)
-          : null,
-      receivedAt: now,
+  // ------------------------------------------------
+
+  if (
+    requestId === device.calibration?.requestId
+  ) {
+    // A duplicate successful calibration ACK must not
+    // re-apply the transition or overwrite the applied time.
+    if (
+      device.calibration.acknowledgement?.status ===
+        CONFIG_ACK_STATUS.OK &&
+      device.calibration.status ===
+        ProductionDevice.CALIBRATION_STATUS.APPLIED
+    ) {
+      return {
+        matched: true,
+        reason: "duplicate_calibration_ack",
+      };
+    }
+
+    const receivedNvsVersion =
+      ack.nvsVersion !== undefined &&
+      ack.nvsVersion !== null
+        ? Number(ack.nvsVersion)
+        : null;
+
+    const validNvsVersion =
+      receivedNvsVersion !== null &&
+      Number.isFinite(receivedNvsVersion)
+        ? receivedNvsVersion
+        : null;
+
+    const updateFields = {
+      "calibration.acknowledgement": {
+        status,
+        action: "setCalibration",
+        requestId,
+        message,
+        fwVersion: cleanMessage(ack.fwVersion, 100),
+        nvsVersion: validNvsVersion,
+        receivedAt: now,
+      },
+
+      "calibration.status": successful
+        ? ProductionDevice.CALIBRATION_STATUS.APPLIED
+        : ProductionDevice.CALIBRATION_STATUS.FAILED,
+
+      "calibration.appliedAt": successful ? now : null,
+
+      "calibration.lastError": successful
+        ? null
+        : (
+            message ||
+            "Firmware rejected calibration."
+          ),
+
+      updatedBy: "mqtt",
     };
 
-    if (successful) {
-      device.calibration.status =
-        ProductionDevice.CALIBRATION_STATUS.APPLIED;
-
-      device.calibration.appliedAt = now;
-      device.calibration.lastError = null;
-    } else {
-      device.calibration.status =
-        ProductionDevice.CALIBRATION_STATUS.FAILED;
-
-      device.calibration.lastError =
-        ack.message || "Firmware rejected calibration.";
-    }
-
     if (ack.fwVersion) {
-      device.groupB.lastKnownFirmwareVersion = String(ack.fwVersion);
+      updateFields["groupB.lastKnownFirmwareVersion"] =
+        String(ack.fwVersion).slice(0, 100);
     }
 
-    device.updatedBy = "mqtt";
-    await device.save();
+    // This condition prevents an old ACK from overwriting
+    // a newer calibration request or an already-applied result.
+    const update = await ProductionDevice.updateOne(
+      {
+        _id: device._id,
+        "calibration.requestId": requestId,
+        "calibration.status": {
+          $ne: ProductionDevice.CALIBRATION_STATUS.APPLIED,
+        },
+      },
+      {
+        $set: updateFields,
+      }
+    );
+
+    if (matchedCount(update) === 0) {
+      return {
+        matched: true,
+        reason: modifiedCount(update) === 0
+          ? "duplicate_or_stale_calibration_ack"
+          : "calibration_ack_not_applied",
+      };
+    }
 
     return {
       matched: true,
@@ -343,9 +525,166 @@ if (
   };
 }
 
+// --------------------------------------------------
+// ADMIN COMMAND ACK
+//
+// Topic: viz/<DEVICE_ID>/adminAck
+//
+// Expected status values:
+//   ok / success / acknowledged
+//   error / failed / rejected
+// --------------------------------------------------
+
+async function handleProductionAdminAck({
+  deviceId,
+  ack,
+}) {
+  const normalizedDeviceId = normalizeDeviceId(deviceId);
+
+  if (!normalizedDeviceId) {
+    return {
+      matched: false,
+      reason: "missing_device_id",
+    };
+  }
+
+  const device = await ProductionDevice.findOne({
+    "groupB.deviceId": normalizedDeviceId,
+  })
+    .select(
+      "_id serialNumber groupB.deviceId groupB.lastCommand"
+    )
+    .lean();
+
+  if (!device) {
+    return {
+      matched: false,
+      reason: "device_not_found",
+    };
+  }
+
+  const requestId = String(
+    ack?.requestId || ""
+  ).trim();
+
+  if (!requestId) {
+    return {
+      matched: true,
+      reason: "missing_request_id",
+    };
+  }
+
+  // If the payload also contains Device ID, it must agree with the topic.
+  if (
+    ack.deviceId &&
+    normalizeDeviceId(ack.deviceId) !== normalizedDeviceId
+  ) {
+    return {
+      matched: true,
+      reason: "device_id_mismatch",
+    };
+  }
+
+  const pending = device.groupB?.lastCommand;
+
+  if (!pending || pending.requestId !== requestId) {
+    return {
+      matched: true,
+      reason: "stale_or_unmatched_command_ack",
+    };
+  }
+
+  const ackAction = String(
+    ack.action || ""
+  ).trim();
+
+  if (
+    ackAction &&
+    ackAction !== pending.action
+  ) {
+    return {
+      matched: true,
+      reason: "command_action_mismatch",
+    };
+  }
+
+  const rawStatus = String(
+    ack.status || ""
+  ).trim().toLowerCase();
+
+  let commandStatus = null;
+
+  if (
+    ["ok", "success", "acknowledged", "accepted"].includes(rawStatus) ||
+    ack.success === true ||
+    ack.ok === true
+  ) {
+    commandStatus = "acknowledged";
+  } else if (
+    ["error", "failed", "failure", "rejected"].includes(rawStatus) ||
+    ack.success === false ||
+    ack.ok === false
+  ) {
+    commandStatus = "failed";
+  }
+
+  if (!commandStatus) {
+    return {
+      matched: true,
+      reason: "invalid_command_ack_status",
+    };
+  }
+
+  if (pending.status !== "pending") {
+    return {
+      matched: true,
+      reason: "duplicate_command_ack",
+    };
+  }
+
+  const now = new Date();
+
+  // Atomic correlation: update only the exact pending command.
+  const update = await ProductionDevice.updateOne(
+    {
+      _id: device._id,
+      "groupB.lastCommand.requestId": requestId,
+      "groupB.lastCommand.status": "pending",
+    },
+    {
+      $set: {
+        "groupB.lastCommand.status": commandStatus,
+        "groupB.lastCommand.acknowledgedAt": now,
+        "groupB.lastCommand.message": cleanMessage(ack.message),
+        updatedBy: "mqtt",
+      },
+    }
+  );
+
+  if (matchedCount(update) === 0) {
+    return {
+      matched: true,
+      reason: "duplicate_or_stale_command_ack",
+    };
+  }
+
+  return {
+    matched: true,
+    operation: pending.action,
+    status: commandStatus,
+    requestId,
+    serialNumber: device.serialNumber,
+  };
+}
+
+// --------------------------------------------------
+// EXPORTS
+// --------------------------------------------------
+
 module.exports = {
   publishGroupBProvisionConfig,
   publishCalibration,
   publishProductionCommand,
   handleProductionConfigAck,
+  handleProductionAdminAck,
 };
