@@ -453,26 +453,6 @@ exports.retryProvisioning = async (req, res) => {
       });
     }
 
-    // Do not overwrite the state of another pending configuration.
-    const pendingCommand = await ProductionCommand.findOne({
-      serialNumber,
-      action: {
-        $in: ["setConfig", "setCalibration"],
-      },
-      status: {
-        $in: ACTIVE_COMMAND_STATUSES,
-      },
-    }).sort({ createdAt: -1 });
-
-    if (pendingCommand) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "Another configuration or calibration command is awaiting acknowledgement.",
-        requestId: pendingCommand.requestId,
-      });
-    }
-
     const ssid = decryptSecret(
       device.wifiCredentials?.encryptedSsid
     );
@@ -1119,23 +1099,6 @@ exports.applyCalibration = async (req, res) => {
       values[key] = value;
     }
 
-const pending = await ProductionCommand.findOne({
-  serialNumber,
-  action: {
-    $in: ["setConfig", "setCalibration"],
-  },
-  status: {
-    $in: ACTIVE_COMMAND_STATUSES,
-  },
-});
-
-    if (pending) {
-      return res.status(409).json({
-        success: false,
-        message: "A calibration apply is already awaiting acknowledgement for this device.",
-        requestId: pending.requestId,
-      });
-    }
 
     const requestId = createRequestId("calibration");
 

@@ -60,20 +60,21 @@ const productionCommandSchema = new mongoose.Schema(
       default: {},
     },
 
-    status: {
-      type: String,
-      enum: [
-        "queued",
-        "published",
-        "accepted",
-        "rejected",
-        "duplicate",
-        "completed",
-        "failed",
-      ],
-      default: "queued",
-      index: true,
-    },
+status: {
+  type: String,
+  enum: [
+    "queued",
+    "published",
+    "accepted",
+    "rejected",
+    "duplicate",
+    "completed",
+    "failed",
+    "superseded",
+  ],
+  default: "queued",
+  index: true,
+},
 
     acknowledgement: {
       type: mongoose.Schema.Types.Mixed,

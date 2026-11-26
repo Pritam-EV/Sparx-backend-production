@@ -195,6 +195,7 @@ async function publishAdminCommand({
   });
 }
 
+
 async function publishConfigCommand({
   device,
   payload,
@@ -211,27 +212,6 @@ async function publishConfigCommand({
     throw new Error("Valid device serial number is required.");
   }
 
-  const pending = await ProductionCommand.findOne({
-    serialNumber,
-    action: {
-      $in: ["setConfig", "setCalibration"],
-    },
-    status: {
-      $in: PENDING_COMMAND_STATUSES,
-    },
-  }).sort({ createdAt: -1 });
-
-  if (pending) {
-    const error = new Error(
-      "Another configuration or calibration command is awaiting acknowledgement."
-    );
-
-    error.statusCode = 409;
-    error.requestId = pending.requestId;
-
-    throw error;
-  }
-
   const requestId =
     payload.requestId || createRequestId("config");
 
@@ -240,16 +220,75 @@ async function publishConfigCommand({
     requestId,
   };
 
+  // Find all currently active configuration commands.
+  const activeCommands = await ProductionCommand.find({
+    serialNumber,
+    action: {
+      $in: ["setConfig", "setCalibration"],
+    },
+    status: {
+      $in: PENDING_COMMAND_STATUSES,
+    },
+  }).select("_id requestId kind action");
+
+  // Never silently replace an identity-change command.
+  // Identity changes need their own explicit handling.
+  const pendingIdentityChange = activeCommands.find(
+    (command) => command.kind === "identity_change"
+  );
+
+  if (pendingIdentityChange) {
+    const error = new Error(
+      "An identity-change command is still awaiting acknowledgement."
+    );
+
+    error.statusCode = 409;
+    error.requestId = pendingIdentityChange.requestId;
+
+    throw error;
+  }
+
+  // Preserve old records but mark them as superseded.
+  const commandsToSupersede = activeCommands
+    .filter((command) => command.requestId !== requestId)
+    .map((command) => command._id);
+
+  if (commandsToSupersede.length > 0) {
+    await ProductionCommand.updateMany(
+      {
+        _id: {
+          $in: commandsToSupersede,
+        },
+        status: {
+          $in: PENDING_COMMAND_STATUSES,
+        },
+      },
+      {
+        $set: {
+          status: "superseded",
+          "metadata.supersededAt": new Date(),
+          "metadata.supersededByRequestId": requestId,
+        },
+      }
+    );
+
+    console.log(
+      "[Production V3] Superseded previous config commands:",
+      serialNumber,
+      commandsToSupersede.length
+    );
+  }
+
   const configTopic =
     `viz/${serialNumber}/config`;
 
   const acknowledgementTopic =
     `viz/${serialNumber}/configAck`;
 
-  // The firmware publishes retained config acknowledgements.
-  // Clear any previous ACK before sending the new command.
+  // Clear the old retained acknowledgement.
   await publishRetainedClear(acknowledgementTopic);
 
+  // Send the new command.
   return publishTrackedCommand({
     requestId,
     serialNumber,
@@ -262,6 +301,7 @@ async function publishConfigCommand({
     createdBy,
   });
 }
+
 
 
 // ==================================================
@@ -481,44 +521,99 @@ async function handleConfigAck(parts, message) {
     return;
   }
 
-  // Match setConfig strictly by the requested NVS version.
+
+const ackRequestId = String(
+  message.requestId || ""
+).trim();
+
+let command = null;
+
+// Preferred: exact command matching using requestId.
+if (ackRequestId) {
+  command = await ProductionCommand.findOne({
+    serialNumber,
+    requestId: ackRequestId,
+    action: {
+      $in: ["setConfig", "setCalibration"],
+    },
+    status: {
+      $in: PENDING_COMMAND_STATUSES,
+    },
+  });
+
+  if (!command) {
+    console.warn(
+      "[Production V3 MQTT] Ignoring ACK for unknown, completed or superseded request:",
+      serialNumber,
+      ackRequestId
+    );
+    return;
+  }
+
+  const expectedNvsVersion = Number(
+    command.action === "setConfig"
+      ? command.metadata?.nvsVersion
+      : command.metadata?.expectedNvsVersion
+  );
+
+  if (
+    Number.isSafeInteger(expectedNvsVersion) &&
+    expectedNvsVersion !== nvsVersion
+  ) {
+    console.warn(
+      "[Production V3 MQTT] ACK NVS version mismatch:",
+      serialNumber,
+      ackRequestId
+    );
+    return;
+  }
+
+} else {
+  // Legacy compatibility:
+  // setConfig has a unique incrementing NVS version.
   const configCommand = await ProductionCommand.findOne({
     serialNumber,
     action: "setConfig",
     "metadata.nvsVersion": nvsVersion,
-    status: { $in: PENDING_COMMAND_STATUSES },
+    status: {
+      $in: PENDING_COMMAND_STATUSES,
+    },
   });
 
-  // setCalibration does not increment NVS version.
-  // Its expected version is the currently applied configuration.
+  // setCalibration does not increment NVS.
+  // Without requestId, we cannot safely distinguish an
+  // older calibration ACK from the latest calibration ACK.
   const calibrationCommand = await ProductionCommand.findOne({
     serialNumber,
     action: "setCalibration",
     "metadata.expectedNvsVersion": nvsVersion,
-    status: { $in: PENDING_COMMAND_STATUSES },
+    status: {
+      $in: PENDING_COMMAND_STATUSES,
+    },
   });
 
-  if (configCommand && calibrationCommand) {
-    console.error(
-      "[Production V3 MQTT] Ambiguous config ACK:",
-      serialNumber,
-      nvsVersion
-    );
-    return;
-  }
-
-  const command = configCommand || calibrationCommand;
-
-  if (!command) {
+  if (calibrationCommand) {
     console.warn(
-      "[Production V3 MQTT] No matching config command:",
+      "[Production V3 MQTT] Ignoring setCalibration ACK without requestId:",
       serialNumber,
       nvsVersion
     );
     return;
   }
 
-  const ackMessage = String(message.message || "");
+  command = configCommand;
+}
+
+if (!command) {
+  console.warn(
+    "[Production V3 MQTT] No matching active config command:",
+    serialNumber,
+    nvsVersion,
+    ackRequestId
+  );
+  return;
+}
+
 
   // Firmware reports an "ok" for an older/duplicate setConfig
   // without actually applying the requested configuration.
