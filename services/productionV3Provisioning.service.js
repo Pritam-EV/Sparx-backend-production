@@ -115,7 +115,14 @@ async function handleGroupBConfigAck({ serialNumber, ack }) {
     return { matched: false, reason: "stale_nvs_version" };
   }
 
-  const successful = status === CONFIG_ACK_STATUS.OK;
+  // Firmware sends status="ok" for an old/duplicate NVS version too.
+  // That is not proof that this newly requested configuration was applied.
+  const wasIgnored =
+    /older or duplicate configuration ignored/i.test(
+      String(ack.message || "")
+    );
+  const successful =
+    status === CONFIG_ACK_STATUS.OK && !wasIgnored;
 
   device.groupB.provisionStatus = successful
     ? ProductionDevice.PROVISION_STATUS.ACKNOWLEDGED
@@ -136,7 +143,12 @@ async function handleGroupBConfigAck({ serialNumber, ack }) {
 
   device.groupB.lastError = successful
     ? null
-    : String(ack.message || "Device rejected provisioning configuration");
+    : String(
+        ack.message ||
+        (wasIgnored
+          ? "Device ignored the older/duplicate configuration version"
+          : "Device rejected provisioning configuration")
+      );
 
   if (ack.fwVersion) {
     device.groupB.lastKnownFirmwareVersion = String(ack.fwVersion);
