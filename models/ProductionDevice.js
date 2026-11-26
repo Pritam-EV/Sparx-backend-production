@@ -193,6 +193,8 @@ const productionDeviceSchema = new mongoose.Schema(
       },
       provisionSentAt: { type: Date, default: null },
       provisionedBy: { type: String, default: null },
+      nvsVersion: { type: Number, default: 0, min: 0 },
+      lastKnownFirmwareVersion: { type: String, default: null },
       configAck: { type: configAckSchema, default: () => ({}) },
       connection: {
         type: connectionStatusSchema,
