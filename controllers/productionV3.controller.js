@@ -846,7 +846,19 @@ async function captureCalibrationPoint(req, res) {
         message: "Reference current and power cannot be negative.",
       });
     }
-
+    if (
+      point === "load" &&
+      (
+        reference.current <= 0 ||
+        reference.power <= 0
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Load capture requires positive reference current and power.",
+      });
+    }
     const capture = {
       capturedAt: new Date(),
       telemetryReceivedAt: telemetry.receivedAt,
