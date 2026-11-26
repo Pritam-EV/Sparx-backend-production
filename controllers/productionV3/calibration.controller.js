@@ -714,14 +714,8 @@ exports.calculateCalibration = async (req, res) => {
 // APPLY CALIBRATION
 // POST /calibration/sessions/:sessionId/apply
 //
-// Body:
-// {
-//   "vf": 1.88,
-//   "currentZero": 0.001,
-//   "currentGain": 0.231,
-//   "powerZero": 0.001,
-//   "powerGain": 0.435
-// }
+// Coefficients are read from the server-persisted session.calculatedConstants.
+// The request body is intentionally ignored; the browser cannot override them.
 // ==================================================
 
 exports.applyCalibration = async (req, res) => {
@@ -1228,12 +1222,18 @@ for (const pointCode of requiredPointCodes) {
       continue;
     }
 
-    const tolerance = Number(toleranceMap[channel]);
+    const configuredTolerance = toleranceMap[channel];
+    const tolerance =
+      configuredTolerance === null ||
+      configuredTolerance === undefined ||
+      configuredTolerance === ""
+        ? NaN
+        : Number(configuredTolerance);
 
-    if (!Number.isFinite(tolerance)) {
+    if (!Number.isFinite(tolerance) || tolerance < 0) {
       return res.status(409).json({
         success: false,
-        message: `Missing ${channel} verification tolerance.`,
+        message: `Missing or invalid ${channel} verification tolerance. Configure the tolerance in the Calibration Profile before completing verification.`,
       });
     }
 
