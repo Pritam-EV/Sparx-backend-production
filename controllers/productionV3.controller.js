@@ -98,23 +98,31 @@ async function findProductionDevice(id) {
   return ProductionDevice.findOne(getDeviceQuery(id));
 }
 
+
 function finiteNumber(value, label) {
   if (
     value === undefined ||
     value === null ||
     value === ""
   ) {
-    throw new Error(`${label} is required.`);
+    const error = new Error(`${label} is required.`);
+    error.statusCode = 400;
+    throw error;
   }
 
   const number = Number(value);
 
   if (!Number.isFinite(number)) {
-    throw new Error(`${label} must be a valid number.`);
+    const error = new Error(
+      `${label} must be a valid number.`
+    );
+    error.statusCode = 400;
+    throw error;
   }
 
   return number;
 }
+
 
 function firmwareFloat(value, label) {
   if (!Number.isFinite(value)) {
@@ -224,32 +232,28 @@ async function createGroupAEntries(req, res) {
     dbSession = await mongoose.startSession();
 
     await dbSession.withTransaction(async () => {
-      const [
-        existingProduction,
-        existingProvision,
-        existingDevices,
-      ] = await Promise.all([
-        ProductionDevice.find({
-          serialNumber: { $in: generated.serialNumbers },
-        })
-          .select("serialNumber")
-          .session(dbSession)
-          .lean(),
 
-        DeviceProvision.find({
-          serialNumber: { $in: generated.serialNumbers },
-        })
-          .select("serialNumber")
-          .session(dbSession)
-          .lean(),
+const existingProduction = await ProductionDevice.find({
+  serialNumber: { $in: generated.serialNumbers },
+})
+  .select("serialNumber")
+  .session(dbSession)
+  .lean();
 
-        Device.find({
-          serialNumber: { $in: generated.serialNumbers },
-        })
-          .select("serialNumber")
-          .session(dbSession)
-          .lean(),
-      ]);
+const existingProvision = await DeviceProvision.find({
+  serialNumber: { $in: generated.serialNumbers },
+})
+  .select("serialNumber")
+  .session(dbSession)
+  .lean();
+
+const existingDevices = await Device.find({
+  serialNumber: { $in: generated.serialNumbers },
+})
+  .select("serialNumber")
+  .session(dbSession)
+  .lean();
+
 
       const conflicts = [
         ...new Set([
@@ -346,6 +350,10 @@ async function listProductionDevices(req, res) {
 
       dispatched: {
         "dispatch.status": "completed",
+      },
+      dispatch_ready: {
+        stage: ProductionDevice.STAGE.DISPATCH,
+        "dispatch.status": "ready",
       },
     };
 
@@ -2043,19 +2051,30 @@ async function getDispatchDetails(req, res) {
       });
     }
 
-    const previous = await Device.findOne({})
-      .sort({ updatedAt: -1 })
-      .select(
-        "hardwareRevision project charger_type " +
-        "location lat lng area city state " +
-        "meterType meterConsumerNumber rate commercial " +
-        "targetFirmwareVersion"
-      )
-      .lean();
 
-    const saved = device.dispatch?.toObject
-      ? device.dispatch.toObject()
-      : device.dispatch || {};
+const saved = device.dispatch?.toObject
+  ? device.dispatch.toObject()
+  : device.dispatch || {};
+
+// Reuse a previous Live Device configuration only when
+// both project and charger type match this dispatch record.
+let previous = null;
+
+if (saved.project && saved.chargerType) {
+  previous = await Device.findOne({
+    project: saved.project,
+    charger_type: saved.chargerType,
+  })
+    .sort({ updatedAt: -1 })
+    .select(
+      "hardwareRevision project charger_type " +
+      "location lat lng area city state " +
+      "meterType meterConsumerNumber rate commercial " +
+      "targetFirmwareVersion"
+    )
+    .lean();
+}
+
 
     const choose = (key, fallback) =>
       saved[key] !== undefined && saved[key] !== null
@@ -2375,15 +2394,19 @@ async function completeProductionDispatch(req, res) {
       };
 
       // Protect against identity collisions.
-      const [duplicateId, duplicateSerial] = await Promise.all([
-        Device.findOne({ device_id: deviceId })
-          .session(dbSession)
-          .lean(),
 
-        Device.findOne({ serialNumber: device.serialNumber })
-          .session(dbSession)
-          .lean(),
-      ]);
+const duplicateId = await Device.findOne({
+  device_id: deviceId,
+})
+  .session(dbSession)
+  .lean();
+
+const duplicateSerial = await Device.findOne({
+  serialNumber: device.serialNumber,
+})
+  .session(dbSession)
+  .lean();
+
 
       if (duplicateId || duplicateSerial) {
         const error = new Error(
@@ -2400,7 +2423,17 @@ async function completeProductionDispatch(req, res) {
       const wifiPassword = decryptSecret(
         device.groupB.wifiPasswordEncrypted
       );
-
+if (
+  typeof wifiSSID !== "string" ||
+  !wifiSSID.trim() ||
+  typeof wifiPassword !== "string"
+) {
+  const error = new Error(
+    "Decrypted Wi-Fi credentials are invalid."
+  );
+  error.statusCode = 409;
+  throw error;
+}
       const now = new Date();
       const actor = actorId(req);
 

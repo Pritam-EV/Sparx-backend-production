@@ -539,6 +539,7 @@ if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
 // --------------------------------------------------
 
 const productionDeviceId = normalizeDeviceId(deviceId);
+let productionRecordMatched = false;
 
 try {
 const productionDevice = await ProductionDevice.findOne({
@@ -550,6 +551,7 @@ const productionDevice = await ProductionDevice.findOne({
   .lean();
 
   if (productionDevice) {
+    productionRecordMatched = true;
     const receivedAt = new Date();
 
     const toFiniteOrNull = (value) => {
@@ -643,7 +645,59 @@ const productionDevice = await ProductionDevice.findOne({
       }
     );
 
-    return;
+   
+// Production 3.0 devices that have not been dispatched
+// must not enter the legacy Device/session pipeline.
+if (!productionDevice.dispatch?.liveDeviceId) {
+  return;
+}
+
+// A dispatched Production 3.0 record must update its
+// linked legacy Live Device before session processing.
+const linkedDeviceUpdate = await Device.updateOne(
+  {
+    _id: productionDevice.dispatch.liveDeviceId,
+  },
+  {
+    $set: {
+      status: msg.state || "Unknown",
+      relayOn: relayOn === true,
+
+      lastKnownVoltage: sample.voltage ?? 0,
+      lastKnownCurrent: sample.current ?? 0,
+
+      totalenergy: sample.totalEnergyKwh ?? 0,
+      lastSeen: receivedAt,
+
+      ...(msg.fwVersion
+        ? {
+            lastKnownFirmwareVersion:
+              String(msg.fwVersion).slice(0, 100),
+          }
+        : {}),
+    },
+  }
+);
+
+const linkedMatched =
+  linkedDeviceUpdate?.matchedCount ??
+  linkedDeviceUpdate?.n ??
+  0;
+
+// Never allow an invalid/broken migration link to
+// create another Live Device through the old flow.
+if (linkedMatched === 0) {
+  console.error(
+    "[PRODUCTION TELEMETRY] Linked Live Device not found:",
+    productionDevice.dispatch.liveDeviceId
+  );
+  return;
+}
+
+// IMPORTANT:
+// Do not return here.
+// Continue to the existing legacy session-processing code.
+
   }
 
 } catch (productionTelemetryError) {
@@ -716,7 +770,7 @@ const matched =
   devResult?.n ??
   0;
 
-if (matched === 0) {
+if (matched === 0 && !productionRecordMatched) {
   const provision =
     await DeviceProvision.findOne({
       deviceId: devKey,
