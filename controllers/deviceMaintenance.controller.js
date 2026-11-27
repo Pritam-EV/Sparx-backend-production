@@ -270,142 +270,95 @@ exports.updateDatabase = async (req, res) => {
 
 exports.updateFirmwareConfig = async (req, res) => {
   try {
-    const result = await service.findDevice(req.params.id);
-    const { device, production, profile } = result;
-
+    const { device, production, profile } = await service.findDevice(req.params.id);
     const changes = req.body?.changes || {};
-    const allowed = ["wifiSSID", "wifiPassword"];
-
-    for (const key of Object.keys(changes)) {
-      if (!allowed.includes(key)) {
-        throw Object.assign(
-          new Error(`Unsupported firmware configuration field: ${key}`),
-          { statusCode: 400 }
-        );
-      }
+    if (Object.keys(changes).length !== 2 ||
+        !Object.prototype.hasOwnProperty.call(changes, "wifiSSID") ||
+        !Object.prototype.hasOwnProperty.call(changes, "wifiPassword")) {
+      throw Object.assign(new Error("Provide wifiSSID and wifiPassword together"), { statusCode: 400 });
     }
-
-    const hasSSID = changes.wifiSSID !== undefined;
-    const hasPassword = changes.wifiPassword !== undefined;
-
-    if (hasSSID !== hasPassword) {
-      throw Object.assign(
-        new Error("SSID and password must be updated together"),
-        { statusCode: 400 }
-      );
-    }
-
-    if (
-      typeof changes.wifiSSID !== "string" ||
-      !changes.wifiSSID.trim() ||
-      typeof changes.wifiPassword !== "string" ||
-      !changes.wifiPassword
-    ) {
-      throw Object.assign(
-        new Error("Valid Wi-Fi SSID and password are required"),
-        { statusCode: 400 }
-      );
+    if (typeof changes.wifiSSID !== "string" || !changes.wifiSSID.trim() ||
+        typeof changes.wifiPassword !== "string" || !changes.wifiPassword) {
+      throw Object.assign(new Error("Valid Wi-Fi SSID and password are required"), { statusCode: 400 });
     }
 
     const request = service.requestId();
+    const ssid = changes.wifiSSID.trim();
 
     if (profile === "legacy") {
-      device.wifiSSID = changes.wifiSSID.trim();
+      const previous = { wifiSSID: device.wifiSSID, wifiPassword: device.wifiPassword };
+      device.wifiSSID = ssid;
       device.wifiPassword = changes.wifiPassword;
-
       await device.save();
-
-const published = await service.publishDeviceConfig(
-  device.device_id,
-  { requestId: request }
-);
-      await service.log({
-        requestId: request,
-        serialNumber: device.serialNumber,
-        deviceId: device.device_id,
-        category: "firmware",
-        operation: "wifi_update",
-        firmwareProfile: profile,
-        changes: {
-          wifiSSID: changes.wifiSSID.trim(),
-          wifiPassword: "[REDACTED]",
-        },
-        status: "published",
-        mqttTopic: published.topic,
-        performedBy: service.actorId(req),
-      });
-
-      return res.status(202).json({
-        success: true,
-        message: "Wi-Fi configuration published",
-        requestId: request,
-        status: "published",
-        topic: published.topic,
-        nvsVersion: published.nvsVersion,
-      });
+      try {
+        const published = await service.publishDeviceConfig(device.device_id, { requestId: request });
+        await service.log({
+          requestId: request, serialNumber: device.serialNumber, deviceId: device.device_id,
+          category: "firmware", operation: "wifi_update", firmwareProfile: profile,
+          changes: { wifiSSID: ssid, wifiPassword: "[REDACTED]" },
+          status: "published", mqttTopic: published.topic, performedBy: service.actorId(req),
+        });
+        return res.status(202).json({
+          success: true, requestId: request, status: "published",
+          topic: published.topic, nvsVersion: published.nvsVersion,
+        });
+      } catch (error) {
+        device.wifiSSID = previous.wifiSSID;
+        device.wifiPassword = previous.wifiPassword;
+        await device.save();
+        throw error;
+      }
     }
 
-    const nextNvsVersion =
-      Number(production.groupB.nvsVersion || 0) + 1;
-
-      device.wifiSSID = changes.wifiSSID.trim();
-device.wifiPassword = changes.wifiPassword;
-
-await device.save();
-
+    const nextNvsVersion = Number(production.groupB.nvsVersion || 0) + 1;
     const topic = service.buildConfigTopic(device.serialNumber);
-
     const payload = {
-      action: "setConfig",
-      schemaVersion: 1,
-      requestId: request,
-      serialNumber: device.serialNumber,
-      deviceId: device.device_id,
-      ssid: changes.wifiSSID.trim(),
-      password: changes.wifiPassword,
-      nvsVersion: nextNvsVersion,
+      action: "setConfig", schemaVersion: 1, requestId,
+      serialNumber: device.serialNumber, deviceId: device.device_id,
+      ssid, password: changes.wifiPassword, nvsVersion: nextNvsVersion,
+    };
+    const previousDevice = { wifiSSID: device.wifiSSID, wifiPassword: device.wifiPassword };
+    const previousGroupB = {
+      nvsVersion: production.groupB.nvsVersion,
+      configAck: production.groupB.configAck?.toObject
+        ? production.groupB.configAck.toObject()
+        : production.groupB.configAck,
     };
 
-    await service.publish(topic, payload);
-
+    device.wifiSSID = ssid;
+    device.wifiPassword = changes.wifiPassword;
     production.groupB.nvsVersion = nextNvsVersion;
     production.groupB.configAck = {
-      status: "pending",
-      action: "setConfig",
-      requestId: request,
-      nvsVersion: nextNvsVersion,
+      status: "pending", action: "setConfig", requestId, nvsVersion: nextNvsVersion,
     };
-
+    await device.save();
     await production.save();
 
-    await service.log({
-      requestId: request,
-      serialNumber: device.serialNumber,
-      deviceId: device.device_id,
-      category: "firmware",
-      operation: "wifi_update",
-      firmwareProfile: profile,
-      changes: {
-        wifiSSID: changes.wifiSSID.trim(),
-        wifiPassword: "[REDACTED]",
-      },
-      status: "published",
-      mqttTopic: topic,
-      performedBy: service.actorId(req),
-    });
+    try {
+      await service.publish(topic, payload);
+      await service.log({
+        requestId, serialNumber: device.serialNumber, deviceId: device.device_id,
+        category: "firmware", operation: "wifi_update", firmwareProfile: profile,
+        changes: { wifiSSID: ssid, wifiPassword: "[REDACTED]" },
+        status: "published", mqttTopic: topic, performedBy: service.actorId(req),
+      });
+    } catch (error) {
+      device.wifiSSID = previousDevice.wifiSSID;
+      device.wifiPassword = previousDevice.wifiPassword;
+      production.groupB.nvsVersion = previousGroupB.nvsVersion;
+      production.groupB.configAck = previousGroupB.configAck;
+      await device.save();
+      await production.save();
+      throw error;
+    }
 
     return res.status(202).json({
-      success: true,
-      requestId: request,
-      status: "published",
-      topic,
-      nvsVersion: nextNvsVersion,
+      success: true, requestId, status: "published", topic, nvsVersion: nextNvsVersion,
     });
   } catch (error) {
     return responseError(res, error);
   }
 };
-
 
 exports.updateCalibration = async (req, res) => {
   try {
@@ -528,76 +481,49 @@ exports.updateCalibration = async (req, res) => {
 
 exports.sendCommand = async (req, res) => {
   try {
-    const { device, production, profile } =
-      await service.findDevice(req.params.id);
-
+    const { device, production, profile } = await service.findDevice(req.params.id);
     const action = String(req.body?.action || "");
-
-    if (["relayStart", "relayStop"].includes(action)) {
-      if (profile !== "v3") {
-        throw Object.assign(
-          new Error("Relay admin commands are supported only for confirmed V3 devices"),
-          { statusCode: 400 }
-        );
-      }
-
-      if (action === "relayStart" && req.body.testMode !== true) {
-        throw Object.assign(
-          new Error("Relay start requires testMode=true"),
-          { statusCode: 400 }
-        );
-      }
-
-      const request = service.requestId();
-
-
-      production.groupB.lastCommand = {
-        requestId: request,
-        deviceId: device.device_id,
-        action,
-        status: "pending",
-        sentAt: new Date(),
-        acknowledgedAt: null,
-        message: null,
-      };
-
-      await production.save();
-
-            const published = await service.publishProductionCommand({
-        deviceId: device.device_id,
-        action,
-        requestId: request,
-        testMode: req.body.testMode,
-        durationSeconds: req.body.durationSeconds,
-      });
-
-      await service.log({
-        requestId: request,
-        serialNumber: device.serialNumber,
-        deviceId: device.device_id,
-        category: "command",
-        operation: action,
-        firmwareProfile: profile,
-        changes: {
-          durationSeconds: req.body.durationSeconds || null,
-        },
-        status: "published",
-        mqttTopic: published.topic,
-        performedBy: service.actorId(req),
-      });
-
-      return res.status(202).json({
-        success: true,
-        requestId: request,
-        status: "published",
-        topic: published.topic,
-      });
+    if (!["relayStart", "relayStop"].includes(action)) {
+      throw Object.assign(new Error("Unsupported command. Use existing admin session endpoints for session start/stop."), { statusCode: 400 });
+    }
+    if (profile !== "v3") {
+      throw Object.assign(new Error("Relay admin commands are supported only for confirmed V3 devices"), { statusCode: 400 });
+    }
+    if (action === "relayStart" && req.body.testMode !== true) {
+      throw Object.assign(new Error("Relay start requires testMode=true"), { statusCode: 400 });
     }
 
-    throw Object.assign(
-      new Error("Unsupported command. Use existing admin session endpoints for session start/stop."),
-      { statusCode: 400 }
-    );
+    const request = service.requestId();
+    const previous = production.groupB.lastCommand?.toObject
+      ? production.groupB.lastCommand.toObject()
+      : production.groupB.lastCommand;
+
+    production.groupB.lastCommand = {
+      requestId: request, deviceId: device.device_id, action,
+      status: service.ProductionDevice.COMMAND_STATUS.PENDING,
+      sentAt: new Date(), acknowledgedAt: null, message: null,
+    };
+    await production.save();
+
+    try {
+      const published = await service.publishProductionCommand({
+        deviceId: device.device_id, action, requestId: request,
+        testMode: req.body.testMode, durationSeconds: req.body.durationSeconds,
+      });
+      await service.log({
+        requestId: request, serialNumber: device.serialNumber, deviceId: device.device_id,
+        category: "command", operation: action, firmwareProfile: profile,
+        changes: { durationSeconds: req.body.durationSeconds || null },
+        status: "published", mqttTopic: published.topic, performedBy: service.actorId(req),
+      });
+      return res.status(202).json({
+        success: true, requestId: request, status: "published", topic: published.topic,
+      });
+    } catch (error) {
+      production.groupB.lastCommand = previous || {};
+      await production.save();
+      throw error;
+    }
   } catch (error) {
     return responseError(res, error);
   }
@@ -641,124 +567,95 @@ exports.getHistory = async (req, res) => {
 
 exports.updateDeviceId = async (req, res) => {
   try {
-    const { device, production, profile } =
-      await service.findDevice(req.params.id);
-
+    const { device, production, profile } = await service.findDevice(req.params.id);
     const oldId = device.device_id;
-    const newId = String(req.body?.newDeviceId || "")
-      .trim()
-      .toUpperCase();
+    const newId = String(req.body?.newDeviceId || "").trim().toUpperCase();
 
     if (!/^[A-Z0-9_-]{3,40}$/.test(newId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid new Device ID",
-      });
+      return res.status(400).json({ success: false, message: "Invalid new Device ID" });
     }
-
     if (oldId === newId) {
-      return res.status(400).json({
-        success: false,
-        message: "New Device ID is the same as current ID",
-      });
+      return res.status(400).json({ success: false, message: "New Device ID is the same as current ID" });
     }
 
-    const duplicate = await service.Device.findOne({
-      device_id: newId,
+    const duplicateDevice = await service.Device.findOne({ device_id: newId });
+    if (duplicateDevice) {
+      return res.status(409).json({ success: false, message: "Device ID already exists" });
+    }
+    const duplicateProvision = await service.DeviceProvision.findOne({
+      deviceId: newId, serialNumber: { $ne: device.serialNumber },
     });
-
-    if (duplicate) {
-      return res.status(409).json({
-        success: false,
-        message: "Device ID already exists",
-      });
+    if (duplicateProvision) {
+      return res.status(409).json({ success: false, message: "Device ID already exists in DeviceProvision" });
     }
-
     if (profile === "v3") {
-      const productionDuplicate =
-        await service.ProductionDevice.findOne({
-          "groupB.deviceId": newId,
-          _id: { $ne: production._id },
-        });
-
-      if (productionDuplicate) {
-        return res.status(409).json({
-          success: false,
-          message: "Device ID already exists in Production",
-        });
+      const duplicateProduction = await service.ProductionDevice.findOne({
+        "groupB.deviceId": newId, _id: { $ne: production._id },
+      });
+      if (duplicateProduction) {
+        return res.status(409).json({ success: false, message: "Device ID already exists in Production" });
       }
     }
 
     const request = service.requestId();
-    const nextNvsVersion =
-      Number(
-        profile === "v3"
-          ? production.groupB.nvsVersion
-          : device.nvsVersion
-      ) + 1;
-
+    const nextNvsVersion = Number(profile === "v3"
+      ? production.groupB.nvsVersion
+      : device.nvsVersion) + 1;
     const topic = service.buildConfigTopic(device.serialNumber);
-
     const payload = {
-      action: "setConfig",
-      schemaVersion: 1,
-      requestId: request,
-      serialNumber: device.serialNumber,
-      deviceId: newId,
-      ssid: device.wifiSSID || "",
-      password: device.wifiPassword || "",
+      action: "setConfig", schemaVersion: 1, requestId: request,
+      serialNumber: device.serialNumber, deviceId: newId,
+      ssid: device.wifiSSID || "", password: device.wifiPassword || "",
       nvsVersion: nextNvsVersion,
     };
 
-    
-
-    if (profile === "v3") {
-      production.groupB.nvsVersion = nextNvsVersion;
-      production.groupB.configAck = {
-        status: "pending",
-        action: "setConfig",
-        requestId: request,
-        nvsVersion: nextNvsVersion,
-      };
-      await production.save();
-
-      await service.publish(topic, payload);
-      
-    } else {
-      device.nvsVersion = nextNvsVersion;
-      device.configAck = {
-        status: "pending",
-        action: "setConfig",
-        requestId: request,
-        nvsVersion: nextNvsVersion,
-      };
-      await device.save();
-    }
-
     await service.log({
-      requestId: request,
-      serialNumber: device.serialNumber,
-      deviceId: oldId,
-      category: "deviceIdMigration",
-      operation: "device_id_update",
+      requestId: request, serialNumber: device.serialNumber, deviceId: oldId,
+      category: "deviceIdMigration", operation: "device_id_update",
       firmwareProfile: profile,
-changes: {
-  oldDeviceId: oldId,
-  newDeviceId: newId,
-  nvsVersion: nextNvsVersion,
-},
-      status: "published",
-      mqttTopic: topic,
-      performedBy: service.actorId(req),
+      changes: { oldDeviceId: oldId, newDeviceId: newId, nvsVersion: nextNvsVersion },
+      status: "pending", mqttTopic: topic, performedBy: service.actorId(req),
     });
 
+    const previous = profile === "v3"
+      ? { nvsVersion: production.groupB.nvsVersion, configAck: production.groupB.configAck?.toObject
+          ? production.groupB.configAck.toObject() : production.groupB.configAck }
+      : { nvsVersion: device.nvsVersion, configAck: device.configAck?.toObject
+          ? device.configAck.toObject() : device.configAck };
+
+    try {
+      if (profile === "v3") {
+        production.groupB.nvsVersion = nextNvsVersion;
+        production.groupB.configAck = { status: "pending", action: "setConfig", requestId, nvsVersion: nextNvsVersion };
+        await production.save();
+      } else {
+        device.nvsVersion = nextNvsVersion;
+        device.configAck = { status: "pending", action: "setConfig", requestId, nvsVersion: nextNvsVersion };
+        await device.save();
+      }
+      await service.publish(topic, payload);
+      await service.DeviceMaintenanceLog.updateOne(
+        { requestId, status: "pending" }, { $set: { status: "published" } }
+      );
+    } catch (error) {
+      if (profile === "v3") {
+        production.groupB.nvsVersion = previous.nvsVersion;
+        production.groupB.configAck = previous.configAck;
+        await production.save();
+      } else {
+        device.nvsVersion = previous.nvsVersion;
+        device.configAck = previous.configAck;
+        await device.save();
+      }
+      await service.DeviceMaintenanceLog.updateOne(
+        { requestId }, { $set: { status: "failed", errorMessage: error.message, completedAt: new Date() } }
+      );
+      throw error;
+    }
+
     return res.status(202).json({
-      success: true,
-      message: "Device ID change sent. Waiting for device acknowledgement.",
-      requestId: request,
-      oldDeviceId: oldId,
-      newDeviceId: newId,
-      status: "published",
+      success: true, message: "Device ID change sent. Waiting for device acknowledgement.",
+      requestId, oldDeviceId: oldId, newDeviceId: newId, status: "published",
     });
   } catch (error) {
     return responseError(res, error);
