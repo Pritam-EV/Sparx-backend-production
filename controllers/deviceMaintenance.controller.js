@@ -272,6 +272,7 @@ exports.updateFirmwareConfig = async (req, res) => {
   try {
     const { device, production, profile } = await service.findDevice(req.params.id);
     const changes = req.body?.changes || {};
+
     if (Object.keys(changes).length !== 2 ||
         !Object.prototype.hasOwnProperty.call(changes, "wifiSSID") ||
         !Object.prototype.hasOwnProperty.call(changes, "wifiPassword")) {
@@ -285,19 +286,31 @@ exports.updateFirmwareConfig = async (req, res) => {
     const request = service.requestId();
     const ssid = changes.wifiSSID.trim();
 
+    const logEntry = {
+      requestId: request,
+      serialNumber: device.serialNumber,
+      deviceId: device.device_id,
+      category: "firmware",
+      operation: "wifi_update",
+      firmwareProfile: profile,
+      changes: { wifiSSID: ssid, wifiPassword: "[REDACTED]" },
+      status: "pending",
+      performedBy: service.actorId(req),
+    };
+    await service.log(logEntry);
+
     if (profile === "legacy") {
       const previous = { wifiSSID: device.wifiSSID, wifiPassword: device.wifiPassword };
       device.wifiSSID = ssid;
       device.wifiPassword = changes.wifiPassword;
       await device.save();
+
       try {
         const published = await service.publishDeviceConfig(device.device_id, { requestId: request });
-        await service.log({
-          requestId: request, serialNumber: device.serialNumber, deviceId: device.device_id,
-          category: "firmware", operation: "wifi_update", firmwareProfile: profile,
-          changes: { wifiSSID: ssid, wifiPassword: "[REDACTED]" },
-          status: "published", mqttTopic: published.topic, performedBy: service.actorId(req),
-        });
+        await service.DeviceMaintenanceLog.updateOne(
+          { requestId: request, status: "pending" },
+          { $set: { status: "published", mqttTopic: published.topic } }
+        );
         return res.status(202).json({
           success: true, requestId: request, status: "published",
           topic: published.topic, nvsVersion: published.nvsVersion,
@@ -306,6 +319,10 @@ exports.updateFirmwareConfig = async (req, res) => {
         device.wifiSSID = previous.wifiSSID;
         device.wifiPassword = previous.wifiPassword;
         await device.save();
+        await service.DeviceMaintenanceLog.updateOne(
+          { requestId: request },
+          { $set: { status: "failed", errorMessage: error.message, completedAt: new Date() } }
+        );
         throw error;
       }
     }
@@ -336,12 +353,10 @@ exports.updateFirmwareConfig = async (req, res) => {
 
     try {
       await service.publish(topic, payload);
-      await service.log({
-        requestId, serialNumber: device.serialNumber, deviceId: device.device_id,
-        category: "firmware", operation: "wifi_update", firmwareProfile: profile,
-        changes: { wifiSSID: ssid, wifiPassword: "[REDACTED]" },
-        status: "published", mqttTopic: topic, performedBy: service.actorId(req),
-      });
+      await service.DeviceMaintenanceLog.updateOne(
+        { requestId: request, status: "pending" },
+        { $set: { status: "published", mqttTopic: topic, "changes.nvsVersion": nextNvsVersion } }
+      );
     } catch (error) {
       device.wifiSSID = previousDevice.wifiSSID;
       device.wifiPassword = previousDevice.wifiPassword;
@@ -349,6 +364,10 @@ exports.updateFirmwareConfig = async (req, res) => {
       production.groupB.configAck = previousGroupB.configAck;
       await device.save();
       await production.save();
+      await service.DeviceMaintenanceLog.updateOne(
+        { requestId: request },
+        { $set: { status: "failed", errorMessage: error.message, completedAt: new Date() } }
+      );
       throw error;
     }
 
