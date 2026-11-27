@@ -660,49 +660,6 @@ exports.updateDeviceId = async (req, res) => {
     }
 
     const request = service.requestId();
-<<<<<<< HEAD
-const currentNvsVersion = Number(
-  profile === "v3"
-    ? production.groupB.nvsVersion
-    : device.nvsVersion
-);
-
-if (
-  !Number.isInteger(currentNvsVersion) ||
-  currentNvsVersion < 0
-) {
-  throw Object.assign(
-    new Error("Current NVS version is invalid."),
-    { statusCode: 409 }
-  );
-}
-
-const nextNvsVersion = currentNvsVersion + 1;
-
-    const topic = service.buildConfigTopic(device.serialNumber);
-
-const payload = {
-  action: "setConfig",
-  schemaVersion: 1,
-
-  requestId: request,
-  serialNumber: device.serialNumber,
-  deviceId: newId,
-
-  ssid: device.wifiSSID || "",
-  password: device.wifiPassword || "",
-
-  nvsVersion: nextNvsVersion,
-
-  ...(profile === "legacy"
-    ? {
-        cf: device.cf,
-        vf: device.vf,
-        currentRF: device.currentRF,
-      }
-    : {}),
-};
-=======
     const nextNvsVersion = Number(
       profile === "v3" ? production.groupB.nvsVersion : device.nvsVersion
     ) + 1;
@@ -718,7 +675,6 @@ const payload = {
       } : {}),
       nvsVersion: nextNvsVersion,
     };
->>>>>>> 97f8b448c49364b04b02b36401d4c04039421ff6
 
     await service.log({
       requestId: request, serialNumber: device.serialNumber, deviceId: oldId,
@@ -750,18 +706,6 @@ const payload = {
       }
 
       await service.publish(topic, payload);
-<<<<<<< HEAD
-
-    } else {
-      device.nvsVersion = nextNvsVersion;
-      device.configAck = {
-        status: "pending",
-        action: "setConfig",
-        requestId: request,
-        nvsVersion: nextNvsVersion,
-      };
-      await device.save();
-=======
       await service.DeviceMaintenanceLog.updateOne(
         { requestId: request, status: "pending" },
         { $set: { status: "published" } }
@@ -788,7 +732,6 @@ const payload = {
         { $set: { status: "failed", errorMessage: error.message, completedAt: new Date() } }
       );
       throw error;
->>>>>>> 97f8b448c49364b04b02b36401d4c04039421ff6
     }
   } catch (error) {
     return responseError(res, error);
