@@ -778,6 +778,12 @@ dispatch: {
     vjraMarginPerKwh: { type: Number, default: null },
     ownerSharePerKwh: { type: Number, default: null },
     pgPercent: { type: Number, default: null },
+    gstPercent: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: null,
+    },
   },
 
   targetFirmwareVersion: { type: String, default: null },
