@@ -21,17 +21,17 @@ const maintenanceLogSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-
-    category: {
-      type: String,
-      required: true,
-      enum: [
-        "database",
-        "firmware",
-        "command",
-        "migration",
-      ],
-    },
+category: {
+  type: String,
+  required: true,
+  enum: [
+    "database",
+    "firmware",
+    "command",
+    "migration",
+    "deviceIdMigration",
+  ],
+},
 
     operation: {
       type: String,

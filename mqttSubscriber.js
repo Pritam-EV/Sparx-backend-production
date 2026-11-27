@@ -8,6 +8,8 @@ const Receipt = require('./models/Receipt');
 const DeviceTelemetry = require('./models/deviceTelemetry');
 const DeviceProvision = require('./models/DeviceProvision');
 const ProductionDevice = require("./models/ProductionDevice");
+const DeviceMaintenanceLog =
+  require("./models/DeviceMaintenanceLog");
 
 const {
   handleProductionConfigAck,
@@ -293,8 +295,44 @@ if (
       Number.isFinite(nvsVersion)
         ? nvsVersion
         : null,
+        requestId: ack.requestId || null,
+action: ack.action || "setConfig",
   };
+const ackRequestId = String(
+  ack.requestId || ""
+).trim();
 
+if (ackRequestId) {
+  await DeviceMaintenanceLog.updateOne(
+    {
+      requestId: ackRequestId,
+      status: "published",
+    },
+    {
+      $set: {
+        status:
+          ackStatus === CONFIG_ACK_STATUS.OK
+            ? "acknowledged"
+            : "failed",
+
+        acknowledgement: {
+          status: ackStatus,
+          message: String(ack.message || "").slice(0, 500),
+          fwVersion: String(ack.fwVersion || "").slice(0, 100),
+          nvsVersion: Number.isFinite(nvsVersion)
+            ? nvsVersion
+            : null,
+        },
+
+        completedAt: new Date(),
+        errorMessage:
+          ackStatus === CONFIG_ACK_STATUS.ERROR
+            ? String(ack.message || "Device rejected configuration")
+            : null,
+      },
+    }
+  );
+}
   try {
     // Production 3.0 config ACKs are handled by the V3 subscriber.
 // Never mutate legacy Device / DeviceProvision records for V3 devices.
@@ -335,7 +373,80 @@ if (productionAck.matched) {
       }
     );
   }
+const requestId = String(ack.requestId || "").trim();
 
+if (
+  requestId &&
+  ackStatus === CONFIG_ACK_STATUS.OK
+) {
+  const migration = await DeviceMaintenanceLog.findOne({
+    requestId,
+    category: "deviceIdMigration",
+    status: "published",
+  });
+
+  if (migration) {
+    const oldId = migration.changes?.oldDeviceId;
+    const newId = migration.changes?.newDeviceId;
+
+    const production = await ProductionDevice.findOne({
+      serialNumber,
+      "dispatch.liveDeviceId": { $exists: true },
+    });
+
+    if (
+      production &&
+      oldId &&
+      newId &&
+      production.groupB?.deviceId === oldId
+    ) {
+      const duplicate = await ProductionDevice.exists({
+        "groupB.deviceId": newId,
+        _id: { $ne: production._id },
+      });
+
+      if (!duplicate) {
+        await ProductionDevice.updateOne(
+          { _id: production._id },
+          {
+            $set: {
+              "groupB.deviceId": newId,
+            },
+          }
+        );
+
+        await Device.updateOne(
+          { _id: production.dispatch.liveDeviceId },
+          {
+            $set: {
+              device_id: newId,
+            },
+          }
+        );
+
+        await DeviceMaintenanceLog.updateOne(
+          { requestId },
+          {
+            $set: {
+              status: "completed",
+              completedAt: new Date(),
+            },
+          }
+        );
+      } else {
+        await DeviceMaintenanceLog.updateOne(
+          { requestId },
+          {
+            $set: {
+              status: "failed",
+              errorMessage: "Duplicate V3 Device ID",
+            },
+          }
+        );
+      }
+    }
+  }
+}
   return;
 }
     const device = await Device.findOne({

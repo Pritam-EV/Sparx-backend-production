@@ -41,6 +41,7 @@ function buildFirmwareConfig({
   wifiSSID,
   wifiPassword,
   nvsVersion,
+  requestId,
 }) {
   return {
     action: CONFIG_ACTION,
@@ -94,6 +95,7 @@ async function publishProvisionConfig(
     wifiSSID: provision.wifiSSID,
     wifiPassword: provision.wifiPassword,
     nvsVersion: nextNvsVersion,
+    requestId: options.requestId,
   });
 
   const topic = buildConfigTopic(
@@ -107,13 +109,15 @@ async function publishProvisionConfig(
     PROVISION_STATUS.SENT;
   provision.lastProvisionSentAt = new Date();
 
-  provision.configAck = {
-    status: CONFIG_ACK_STATUS.PENDING,
-    ackedAt: null,
-    message: null,
-    fwVersion: null,
-    nvsVersion: nextNvsVersion,
-  };
+device.configAck = {
+  status: CONFIG_ACK_STATUS.PENDING,
+  action: CONFIG_ACTION,
+  requestId: options.requestId || null,
+  ackedAt: null,
+  message: null,
+  fwVersion: null,
+  nvsVersion: nextNvsVersion,
+};
 
   await provision.save();
 

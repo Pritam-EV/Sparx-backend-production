@@ -20,17 +20,39 @@ const rateHistorySchema = new mongoose.Schema({
 }, { _id: false });
 
 // ── NVS config push tracking sub-schema ──────────────────────────────────────
+
 const configAckSchema = new mongoose.Schema({
   status: {
-  type: String,
-  enum: Object.values(CONFIG_ACK_STATUS),
-  default: null,
-},
-  ackedAt:   { type: Date, default: null },
-  message:   { type: String, default: null },
-  fwVersion: { type: String, default: null },
-  nvsVersion:{ type: Number, default: null }   // monotonic counter for NVS
+    type: String,
+    enum: Object.values(CONFIG_ACK_STATUS),
+    default: null,
+  },
+  action: {
+    type: String,
+    default: null,
+  },
+  requestId: {
+    type: String,
+    default: null,
+  },
+  ackedAt: {
+    type: Date,
+    default: null,
+  },
+  message: {
+    type: String,
+    default: null,
+  },
+  fwVersion: {
+    type: String,
+    default: null,
+  },
+  nvsVersion: {
+    type: Number,
+    default: null,
+  },
 }, { _id: false });
+
 
 // ── Main device schema ────────────────────────────────────────────────────────
 const deviceSchema = new mongoose.Schema({
@@ -170,7 +192,13 @@ calibrationV3: {
     userRatePerKwh:     { type: Number, default: null },
     vjraMarginPerKwh:   { type: Number, default: null },
     ownerSharePerKwh:   { type: Number, default: null },
-    pgPercent:          { type: Number, default: null }
+    pgPercent:          { type: Number, default: null },
+    gstPercent: {
+  type: Number,
+  min: 0,
+  max: 100,
+  default: null,
+},
   },
 
   // ── ONBOARDING ────────────────────────────────────────────────────────────

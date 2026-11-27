@@ -37,5 +37,8 @@ router.get(
   "/devices/:id/history",
   controller.getHistory
 );
-
+router.post(
+  "/devices/:id/firmware/device-id",
+  controller.updateDeviceId
+);
 module.exports = router;
