@@ -316,7 +316,7 @@ action: ack.action || "setConfig",
   };
 const ackRequestId = String(ack.requestId || "").trim();
 
-// Correlate maintenance history only to a matching, published request.
+// Correlate config ACKs to this serial's pending maintenance request.
 if (ackRequestId) {
   const matchingLog = await DeviceMaintenanceLog.findOne({
     requestId: ackRequestId,
@@ -327,28 +327,26 @@ if (ackRequestId) {
   if (matchingLog) {
     const expectedVersion = Number(matchingLog.changes?.nvsVersion);
     const receivedVersion = Number(ack.nvsVersion);
+    const isMigration = matchingLog.category === "deviceIdMigration";
 
-    if (matchingLog.category === "deviceIdMigration") {
-      const validMigrationAck =
-        Number.isFinite(expectedVersion) &&
-        Number.isFinite(receivedVersion) &&
-        receivedVersion === expectedVersion &&
-        normalizeDeviceId(ack.deviceId) === normalizeDeviceId(matchingLog.changes?.newDeviceId);
-
-      if (!validMigrationAck) {
-        await DeviceMaintenanceLog.updateOne(
-          { requestId: ackRequestId, status: "published" },
-          {
-            $set: {
-              status: "failed",
-              acknowledgement: ack,
-              errorMessage: "Device ID migration ACK did not match requested ID/NVS version",
-              completedAt: new Date(),
-            },
-          }
-        );
-        return;
-      }
+    if (isMigration && (
+      !Number.isFinite(expectedVersion) ||
+      !Number.isFinite(receivedVersion) ||
+      expectedVersion !== receivedVersion ||
+      normalizeDeviceId(ack.deviceId) !== normalizeDeviceId(matchingLog.changes?.newDeviceId)
+    )) {
+      await DeviceMaintenanceLog.updateOne(
+        { requestId: ackRequestId, status: "published" },
+        {
+          $set: {
+            status: "failed",
+            acknowledgement: ack,
+            errorMessage: "Device ID migration ACK did not match requested ID/NVS version",
+            completedAt: new Date(),
+          },
+        }
+      );
+      return;
     }
 
     await DeviceMaintenanceLog.updateOne(
