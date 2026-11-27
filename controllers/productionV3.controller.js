@@ -2000,7 +2000,629 @@ async function markCalibrationManuallyComplete(req, res) {
     });
   }
 }
+async function getDispatchDetails(req, res) {
+  try {
+    const device = await ProductionDevice.findOne(
+      getDeviceQuery(req.params.id)
+    ).select(
+      "+groupB.wifiSSIDEncrypted " +
+      "+groupB.wifiPasswordEncrypted"
+    );
 
+    if (!device) {
+      return res.status(404).json({
+        success: false,
+        message: "Production device not found.",
+      });
+    }
+
+    if (
+      device.stage !== ProductionDevice.STAGE.DISPATCH ||
+      device.dispatch?.status !== "ready"
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: "Device is not ready for dispatch.",
+      });
+    }
+
+    if (device.dispatch?.liveDeviceId) {
+      return res.status(409).json({
+        success: false,
+        message: "This device is already linked to a Live Device.",
+      });
+    }
+
+    if (
+      !device.groupB?.wifiSSIDEncrypted ||
+      !device.groupB?.wifiPasswordEncrypted
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: "Production Wi-Fi credentials are missing.",
+      });
+    }
+
+    const previous = await Device.findOne({})
+      .sort({ updatedAt: -1 })
+      .select(
+        "hardwareRevision project charger_type " +
+        "location lat lng area city state " +
+        "meterType meterConsumerNumber rate commercial " +
+        "targetFirmwareVersion"
+      )
+      .lean();
+
+    const saved = device.dispatch?.toObject
+      ? device.dispatch.toObject()
+      : device.dispatch || {};
+
+    const choose = (key, fallback) =>
+      saved[key] !== undefined && saved[key] !== null
+        ? saved[key]
+        : fallback;
+
+    const wifiSSID = decryptSecret(
+      device.groupB.wifiSSIDEncrypted
+    );
+
+    const wifiPassword = decryptSecret(
+      device.groupB.wifiPasswordEncrypted
+    );
+
+    const defaults = {
+      hardwareRevision: choose(
+        "hardwareRevision",
+        previous?.hardwareRevision || ""
+      ),
+
+      project: choose(
+        "project",
+        previous?.project || ""
+      ),
+
+      charger_type: choose(
+        "chargerType",
+        previous?.charger_type || ""
+      ),
+
+      location: choose(
+        "location",
+        previous?.location || ""
+      ),
+
+      lat: choose("lat", previous?.lat ?? ""),
+      lng: choose("lng", previous?.lng ?? ""),
+
+      area: choose("area", previous?.area || ""),
+      city: choose("city", previous?.city || ""),
+      state: choose("state", previous?.state || ""),
+
+      meterType: choose(
+        "meterType",
+        previous?.meterType || ""
+      ),
+
+      meterConsumerNumber: choose(
+        "meterConsumerNumber",
+        previous?.meterConsumerNumber || ""
+      ),
+
+      rate: choose("rate", previous?.rate ?? 20),
+
+      commercial: choose(
+        "commercial",
+        previous?.commercial || {
+          electricityBearer: "OWNER",
+          userRatePerKwh: null,
+          vjraMarginPerKwh: null,
+          ownerSharePerKwh: null,
+          pgPercent: null,
+        }
+      ),
+
+      targetFirmwareVersion: choose(
+        "targetFirmwareVersion",
+        previous?.targetFirmwareVersion || ""
+      ),
+
+      wifiSSID,
+      wifiPassword,
+
+      notes: saved.notes || "",
+    };
+
+    return res.json({
+      success: true,
+      data: {
+        productionDevice: publicDevice(device),
+        defaults,
+        previousDefaultsAvailable: Boolean(previous),
+      },
+    });
+
+  } catch (error) {
+    console.error("[PRODUCTION DISPATCH DETAILS]", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+}
+async function completeProductionDispatch(req, res) {
+  let dbSession;
+
+  try {
+    dbSession = await mongoose.startSession();
+
+    let result;
+
+    await dbSession.withTransaction(async () => {
+      const device = await ProductionDevice.findOne(
+        getDeviceQuery(req.params.id)
+      )
+        .select(
+          "+groupB.wifiSSIDEncrypted " +
+          "+groupB.wifiPasswordEncrypted"
+        )
+        .session(dbSession);
+
+      if (!device) {
+        const error = new Error("Production device not found.");
+        error.statusCode = 404;
+        throw error;
+      }
+
+      // Idempotent recovery
+      if (device.dispatch?.liveDeviceId) {
+        const existing = await Device.findById(
+          device.dispatch.liveDeviceId
+        ).session(dbSession);
+
+        if (existing) {
+          result = {
+            alreadyMigrated: true,
+            liveDevice: existing,
+          };
+          return;
+        }
+
+        const error = new Error(
+          "Production record has a broken Live Device reference. Manual reconciliation is required."
+        );
+        error.statusCode = 409;
+        throw error;
+      }
+
+      if (
+        device.stage !== ProductionDevice.STAGE.DISPATCH ||
+        device.dispatch?.status !== "ready"
+      ) {
+        const error = new Error(
+          "Device is not Dispatch-ready."
+        );
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const calibrationStatus = device.calibration?.status;
+      const manualCompletion =
+        calibrationStatus === "manually_completed";
+
+      const normallyVerified =
+        calibrationStatus === "applied" &&
+        device.calibration?.testStatus === "passed";
+
+      if (!manualCompletion && !normallyVerified) {
+        const error = new Error(
+          "Device calibration is not eligible for dispatch."
+        );
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const body = req.body || {};
+
+      const deviceId = String(
+        device.groupB?.deviceId || ""
+      ).trim().toUpperCase();
+
+      if (!deviceId) {
+        const error = new Error(
+          "Production Device ID is missing."
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const chargerType = String(
+        body.charger_type || ""
+      ).trim();
+
+      if (!chargerType) {
+        const error = new Error(
+          "Charger type is required."
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const rate = finiteNumber(body.rate, "Charging rate");
+
+      if (rate <= 0) {
+        const error = new Error(
+          "Charging rate must be greater than zero."
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const optionalText = (value) =>
+        value === undefined ||
+        value === null ||
+        String(value).trim() === ""
+          ? null
+          : String(value).trim();
+
+      const optionalNumber = (value, label) => {
+        if (
+          value === undefined ||
+          value === null ||
+          value === ""
+        ) {
+          return null;
+        }
+
+        const number = Number(value);
+
+        if (!Number.isFinite(number)) {
+          const error = new Error(`${label} is invalid.`);
+          error.statusCode = 400;
+          throw error;
+        }
+
+        return number;
+      };
+
+      const lat = optionalNumber(body.lat, "Latitude");
+      const lng = optionalNumber(body.lng, "Longitude");
+
+      if (
+        (lat !== null && (lat < -90 || lat > 90)) ||
+        (lng !== null && (lng < -180 || lng > 180))
+      ) {
+        const error = new Error(
+          "Latitude or longitude is outside the valid range."
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+
+      if ((lat === null) !== (lng === null)) {
+        const error = new Error(
+          "Enter both latitude and longitude, or leave both blank."
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const meterType = optionalText(body.meterType);
+
+      if (
+        meterType &&
+        !["Green Meter", "Commercial", "Residential"].includes(
+          meterType
+        )
+      ) {
+        const error = new Error("Invalid meter type.");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const commercialInput = body.commercial || {};
+
+      const electricityBearer = String(
+        commercialInput.electricityBearer || "OWNER"
+      ).toUpperCase();
+
+      if (!["OWNER", "VJRA"].includes(electricityBearer)) {
+        const error = new Error(
+          "Invalid electricity bearer."
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const optionalCommercialNumber = (value, label) => {
+        if (value === undefined || value === null || value === "") {
+          return null;
+        }
+
+        const number = Number(value);
+
+        if (!Number.isFinite(number) || number < 0) {
+          const error = new Error(`${label} must be a non-negative number.`);
+          error.statusCode = 400;
+          throw error;
+        }
+
+        return number;
+      };
+
+      const commercial = {
+        electricityBearer,
+
+        userRatePerKwh: optionalCommercialNumber(
+          commercialInput.userRatePerKwh,
+          "User rate"
+        ),
+
+        vjraMarginPerKwh: optionalCommercialNumber(
+          commercialInput.vjraMarginPerKwh,
+          "VJRA margin"
+        ),
+
+        ownerSharePerKwh: optionalCommercialNumber(
+          commercialInput.ownerSharePerKwh,
+          "Owner share"
+        ),
+
+        pgPercent: optionalCommercialNumber(
+          commercialInput.pgPercent,
+          "Payment gateway percentage"
+        ),
+      };
+
+      // Protect against identity collisions.
+      const [duplicateId, duplicateSerial] = await Promise.all([
+        Device.findOne({ device_id: deviceId })
+          .session(dbSession)
+          .lean(),
+
+        Device.findOne({ serialNumber: device.serialNumber })
+          .session(dbSession)
+          .lean(),
+      ]);
+
+      if (duplicateId || duplicateSerial) {
+        const error = new Error(
+          "A Live Device already exists with this Device ID or serial number."
+        );
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const wifiSSID = decryptSecret(
+        device.groupB.wifiSSIDEncrypted
+      );
+
+      const wifiPassword = decryptSecret(
+        device.groupB.wifiPasswordEncrypted
+      );
+
+      const now = new Date();
+      const actor = actorId(req);
+
+      const telemetry = getLatestProductionTelemetry(
+        device.serialNumber
+      );
+
+      const coefficients =
+        device.calibration?.coefficients || {};
+
+      const livePayload = {
+        device_id: deviceId,
+        serialNumber: device.serialNumber,
+
+        hardwareRevision:
+          optionalText(body.hardwareRevision) || "",
+
+        project:
+          optionalText(body.project) || "",
+
+        charger_type: chargerType,
+
+        // Location is intentionally optional.
+        location: optionalText(body.location),
+        lat,
+        lng,
+        area: optionalText(body.area),
+        city: optionalText(body.city),
+        state: optionalText(body.state),
+
+        ownerId: [],
+
+        meteringHardware:
+          device.groupA?.meteringHardware || null,
+
+        pcbBatch:
+          device.groupA?.pcbBatch || null,
+
+        productionBatchName:
+          device.groupA?.batchName || null,
+
+        meterType,
+        meterConsumerNumber: optionalText(
+          body.meterConsumerNumber
+        ),
+
+        // Preserve legacy calibration defaults.
+        // V3 calibration is stored separately below.
+
+        wifiSSID,
+        wifiPassword,
+
+        lastKnownFirmwareVersion:
+          telemetry?.fwVersion ||
+          device.groupB?.lastKnownFirmwareVersion ||
+          null,
+
+        targetFirmwareVersion: optionalText(
+          body.targetFirmwareVersion
+        ),
+
+        nvsVersion: device.groupB?.nvsVersion || 0,
+
+        configAck: {
+          status:
+            device.groupB?.configAck?.status || null,
+
+          ackedAt:
+            device.groupB?.configAck?.receivedAt || null,
+
+          message:
+            device.groupB?.configAck?.message || null,
+
+          fwVersion:
+            device.groupB?.configAck?.fwVersion || null,
+
+          nvsVersion:
+            device.groupB?.configAck?.nvsVersion ?? null,
+        },
+
+        rate,
+
+        rateHistory: [{
+          rate,
+          setBy: actor,
+          setByRole: "admin",
+          setAt: now,
+        }],
+
+        commercial,
+
+        onboardingStatus: "pending",
+        onboardedAt: null,
+        onboardedBy: null,
+
+        status: "offline",
+        relayOn: false,
+
+        lastKnownVoltage: telemetry?.voltage ?? 0,
+        lastKnownCurrent: telemetry?.current ?? 0,
+
+        lastSeen:
+          device.groupB?.connection?.lastSeen ||
+          telemetry?.receivedAt ||
+          null,
+
+        totalenergy: telemetry?.totalEnergyKwh ?? 0,
+
+        current_session_id: null,
+
+        provisionRef: null,
+
+        calibrationV3: {
+          meteringHardware:
+            device.groupA?.meteringHardware || null,
+
+          algorithm: 
+            device.calibration?.calculationDetails?.algorithm || null,
+
+          algorithmVersion:
+            device.calibration?.calculationDetails?.algorithmVersion || null,
+
+          coefficients,
+
+          status: calibrationStatus,
+
+          appliedAt:
+            device.calibration?.appliedAt || null,
+
+          testStatus:
+            device.calibration?.testStatus || "not_tested",
+
+          verification:
+            device.calibration?.verification || null,
+
+          manualCompletion:
+            device.calibration?.manualCompletion || null,
+
+          productionDeviceRef: device._id,
+        },
+      };
+
+      const created = await Device.create(
+        [livePayload],
+        { session: dbSession }
+      );
+
+      const liveDevice = created[0];
+
+      // Persist the exact admin-approved dispatch configuration.
+      device.dispatch.hardwareRevision = livePayload.hardwareRevision;
+      device.dispatch.project = livePayload.project;
+      device.dispatch.chargerType = chargerType;
+
+      device.dispatch.location = livePayload.location;
+      device.dispatch.lat = lat;
+      device.dispatch.lng = lng;
+      device.dispatch.area = livePayload.area;
+      device.dispatch.city = livePayload.city;
+      device.dispatch.state = livePayload.state;
+
+      device.dispatch.meterType = meterType;
+      device.dispatch.meterConsumerNumber =
+        livePayload.meterConsumerNumber;
+
+      device.dispatch.rate = rate;
+      device.dispatch.commercial = commercial;
+
+      device.dispatch.targetFirmwareVersion =
+        livePayload.targetFirmwareVersion;
+
+      device.dispatch.notes = String(
+        body.notes || ""
+      ).trim().slice(0, 1000);
+
+      device.dispatch.liveDeviceId = liveDevice._id;
+      device.dispatch.migratedAt = now;
+      device.dispatch.migratedBy = actor;
+
+      device.dispatch.dispatchedAt = now;
+      device.dispatch.dispatchedBy = actor;
+      device.dispatch.status = "completed";
+
+      device.updatedBy = actor;
+
+      await device.save({ session: dbSession });
+
+      result = {
+        alreadyMigrated: false,
+        liveDevice,
+      };
+    });
+
+    return res.status(
+      result.alreadyMigrated ? 200 : 201
+    ).json({
+      success: true,
+      message: result.alreadyMigrated
+        ? "Device was already migrated."
+        : "Device dispatched and Live Device created successfully.",
+      data: {
+        liveDevice: result.liveDevice,
+      },
+    });
+
+  } catch (error) {
+    console.error("[PRODUCTION DISPATCH]", error);
+
+    return res.status(
+      error.statusCode ||
+      (error.code === 11000 ? 409 : 500)
+    ).json({
+      success: false,
+      message: error.message,
+    });
+
+  } finally {
+    if (dbSession) {
+      await dbSession.endSession();
+    }
+  }
+}
 // --------------------------------------------------
 // EXPORTS
 // --------------------------------------------------
@@ -2017,4 +2639,6 @@ module.exports = {
   sendProductionCommand,
   markCalibrationTest,
    markCalibrationManuallyComplete,
+   getDispatchDetails,
+  completeProductionDispatch,
 };

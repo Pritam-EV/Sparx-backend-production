@@ -306,6 +306,36 @@ const productionAck = await handleProductionConfigAck({
 });
 
 if (productionAck.matched) {
+  const productionLink = await ProductionDevice.findOne({
+    serialNumber,
+  })
+    .select("dispatch.liveDeviceId")
+    .lean();
+
+  if (productionLink?.dispatch?.liveDeviceId) {
+    await Device.updateOne(
+      {
+        _id: productionLink.dispatch.liveDeviceId,
+      },
+      {
+        $set: {
+          configAck: ackFields,
+
+          ...(ack.fwVersion
+            ? {
+                lastKnownFirmwareVersion:
+                  String(ack.fwVersion).slice(0, 100),
+              }
+            : {}),
+
+          ...(Number.isFinite(nvsVersion)
+            ? { nvsVersion }
+            : {}),
+        },
+      }
+    );
+  }
+
   return;
 }
     const device = await Device.findOne({
@@ -511,11 +541,13 @@ if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
 const productionDeviceId = normalizeDeviceId(deviceId);
 
 try {
-  const productionDevice = await ProductionDevice.findOne({
-    "groupB.deviceId": productionDeviceId,
-  })
-    .select("_id serialNumber groupB.deviceId")
-    .lean();
+const productionDevice = await ProductionDevice.findOne({
+  "groupB.deviceId": productionDeviceId,
+})
+  .select(
+    "_id serialNumber groupB.deviceId dispatch.liveDeviceId"
+  )
+  .lean();
 
   if (productionDevice) {
     const receivedAt = new Date();

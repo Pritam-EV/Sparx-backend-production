@@ -70,12 +70,12 @@ const deviceSchema = new mongoose.Schema({
   }],
 
   // ── LOCATION (admin sets at dispatch; owner/admin can update after install) ─
-  location:  { type: String, required: true },   // human-readable address
-  lat:       { type: Number, required: true },
-  lng:       { type: Number, required: true },
-  area:      { type: String, required: true },
-  city:      { type: String, required: true },
-  state:     { type: String, required: true },
+location: { type: String, trim: true, default: null },
+lat:      { type: Number, default: null },
+lng:      { type: Number, default: null },
+area:     { type: String, trim: true, default: null },
+city:     { type: String, trim: true, default: null },
+state:    { type: String, trim: true, default: null },
 
   // ── METER DETAILS (admin-set, owner can view) ────────────────────────────
   meterType: {
@@ -96,7 +96,7 @@ const deviceSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
-  lastSeen:            { type: Date, default: Date.now },
+  lastSeen: { type: Date, default: null },
   totalenergy:         { type: Number, default: 0 },
   current_session_id: {
     type: String,  // Changed from ObjectId to String
@@ -137,6 +137,32 @@ const deviceSchema = new mongoose.Schema({
       message: 'rateHistory must hold at most 1 entry (last change only)'
     }
   },
+
+  // Production 3.0 manufacturing traceability
+meteringHardware: {
+  type: String,
+  trim: true,
+  default: null,
+},
+
+pcbBatch: {
+  type: String,
+  trim: true,
+  default: null,
+},
+
+productionBatchName: {
+  type: String,
+  trim: true,
+  default: null,
+},
+
+// Production 3.0 calibration.
+// Never map V3 coefficients into legacy cf/vf/currentRF.
+calibrationV3: {
+  type: mongoose.Schema.Types.Mixed,
+  default: null,
+},
 
   // ── COMMERCIAL CONFIG (admin-only; affects analytics and payouts) ─────────
   commercial: {

@@ -52,4 +52,15 @@ router.post(
   controller.sendProductionCommand
 );
 
+// DISPATCH → LIVE DEVICE MIGRATION
+router.get(
+  "/devices/:id/dispatch",
+  controller.getDispatchDetails
+);
+
+router.post(
+  "/devices/:id/dispatch",
+  controller.completeProductionDispatch
+);
+
 module.exports = router;

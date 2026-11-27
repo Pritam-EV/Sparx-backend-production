@@ -717,28 +717,76 @@ const productionDeviceSchema = new mongoose.Schema(
     // DISPATCH
     // ----------------------------------------------
 
-    dispatch: {
-      status: {
-        type: String,
-        enum: ["not_ready", "ready", "completed"],
-        default: "not_ready",
-      },
+dispatch: {
+  status: {
+    type: String,
+    enum: ["not_ready", "ready", "completed"],
+    default: "not_ready",
+  },
 
-      dispatchedAt: {
-        type: Date,
-        default: null,
-      },
+  dispatchedAt: {
+    type: Date,
+    default: null,
+  },
 
-      dispatchedBy: {
-        type: String,
-        default: null,
-      },
+  dispatchedBy: {
+    type: String,
+    default: null,
+  },
 
-      notes: {
-        type: String,
-        default: "",
-      },
+  // Legacy Device link
+  liveDeviceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Device",
+    default: null,
+  },
+
+  migratedAt: {
+    type: Date,
+    default: null,
+  },
+
+  migratedBy: {
+    type: String,
+    default: null,
+  },
+
+  // Admin-confirmed operational configuration
+  hardwareRevision: { type: String, default: "" },
+  project: { type: String, default: "" },
+  chargerType: { type: String, default: "" },
+
+  location: { type: String, default: null },
+  lat: { type: Number, default: null },
+  lng: { type: Number, default: null },
+  area: { type: String, default: null },
+  city: { type: String, default: null },
+  state: { type: String, default: null },
+
+  meterType: { type: String, default: null },
+  meterConsumerNumber: { type: String, default: null },
+
+  rate: { type: Number, default: 20 },
+
+  commercial: {
+    electricityBearer: {
+      type: String,
+      enum: ["OWNER", "VJRA"],
+      default: "OWNER",
     },
+    userRatePerKwh: { type: Number, default: null },
+    vjraMarginPerKwh: { type: Number, default: null },
+    ownerSharePerKwh: { type: Number, default: null },
+    pgPercent: { type: Number, default: null },
+  },
+
+  targetFirmwareVersion: { type: String, default: null },
+
+  notes: {
+    type: String,
+    default: "",
+  },
+},
 
     // ----------------------------------------------
     // AUDIT
