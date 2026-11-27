@@ -305,12 +305,16 @@ async function handleProductionConfigAck({
     .select(
       [
         "_id",
-        "serialNumber",
-        "groupB.provisionStatus",
-        "groupB.configAck",
-        "groupB.lastKnownFirmwareVersion",
-        "calibration.status",
-        "calibration.requestId",
+  "serialNumber",
+  "stage",
+  "groupB.deviceId",
+  "groupB.nvsVersion",
+  "groupB.provisionStatus",
+  "groupB.configAck",
+  "groupB.lastKnownFirmwareVersion",
+  "calibration.status",
+  "calibration.requestId",
+  "calibration.acknowledgement",
       ].join(" ")
     )
     .lean();
@@ -327,6 +331,22 @@ async function handleProductionConfigAck({
   const status = String(
     ack?.status || ""
   ).trim().toLowerCase();
+
+  const action = String(ack?.action || "").trim();
+
+if (!action) {
+  return {
+    matched: true,
+    reason: "missing_action",
+  };
+}
+
+if (!["setConfig", "setCalibration"].includes(action)) {
+  return {
+    matched: true,
+    reason: "unsupported_action",
+  };
+}
 
   // A production serial has matched.
   // Never pass malformed production ACKs into legacy updates.
@@ -376,29 +396,35 @@ async function handleProductionConfigAck({
       expectedProvisionAck.nvsVersion
     );
 
-    if (
-      ack.nvsVersion !== undefined &&
-      ack.nvsVersion !== null
-    ) {
-      const receivedNvsVersion = Number(ack.nvsVersion);
+   if (action !== "setConfig") {
+  return {
+    matched: true,
+    reason: "group_b_action_mismatch",
+  };
+}
 
-      if (!Number.isFinite(receivedNvsVersion)) {
-        return {
-          matched: true,
-          reason: "invalid_nvs_version",
-        };
-      }
+const receivedNvsVersion = Number(ack.nvsVersion);
 
-      if (
-        Number.isFinite(expectedNvsVersion) &&
-        receivedNvsVersion !== expectedNvsVersion
-      ) {
-        return {
-          matched: true,
-          reason: "stale_nvs_version",
-        };
-      }
-    }
+if (
+  ack.nvsVersion === undefined ||
+  ack.nvsVersion === null ||
+  !Number.isInteger(receivedNvsVersion)
+) {
+  return {
+    matched: true,
+    reason: "missing_or_invalid_nvs_version",
+  };
+}
+
+if (
+  !Number.isInteger(expectedNvsVersion) ||
+  receivedNvsVersion !== expectedNvsVersion
+) {
+  return {
+    matched: true,
+    reason: "stale_nvs_version",
+  };
+}
 
     // Duplicate successful ACK:
     // Do not move the device backwards from Calibration or Dispatch.
@@ -453,16 +479,12 @@ async function handleProductionConfigAck({
     // The request ID in the database must still match.
     // An older delayed ACK cannot overwrite a newer provision request.
     const update = await ProductionDevice.updateOne(
-      {
-        _id: device._id,
-        "groupB.configAck.requestId": requestId,
-        "groupB.provisionStatus": {
-         $nin: [
-        ProductionDevice.CALIBRATION_STATUS.APPLIED,
-        ProductionDevice.CALIBRATION_STATUS.MANUALLY_COMPLETED,
-      ],
-        },
-      },
+{
+  _id: device._id,
+  "groupB.configAck.requestId": requestId,
+  "groupB.configAck.status": CONFIG_ACK_STATUS.PENDING,
+  "groupB.nvsVersion": expectedNvsVersion,
+},
       {
         $set: updateFields,
       }
@@ -489,9 +511,10 @@ async function handleProductionConfigAck({
   // CALIBRATION ACK
   // ------------------------------------------------
 
-  if (
-    requestId === device.calibration?.requestId
-  ) {
+if (
+  action === "setCalibration" &&
+  requestId === device.calibration?.requestId
+) {
     // A duplicate successful calibration ACK must not
     // re-apply the transition or overwrite the applied time.
     if (
@@ -553,13 +576,11 @@ async function handleProductionConfigAck({
     // This condition prevents an old ACK from overwriting
     // a newer calibration request or an already-applied result.
     const update = await ProductionDevice.updateOne(
-      {
-        _id: device._id,
-        "calibration.requestId": requestId,
-        "calibration.status": {
-          $ne: ProductionDevice.CALIBRATION_STATUS.APPLIED,
-        },
-      },
+{
+  _id: device._id,
+  "calibration.requestId": requestId,
+  "calibration.status": ProductionDevice.CALIBRATION_STATUS.SUBMITTED,
+},
       {
         $set: updateFields,
       }

@@ -5,7 +5,7 @@ const ProductionDevice = require("../models/ProductionDevice");
 const DeviceProvision = require("../models/DeviceProvision");
 const DeviceMaintenanceLog = require("../models/DeviceMaintenanceLog");
 const mqttClient = require("../mqttClient");
-
+const mongoose = require("mongoose");
 const {
   normalizeDeviceId,
   buildConfigTopic,
@@ -58,7 +58,7 @@ async function findDevice(id) {
     $or: [
       { device_id: normalizeDeviceId(value) },
       { serialNumber: value },
-      ...(Device.db.base.Types.ObjectId.isValid(value)
+      ...(mongoose.Types.ObjectId.isValid(value)
         ? [{ _id: value }]
         : []),
     ],
@@ -70,10 +70,14 @@ async function findDevice(id) {
     throw error;
   }
 
+  // A device is V3 only when the completed Production dispatch
+  // explicitly points to this exact live Device document and
+  // the Production Device ID agrees with its current identity.
   const production = await ProductionDevice.findOne({
     serialNumber: device.serialNumber,
     "dispatch.liveDeviceId": device._id,
     "dispatch.status": "completed",
+    "groupB.deviceId": normalizeDeviceId(device.device_id),
   });
 
   return {
@@ -131,30 +135,30 @@ async function listDevices({ search, page = 1, limit = 25 }) {
     Device.countDocuments(filter),
   ]);
 
-  const serials = devices.map(d => d.serialNumber);
+const liveDeviceIds = devices.map(device => device._id);
 
-  const productionRecords = await ProductionDevice.find({
-    serialNumber: { $in: serials },
-    "dispatch.status": "completed",
-  })
-    .select("serialNumber dispatch.liveDeviceId")
-    .lean();
+const productionRecords = await ProductionDevice.find({
+  "dispatch.status": "completed",
+  "dispatch.liveDeviceId": { $in: liveDeviceIds },
+})
+  .select("dispatch.liveDeviceId groupB.deviceId")
+  .lean();
 
-  const productionBySerial = new Map(
-    productionRecords.map(p => [
-      p.serialNumber,
-      String(p.dispatch?.liveDeviceId),
-    ])
-  );
+const productionByLiveId = new Map(
+  productionRecords.map(record => [
+    String(record.dispatch.liveDeviceId),
+    normalizeDeviceId(record.groupB?.deviceId),
+  ])
+);
 
   return {
     data: devices.map(device => ({
       ...device,
-      firmwareProfile:
-        productionBySerial.get(device.serialNumber) ===
-        String(device._id)
-          ? "v3"
-          : "legacy",
+firmwareProfile:
+  productionByLiveId.get(String(device._id)) ===
+  normalizeDeviceId(device.device_id)
+    ? "v3"
+    : "legacy",
       wifiPasswordConfigured: Boolean(device.wifiPassword),
       wifiPassword: undefined,
     })),

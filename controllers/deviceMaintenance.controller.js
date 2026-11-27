@@ -663,6 +663,24 @@ exports.updateDeviceId = async (req, res) => {
       });
     }
 
+    // Do not allow another migration while one is waiting for firmware ACK.
+const pendingMigration = await service.DeviceMaintenanceLog.findOne({
+  serialNumber: device.serialNumber,
+  category: "deviceIdMigration",
+  status: {
+    $in: ["pending", "published"],
+  },
+}).lean();
+
+if (pendingMigration) {
+  return res.status(409).json({
+    success: false,
+    message: "A Device ID migration is already pending for this device.",
+    requestId: pendingMigration.requestId,
+    status: pendingMigration.status,
+  });
+}
+
     const duplicate = await service.Device.findOne({
       device_id: newId,
     });
@@ -690,25 +708,47 @@ exports.updateDeviceId = async (req, res) => {
     }
 
     const request = service.requestId();
-    const nextNvsVersion =
-      Number(
-        profile === "v3"
-          ? production.groupB.nvsVersion
-          : device.nvsVersion
-      ) + 1;
+const currentNvsVersion = Number(
+  profile === "v3"
+    ? production.groupB.nvsVersion
+    : device.nvsVersion
+);
+
+if (
+  !Number.isInteger(currentNvsVersion) ||
+  currentNvsVersion < 0
+) {
+  throw Object.assign(
+    new Error("Current NVS version is invalid."),
+    { statusCode: 409 }
+  );
+}
+
+const nextNvsVersion = currentNvsVersion + 1;
 
     const topic = service.buildConfigTopic(device.serialNumber);
 
-    const payload = {
-      action: "setConfig",
-      schemaVersion: 1,
-      requestId: request,
-      serialNumber: device.serialNumber,
-      deviceId: newId,
-      ssid: device.wifiSSID || "",
-      password: device.wifiPassword || "",
-      nvsVersion: nextNvsVersion,
-    };
+const payload = {
+  action: "setConfig",
+  schemaVersion: 1,
+
+  requestId: request,
+  serialNumber: device.serialNumber,
+  deviceId: newId,
+
+  ssid: device.wifiSSID || "",
+  password: device.wifiPassword || "",
+
+  nvsVersion: nextNvsVersion,
+
+  ...(profile === "legacy"
+    ? {
+        cf: device.cf,
+        vf: device.vf,
+        currentRF: device.currentRF,
+      }
+    : {}),
+};
 
     
 
@@ -723,7 +763,7 @@ exports.updateDeviceId = async (req, res) => {
       await production.save();
 
       await service.publish(topic, payload);
-      
+
     } else {
       device.nvsVersion = nextNvsVersion;
       device.configAck = {

@@ -689,89 +689,750 @@ if (
 if (
   parts.length === 3 &&
   parts[0] === "viz" &&
-  parts[2] === "status"
+  parts[2] === "configAck"
 ) {
-  let statusMessage;
+  let ack;
 
   try {
-    statusMessage = JSON.parse(payload);
+    ack = JSON.parse(payload);
   } catch (error) {
-    console.error(
-      "[PRODUCTION STATUS] Invalid JSON:",
-      error.message
-    );
+    console.error("[CONFIG ACK] Invalid JSON:", error.message);
+    return;
+  }
+
+  if (!ack || typeof ack !== "object" || Array.isArray(ack)) {
+    console.error("[CONFIG ACK] Invalid ACK payload.");
+    return;
+  }
+
+  const topicSerial = String(parts[1] || "").trim();
+  const serialNumber = String(ack.serialNumber || "").trim();
+  const requestId = String(ack.requestId || "").trim();
+  const action = String(ack.action || "").trim();
+  const ackStatus = String(ack.status || "").trim().toLowerCase();
+
+  const receivedNvsVersion =
+    ack.nvsVersion === undefined || ack.nvsVersion === null
+      ? null
+      : Number(ack.nvsVersion);
+
+  if (!topicSerial || !serialNumber || serialNumber !== topicSerial) {
+    console.warn("[CONFIG ACK] Serial number does not match topic.");
+    return;
+  }
+
+  if (!requestId) {
+    console.warn("[CONFIG ACK] Missing requestId.");
     return;
   }
 
   if (
-    !statusMessage ||
-    typeof statusMessage !== "object" ||
-    Array.isArray(statusMessage)
+    ![CONFIG_ACK_STATUS.OK, CONFIG_ACK_STATUS.ERROR].includes(ackStatus)
   ) {
+    console.warn("[CONFIG ACK] Invalid status.");
     return;
   }
 
-  const topicSerial = String(parts[1] || "")
-    .trim()
-    .toUpperCase();
-
-  const payloadSerial = String(
-    statusMessage.serial || ""
-  ).trim().toUpperCase();
-
-  // Both serial identifiers must agree.
-  if (
-    !topicSerial ||
-    !payloadSerial ||
-    topicSerial !== payloadSerial
-  ) {
-    console.warn(
-      "[PRODUCTION STATUS] Serial mismatch:",
-      { topicSerial, payloadSerial }
-    );
+  if (!["setConfig", "setCalibration"].includes(action)) {
+    console.warn("[CONFIG ACK] Invalid action.");
     return;
   }
 
-  if (
-    String(statusMessage.status || "")
-      .trim()
-      .toUpperCase() !== "READY"
-  ) {
-    return;
-  }
+  const ackFields = {
+    status: ackStatus,
+    action,
+    requestId,
+    ackedAt: new Date(),
+    message: String(ack.message || "").slice(0, 500) || null,
+    fwVersion: String(ack.fwVersion || "").slice(0, 100) || null,
+    nvsVersion:
+      Number.isInteger(receivedNvsVersion)
+        ? receivedNvsVersion
+        : null,
+  };
 
   try {
-    const receivedAt = new Date();
+    // --------------------------------------------------
+    // FIRST: resolve the Production record through the
+    // exact dispatched live-device relationship.
+    // --------------------------------------------------
 
-    const update = await ProductionDevice.updateOne(
-      {
-        serialNumber: topicSerial,
-        stage: ProductionDevice.STAGE.GROUP_A,
-      },
-      {
-        $set: {
-          "groupA.connection.status": "online",
-          "groupA.connection.lastSeen": receivedAt,
+    const productionLink = await ProductionDevice.findOne({
+      serialNumber,
+      "dispatch.status": "completed",
+      "dispatch.liveDeviceId": { $exists: true, $ne: null },
+    })
+      .select([
+        "_id",
+        "serialNumber",
+        "stage",
+        "groupB.deviceId",
+        "groupB.nvsVersion",
+        "groupB.configAck",
+        "dispatch.liveDeviceId",
+        "dispatch.status",
+      ].join(" "))
+      .lean();
 
-          ...(statusMessage.fwVersion
-            ? {
-                "groupA.lastKnownFirmwareVersion":
-                  String(statusMessage.fwVersion).slice(0, 100),
-              }
-            : {}),
-        },
+    // --------------------------------------------------
+    // V3 DEVICE ACK
+    // --------------------------------------------------
+
+    if (productionLink) {
+      const liveDevice = await Device.findById(
+        productionLink.dispatch.liveDeviceId
+      );
+
+      if (!liveDevice) {
+        console.error(
+          "[CONFIG ACK] Production record has no linked live Device:",
+          serialNumber
+        );
+        return;
       }
-    );
 
-    if (update.matchedCount === 0) {
-      console.warn(
-        "[PRODUCTION STATUS] No Group A record found:",
-        topicSerial
+      if (liveDevice.serialNumber !== serialNumber) {
+        console.error(
+          "[CONFIG ACK] Linked live Device serial mismatch:",
+          serialNumber
+        );
+        return;
+      }
+
+      // Find the maintenance request, if this ACK belongs
+      // to an admin maintenance operation.
+      const logEntry = await DeviceMaintenanceLog.findOne({
+        requestId,
+        serialNumber,
+        status: { $in: ["pending", "published"] },
+      }).lean();
+
+      const isMigration =
+        logEntry?.category === "deviceIdMigration";
+
+        if (!isMigration) {
+  const expectedDeviceId = normalizeDeviceId(
+    device?.device_id || provision?.deviceId
+  );
+
+  if (
+    expectedDeviceId &&
+    normalizeDeviceId(ack.deviceId) !== expectedDeviceId
+  ) {
+    console.warn("[CONFIG ACK] Legacy Device ID mismatch.");
+    return;
+  }
+}
+
+      // A setConfig ACK must have an exact NVS version.
+      if (action === "setConfig") {
+        if (
+          !Number.isInteger(receivedNvsVersion) ||
+          receivedNvsVersion < 0
+        ) {
+          console.warn("[CONFIG ACK] Invalid or missing NVS version.");
+          return;
+        }
+
+        // During migration, the requested new ID is expected.
+        // Otherwise, the ACK must contain the current Production ID.
+        const expectedDeviceId = isMigration
+          ? normalizeDeviceId(logEntry.changes?.newDeviceId)
+          : normalizeDeviceId(productionLink.groupB?.deviceId);
+
+        if (
+          !expectedDeviceId ||
+          normalizeDeviceId(ack.deviceId) !== expectedDeviceId
+        ) {
+          if (logEntry) {
+            await DeviceMaintenanceLog.updateOne(
+              {
+                requestId,
+                serialNumber,
+                status: { $in: ["pending", "published"] },
+              },
+              {
+                $set: {
+                  status: "failed",
+                  acknowledgement: ackFields,
+                  errorMessage: "ACK Device ID did not match the requested Device ID.",
+                  completedAt: new Date(),
+                },
+              }
+            );
+          }
+
+          console.warn("[CONFIG ACK] Device ID mismatch.");
+          return;
+        }
+
+        if (isMigration) {
+          const expectedNvs = Number(logEntry.changes?.nvsVersion);
+
+          if (
+            !Number.isInteger(expectedNvs) ||
+            expectedNvs !== receivedNvsVersion
+          ) {
+            await DeviceMaintenanceLog.updateOne(
+              {
+                requestId,
+                serialNumber,
+                status: { $in: ["pending", "published"] },
+              },
+              {
+                $set: {
+                  status: "failed",
+                  acknowledgement: ackFields,
+                  errorMessage: "Migration ACK NVS version did not match.",
+                  completedAt: new Date(),
+                },
+              }
+            );
+
+            return;
+          }
+        } else if (
+          Number(productionLink.groupB?.nvsVersion) !== receivedNvsVersion
+        ) {
+          console.warn("[CONFIG ACK] Stale Production NVS version.");
+          return;
+        }
+      }
+
+      // The production service validates the request ID,
+      // action, NVS version and pending state before updating
+      // ProductionDevice.
+      const productionAck = await handleProductionConfigAck({
+        serialNumber,
+        ack,
+      });
+
+      // Do not update the live Device for unmatched/stale ACKs.
+      if (
+        !productionAck.matched ||
+        !productionAck.operation
+      ) {
+        console.warn(
+          "[CONFIG ACK] Production ACK was not applied:",
+          productionAck.reason
+        );
+        return;
+      }
+
+      // Firmware reported a terminal success or failure.
+      const operationSucceeded =
+        productionAck.successful === true;
+
+      // --------------------------------------------------
+      // V3 DEVICE ID MIGRATION
+      // --------------------------------------------------
+
+      if (isMigration && action === "setConfig") {
+        const oldId = normalizeDeviceId(
+          logEntry.changes?.oldDeviceId
+        );
+
+        const newId = normalizeDeviceId(
+          logEntry.changes?.newDeviceId
+        );
+
+        if (
+          !operationSucceeded ||
+          ackStatus !== CONFIG_ACK_STATUS.OK
+        ) {
+          await DeviceMaintenanceLog.updateOne(
+            { requestId, serialNumber },
+            {
+              $set: {
+                status: "failed",
+                acknowledgement: ackFields,
+                errorMessage: String(
+                  ack.message || "Firmware rejected Device ID migration."
+                ).slice(0, 500),
+                completedAt: new Date(),
+              },
+            }
+          );
+
+          return;
+        }
+
+        // Both Production and live Device must still have
+        // the original ID before we commit the new ID.
+        if (
+          normalizeDeviceId(productionLink.groupB?.deviceId) !== oldId ||
+          normalizeDeviceId(liveDevice.device_id) !== oldId
+        ) {
+          await DeviceMaintenanceLog.updateOne(
+            { requestId, serialNumber },
+            {
+              $set: {
+                status: "failed",
+                acknowledgement: ackFields,
+                errorMessage: "Current Device ID no longer matches migration source.",
+                completedAt: new Date(),
+              },
+            }
+          );
+
+          return;
+        }
+
+        const [duplicateProduction, duplicateLiveDevice, duplicateProvision] =
+          await Promise.all([
+            ProductionDevice.exists({
+              "groupB.deviceId": newId,
+              _id: { $ne: productionLink._id },
+            }),
+
+            Device.exists({
+              device_id: newId,
+              _id: { $ne: liveDevice._id },
+            }),
+
+            DeviceProvision.exists({
+              deviceId: newId,
+              serialNumber: { $ne: serialNumber },
+            }),
+          ]);
+
+        if (
+          duplicateProduction ||
+          duplicateLiveDevice ||
+          duplicateProvision
+        ) {
+          await DeviceMaintenanceLog.updateOne(
+            { requestId, serialNumber },
+            {
+              $set: {
+                status: "failed",
+                acknowledgement: ackFields,
+                errorMessage: "New Device ID is already assigned.",
+                completedAt: new Date(),
+              },
+            }
+          );
+
+          return;
+        }
+
+        // Update Production record first.
+        const productionUpdate = await ProductionDevice.updateOne(
+          {
+            _id: productionLink._id,
+            "groupB.deviceId": oldId,
+            "groupB.configAck.requestId": requestId,
+            "groupB.nvsVersion": receivedNvsVersion,
+          },
+          {
+            $set: {
+              "groupB.deviceId": newId,
+              "groupB.nvsVersion": receivedNvsVersion,
+            },
+          }
+        );
+
+        const productionMatched =
+          productionUpdate.matchedCount ?? productionUpdate.n ?? 0;
+
+        if (!productionMatched) {
+          await DeviceMaintenanceLog.updateOne(
+            { requestId, serialNumber },
+            {
+              $set: {
+                status: "failed",
+                errorMessage: "Production identity update did not match.",
+                completedAt: new Date(),
+              },
+            }
+          );
+
+          return;
+        }
+
+        // Update the linked live Device.
+        const liveUpdate = await Device.updateOne(
+          {
+            _id: liveDevice._id,
+            device_id: oldId,
+            serialNumber,
+          },
+          {
+            $set: {
+              device_id: newId,
+              nvsVersion: receivedNvsVersion,
+              configAck: ackFields,
+              ...(ack.fwVersion
+                ? {
+                    lastKnownFirmwareVersion:
+                      String(ack.fwVersion).slice(0, 100),
+                  }
+                : {}),
+            },
+          }
+        );
+
+        const liveMatched =
+          liveUpdate.matchedCount ?? liveUpdate.n ?? 0;
+
+        if (!liveMatched) {
+          await DeviceMaintenanceLog.updateOne(
+            { requestId, serialNumber },
+            {
+              $set: {
+                status: "failed",
+                acknowledgement: ackFields,
+                errorMessage: "Live Device identity update did not match.",
+                completedAt: new Date(),
+              },
+            }
+          );
+
+          return;
+        }
+
+        // Keep DeviceProvision identity synchronized if a
+        // corresponding provision record exists.
+        await DeviceProvision.updateOne(
+          { serialNumber },
+          {
+            $set: {
+              deviceId: newId,
+              nvsVersion: receivedNvsVersion,
+            },
+          }
+        );
+
+        await DeviceMaintenanceLog.updateOne(
+          {
+            requestId,
+            serialNumber,
+            status: { $in: ["pending", "published"] },
+          },
+          {
+            $set: {
+              status: "completed",
+              acknowledgement: ackFields,
+              errorMessage: null,
+              completedAt: new Date(),
+            },
+          }
+        );
+
+        console.log(
+          "[CONFIG ACK] V3 Device ID migration completed:",
+          oldId,
+          "->",
+          newId
+        );
+
+        return;
+      }
+
+      // --------------------------------------------------
+      // NORMAL V3 CONFIG / CALIBRATION ACK
+      // --------------------------------------------------
+
+      await Device.updateOne(
+        { _id: liveDevice._id, serialNumber },
+        {
+          $set: {
+            configAck: ackFields,
+            ...(ack.fwVersion
+              ? {
+                  lastKnownFirmwareVersion:
+                    String(ack.fwVersion).slice(0, 100),
+                }
+              : {}),
+            ...(action === "setConfig"
+              ? { nvsVersion: receivedNvsVersion }
+              : {}),
+          },
+        }
+      );
+
+      if (logEntry) {
+        await DeviceMaintenanceLog.updateOne(
+          {
+            requestId,
+            serialNumber,
+            status: { $in: ["pending", "published"] },
+          },
+          {
+            $set: {
+              status: operationSucceeded ? "acknowledged" : "failed",
+              acknowledgement: ackFields,
+              errorMessage: operationSucceeded
+                ? null
+                : String(
+                    ack.message ||
+                    "Production firmware rejected the operation."
+                  ).slice(0, 500),
+              completedAt: new Date(),
+            },
+          }
+        );
+      }
+
+      return;
+    }
+
+    // --------------------------------------------------
+    // LEGACY DEVICE ACK
+    // --------------------------------------------------
+
+    const device = await Device.findOne({ serialNumber });
+    const provision = await DeviceProvision.findOne({ serialNumber });
+
+    if (!device && !provision) {
+      return;
+    }
+
+    if (action !== "setConfig") {
+      console.warn("[CONFIG ACK] Legacy device received unsupported action.");
+      return;
+    }
+
+    if (
+      !Number.isInteger(receivedNvsVersion) ||
+      receivedNvsVersion < 0
+    ) {
+      console.warn("[CONFIG ACK] Legacy ACK has invalid NVS version.");
+      return;
+    }
+
+    const logEntry = await DeviceMaintenanceLog.findOne({
+      requestId,
+      serialNumber,
+      status: { $in: ["pending", "published"] },
+    }).lean();
+
+    const isMigration =
+      logEntry?.category === "deviceIdMigration";
+
+    if (isMigration) {
+      const oldId = normalizeDeviceId(
+        logEntry.changes?.oldDeviceId
+      );
+
+      const newId = normalizeDeviceId(
+        logEntry.changes?.newDeviceId
+      );
+
+      const expectedNvs = Number(logEntry.changes?.nvsVersion);
+
+      const migrationAckMatches =
+        ackStatus === CONFIG_ACK_STATUS.OK &&
+        Number.isInteger(expectedNvs) &&
+        expectedNvs === receivedNvsVersion &&
+        normalizeDeviceId(ack.deviceId) === newId;
+
+      if (!migrationAckMatches) {
+        await DeviceMaintenanceLog.updateOne(
+          { requestId, serialNumber },
+          {
+            $set: {
+              status: "failed",
+              acknowledgement: ackFields,
+              errorMessage: "Legacy Device ID migration ACK did not match ID/NVS version.",
+              completedAt: new Date(),
+            },
+          }
+        );
+
+        return;
+      }
+
+      if (
+        !device ||
+        normalizeDeviceId(device.device_id) !== oldId
+      ) {
+        await DeviceMaintenanceLog.updateOne(
+          { requestId, serialNumber },
+          {
+            $set: {
+              status: "failed",
+              acknowledgement: ackFields,
+              errorMessage: "Live Device identity no longer matches migration source.",
+              completedAt: new Date(),
+            },
+          }
+        );
+
+        return;
+      }
+
+      const [duplicateDevice, duplicateProvision] =
+        await Promise.all([
+          Device.exists({
+            device_id: newId,
+            _id: { $ne: device._id },
+          }),
+
+          DeviceProvision.exists({
+            deviceId: newId,
+            serialNumber: { $ne: serialNumber },
+          }),
+        ]);
+
+      if (duplicateDevice || duplicateProvision) {
+        await DeviceMaintenanceLog.updateOne(
+          { requestId, serialNumber },
+          {
+            $set: {
+              status: "failed",
+              acknowledgement: ackFields,
+              errorMessage: "New Device ID is already assigned.",
+              completedAt: new Date(),
+            },
+          }
+        );
+
+        return;
+      }
+
+      const liveUpdate = await Device.updateOne(
+        {
+          _id: device._id,
+          device_id: oldId,
+          serialNumber,
+          "configAck.requestId": requestId,
+        },
+        {
+          $set: {
+            device_id: newId,
+            nvsVersion: receivedNvsVersion,
+            configAck: ackFields,
+          },
+        }
+      );
+
+      const liveMatched =
+        liveUpdate.matchedCount ?? liveUpdate.n ?? 0;
+
+      if (!liveMatched) {
+        await DeviceMaintenanceLog.updateOne(
+          { requestId, serialNumber },
+          {
+            $set: {
+              status: "failed",
+              errorMessage: "Live Device migration update did not match.",
+              completedAt: new Date(),
+            },
+          }
+        );
+
+        return;
+      }
+
+      await DeviceProvision.updateOne(
+        { serialNumber },
+        {
+          $set: {
+            deviceId: newId,
+            nvsVersion: receivedNvsVersion,
+          },
+        }
+      );
+
+      await DeviceMaintenanceLog.updateOne(
+        { requestId, serialNumber },
+        {
+          $set: {
+            status: "completed",
+            acknowledgement: ackFields,
+            errorMessage: null,
+            completedAt: new Date(),
+          },
+        }
+      );
+
+      return;
+    }
+
+    // Only update a legacy Device when this ACK belongs
+    // to its current pending config request.
+    if (
+      device &&
+      device.configAck?.requestId === requestId &&
+      device.nvsVersion === receivedNvsVersion
+    ) {
+      await Device.updateOne(
+        {
+          _id: device._id,
+          "configAck.requestId": requestId,
+          nvsVersion: receivedNvsVersion,
+        },
+        {
+          $set: {
+            configAck: ackFields,
+            ...(ack.fwVersion
+              ? {
+                  lastKnownFirmwareVersion:
+                    String(ack.fwVersion).slice(0, 100),
+                }
+              : {}),
+          },
+        }
+      );
+    }
+
+    // Provisioning ACKs are only applied when the request ID
+    // matches the current pending provision config request.
+    if (
+      provision &&
+      provision.configAck?.requestId === requestId &&
+      provision.nvsVersion === receivedNvsVersion
+    ) {
+      await DeviceProvision.updateOne(
+        {
+          _id: provision._id,
+          "configAck.requestId": requestId,
+          nvsVersion: receivedNvsVersion,
+        },
+        {
+          $set: {
+            configAck: ackFields,
+            provisionStatus:
+              ackStatus === CONFIG_ACK_STATUS.OK
+                ? PROVISION_STATUS.ACKNOWLEDGED
+                : PROVISION_STATUS.FAILED,
+            lastKnownFirmwareVersion:
+              ack.fwVersion ||
+              provision.lastKnownFirmwareVersion,
+          },
+        }
+      );
+    }
+
+    if (logEntry) {
+      await DeviceMaintenanceLog.updateOne(
+        {
+          requestId,
+          serialNumber,
+          status: { $in: ["pending", "published"] },
+        },
+        {
+          $set: {
+            status:
+              ackStatus === CONFIG_ACK_STATUS.OK
+                ? "acknowledged"
+                : "failed",
+            acknowledgement: ackFields,
+            errorMessage:
+              ackStatus === CONFIG_ACK_STATUS.OK
+                ? null
+                : String(
+                    ack.message || "Legacy firmware rejected config."
+                  ).slice(0, 500),
+            completedAt: new Date(),
+          },
+        }
       );
     }
   } catch (error) {
     console.error(
-      "[PRODUCTION STATUS] Database update failed:",
+      "[CONFIG ACK] Processing failed:",
       error
     );
   }

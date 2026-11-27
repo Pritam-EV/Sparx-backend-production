@@ -3,7 +3,7 @@ const mqttClient = require("../mqttClient");
 
 const DeviceProvision = require("../models/DeviceProvision");
 const Device = require("../models/device");
-
+const crypto = require("crypto");
 const {
   CONFIG_ACTION,
   CONFIG_SCHEMA_VERSION,
@@ -72,7 +72,7 @@ async function publishProvisionConfig(provisionId, options = {}) {
     throw new Error("Provision requires serialNumber and deviceId");
   }
 
-  const requestId = options.requestId || require("crypto").randomUUID();
+const requestId = options.requestId || crypto.randomUUID();
   const nextNvsVersion = Number(provision.nvsVersion || 0) + 1;
 
   const payload = buildFirmwareConfig({
@@ -103,15 +103,30 @@ async function publishProvisionConfig(provisionId, options = {}) {
     nvsVersion: nextNvsVersion,
   };
 
-  await provision.save();
-  await publishAsync(topic, payload);
+await provision.save();
 
-  return {
-    topic,
-    payload,
-    requestId,
-    nvsVersion: nextNvsVersion,
-  };
+try {
+  await publishAsync(topic, payload);
+} catch (error) {
+  provision.provisionStatus = PROVISION_STATUS.FAILED;
+
+  provision.configAck.status = CONFIG_ACK_STATUS.ERROR;
+  provision.configAck.message = String(
+    error.message || "MQTT publish failed"
+  ).slice(0, 500);
+
+
+  await provision.save();
+
+  throw error;
+}
+
+return {
+  topic,
+  payload,
+  requestId,
+  nvsVersion: nextNvsVersion,
+};
 }
 
 async function publishDeviceConfig(deviceId, options = {}) {
@@ -129,7 +144,7 @@ async function publishDeviceConfig(deviceId, options = {}) {
     throw new Error(`Device ${normalizedDeviceId} has no serialNumber`);
   }
 
-  const requestId = options.requestId || require("crypto").randomUUID();
+  const requestId = options.requestId || crypto.randomUUID();
   const nextNvsVersion = Number(device.nvsVersion || 0) + 1;
 
   const payload = buildFirmwareConfig({
@@ -158,15 +173,29 @@ async function publishDeviceConfig(deviceId, options = {}) {
     nvsVersion: nextNvsVersion,
   };
 
-  await device.save();
-  await publishAsync(topic, payload);
+await device.save();
 
-  return {
-    topic,
-    payload,
-    requestId,
-    nvsVersion: nextNvsVersion,
-  };
+try {
+  await publishAsync(topic, payload);
+} catch (error) {
+  device.configAck.status = CONFIG_ACK_STATUS.ERROR;
+
+  device.configAck.message = String(
+    error.message || "MQTT publish failed"
+  ).slice(0, 500);
+
+
+  await device.save();
+
+  throw error;
+}
+
+return {
+  topic,
+  payload,
+  requestId,
+  nvsVersion: nextNvsVersion,
+};
 }
 
 module.exports = {
