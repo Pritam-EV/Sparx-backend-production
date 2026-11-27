@@ -338,11 +338,18 @@ exports.updateFirmwareConfig = async (req, res) => {
 
     const nextNvsVersion = Number(production.groupB.nvsVersion || 0) + 1;
     const topic = service.buildConfigTopic(device.serialNumber);
-    const payload = {
-      action: "setConfig", schemaVersion: 1, requestId,
-      serialNumber: device.serialNumber, deviceId: device.device_id,
-      ssid, password: changes.wifiPassword, nvsVersion: nextNvsVersion,
-    };
+
+const payload = {
+  action: "setConfig",
+  schemaVersion: 1,
+  requestId: request,
+  serialNumber: device.serialNumber,
+  deviceId: device.device_id,
+  ssid: ssid,
+  password: changes.wifiPassword,
+  nvsVersion: nextNvsVersion,
+};
+
     const previousDevice = { wifiSSID: device.wifiSSID, wifiPassword: device.wifiPassword };
     const previousGroupB = {
       nvsVersion: production.groupB.nvsVersion,
