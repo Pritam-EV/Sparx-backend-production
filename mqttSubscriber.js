@@ -484,57 +484,7 @@ if (migrationRequestId && ackStatus === CONFIG_ACK_STATUS.OK) {
   return;
 }
 
-    if (
-      production &&
-      oldId &&
-      newId &&
-      production.groupB?.deviceId === oldId
-    ) {
-      const duplicate = await ProductionDevice.exists({
-        "groupB.deviceId": newId,
-        _id: { $ne: production._id },
-      });
 
-      if (!duplicate) {
-        await ProductionDevice.updateOne(
-          { _id: production._id },
-          {
-            $set: {
-              "groupB.deviceId": newId,
-            },
-          }
-        );
-
-        await Device.updateOne(
-          { _id: production.dispatch.liveDeviceId },
-          {
-            $set: {
-              device_id: newId,
-            },
-          }
-        );
-
-        await DeviceMaintenanceLog.updateOne(
-          { requestId },
-          {
-            $set: {
-              status: "completed",
-              completedAt: new Date(),
-            },
-          }
-        );
-      } else {
-        await DeviceMaintenanceLog.updateOne(
-          { requestId },
-          {
-            $set: {
-              status: "failed",
-              errorMessage: "Duplicate V3 Device ID",
-            },
-          }
-        );
-      }
-    }
   }
 }
   return;
