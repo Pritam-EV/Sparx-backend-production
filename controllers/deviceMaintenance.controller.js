@@ -362,99 +362,29 @@ exports.updateFirmwareConfig = async (req, res) => {
 
 exports.updateCalibration = async (req, res) => {
   try {
-    const { device, production, profile } =
-      await service.findDevice(req.params.id);
-
+    const { device, production, profile } = await service.findDevice(req.params.id);
     const coefficients = req.body?.coefficients || {};
-
     const keys = profile === "legacy"
       ? ["cf", "vf", "currentRF"]
       : ["vf", "currentZero", "currentGain", "powerZero", "powerGain"];
-
     const clean = {};
 
     for (const key of keys) {
       const value = Number(coefficients[key]);
-
       if (!Number.isFinite(value)) {
-        throw Object.assign(
-          new Error(`${key} must be numeric`),
-          { statusCode: 400 }
-        );
+        throw Object.assign(new Error(`${key} must be numeric`), { statusCode: 400 });
       }
-
-      // Legacy calibration factors must be positive.
       if (profile === "legacy" && value <= 0) {
-        throw Object.assign(
-          new Error(`${key} must be greater than zero`),
-          { statusCode: 400 }
-        );
+        throw Object.assign(new Error(`${key} must be greater than zero`), { statusCode: 400 });
       }
-
-      // V3 offset values can be zero or negative.
-      // Only scale/gain values must be positive.
-      if (
-        profile === "v3" &&
-        ["vf", "currentGain", "powerGain"].includes(key) &&
-        value <= 0
-      ) {
-        throw Object.assign(
-          new Error(`${key} must be greater than zero`),
-          { statusCode: 400 }
-        );
+      if (profile === "v3" && ["vf", "currentGain", "powerGain"].includes(key) && value <= 0) {
+        throw Object.assign(new Error(`${key} must be greater than zero`), { statusCode: 400 });
       }
-
       clean[key] = value;
     }
 
     const request = service.requestId();
-
-    if (profile === "legacy") {
-      Object.assign(device, clean);
-      await device.save();
-
-      const published = await service.publishDeviceConfig(
-        device.device_id,
-        { requestId: request }
-      );
-
-      await service.log({
-        requestId: request,
-        serialNumber: device.serialNumber,
-        deviceId: device.device_id,
-        category: "firmware",
-        operation: "calibration_update",
-        firmwareProfile: profile,
-        changes: clean,
-        status: "published",
-        mqttTopic: published.topic,
-        performedBy: service.actorId(req),
-      });
-
-      return res.status(202).json({
-        success: true,
-        requestId: request,
-        status: "published",
-        topic: published.topic,
-        nvsVersion: published.nvsVersion,
-      });
-    }
-
-    const published = await service.publishCalibration({
-      serialNumber: device.serialNumber,
-      requestId: request,
-      coefficients: clean,
-    });
-
-    production.calibration.coefficients = clean;
-    production.calibration.requestId = request;
-    production.calibration.status =
-      service.ProductionDevice.CALIBRATION_STATUS.SUBMITTED;
-    production.calibration.submittedAt = new Date();
-
-    await production.save();
-
-    await service.log({
+    const logEntry = {
       requestId: request,
       serialNumber: device.serialNumber,
       deviceId: device.device_id,
@@ -462,22 +392,99 @@ exports.updateCalibration = async (req, res) => {
       operation: "calibration_update",
       firmwareProfile: profile,
       changes: clean,
-      status: "published",
-      mqttTopic: published.topic,
+      status: "pending",
       performedBy: service.actorId(req),
-    });
+    };
+    await service.log(logEntry);
 
-    return res.status(202).json({
-      success: true,
-      requestId: request,
-      status: "published",
-      topic: published.topic,
-    });
+    if (profile === "legacy") {
+      const previous = { cf: device.cf, vf: device.vf, currentRF: device.currentRF };
+      Object.assign(device, clean);
+      await device.save();
+
+      try {
+        const published = await service.publishDeviceConfig(
+          device.device_id,
+          { requestId: request }
+        );
+
+        await service.DeviceMaintenanceLog.updateOne(
+          { requestId: request, status: "pending" },
+          { $set: { status: "published", mqttTopic: published.topic } }
+        );
+
+        return res.status(202).json({
+          success: true,
+          requestId: request,
+          status: "published",
+          topic: published.topic,
+          nvsVersion: published.nvsVersion,
+        });
+      } catch (error) {
+        device.cf = previous.cf;
+        device.vf = previous.vf;
+        device.currentRF = previous.currentRF;
+        await device.save();
+
+        await service.DeviceMaintenanceLog.updateOne(
+          { requestId: request },
+          { $set: { status: "failed", errorMessage: error.message, completedAt: new Date() } }
+        );
+        throw error;
+      }
+    }
+
+    const previous = {
+      coefficients: production.calibration.coefficients?.toObject
+        ? production.calibration.coefficients.toObject()
+        : production.calibration.coefficients,
+      requestId: production.calibration.requestId,
+      status: production.calibration.status,
+      submittedAt: production.calibration.submittedAt,
+    };
+
+    production.calibration.coefficients = clean;
+    production.calibration.requestId = request;
+    production.calibration.status =
+      service.ProductionDevice.CALIBRATION_STATUS.SUBMITTED;
+    production.calibration.submittedAt = new Date();
+    await production.save();
+
+    try {
+      const published = await service.publishCalibration({
+        serialNumber: device.serialNumber,
+        requestId: request,
+        coefficients: clean,
+      });
+
+      await service.DeviceMaintenanceLog.updateOne(
+        { requestId: request, status: "pending" },
+        { $set: { status: "published", mqttTopic: published.topic } }
+      );
+
+      return res.status(202).json({
+        success: true,
+        requestId: request,
+        status: "published",
+        topic: published.topic,
+      });
+    } catch (error) {
+      production.calibration.coefficients = previous.coefficients;
+      production.calibration.requestId = previous.requestId;
+      production.calibration.status = previous.status;
+      production.calibration.submittedAt = previous.submittedAt;
+      await production.save();
+
+      await service.DeviceMaintenanceLog.updateOne(
+        { requestId: request },
+        { $set: { status: "failed", errorMessage: error.message, completedAt: new Date() } }
+      );
+      throw error;
+    }
   } catch (error) {
     return responseError(res, error);
   }
 };
-
 
 exports.sendCommand = async (req, res) => {
   try {
