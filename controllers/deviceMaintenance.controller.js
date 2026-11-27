@@ -598,9 +598,9 @@ exports.updateDeviceId = async (req, res) => {
     }
 
     const request = service.requestId();
-    const nextNvsVersion = Number(profile === "v3"
-      ? production.groupB.nvsVersion
-      : device.nvsVersion) + 1;
+    const nextNvsVersion = Number(
+      profile === "v3" ? production.groupB.nvsVersion : device.nvsVersion
+    ) + 1;
     const topic = service.buildConfigTopic(device.serialNumber);
     const payload = {
       action: "setConfig", schemaVersion: 1, requestId: request,
@@ -626,17 +626,26 @@ exports.updateDeviceId = async (req, res) => {
     try {
       if (profile === "v3") {
         production.groupB.nvsVersion = nextNvsVersion;
-        production.groupB.configAck = { status: "pending", action: "setConfig", requestId, nvsVersion: nextNvsVersion };
+        production.groupB.configAck = {
+          status: "pending", action: "setConfig", requestId, nvsVersion: nextNvsVersion,
+        };
         await production.save();
       } else {
         device.nvsVersion = nextNvsVersion;
-        device.configAck = { status: "pending", action: "setConfig", requestId, nvsVersion: nextNvsVersion };
+        device.configAck = {
+          status: "pending", action: "setConfig", requestId, nvsVersion: nextNvsVersion,
+        };
         await device.save();
       }
+
       await service.publish(topic, payload);
-      await service.DeviceMaintenanceLog.updateOne(
-        { requestId, status: "pending" }, { $set: { status: "published" } }
-      );
+
+      // Keep the request in pending state until the device ACK arrives.
+      return res.status(202).json({
+        success: true,
+        message: "Device ID change sent. Waiting for device acknowledgement.",
+        requestId, oldDeviceId: oldId, newDeviceId: newId, status: "published",
+      });
     } catch (error) {
       if (profile === "v3") {
         production.groupB.nvsVersion = previous.nvsVersion;
@@ -648,15 +657,11 @@ exports.updateDeviceId = async (req, res) => {
         await device.save();
       }
       await service.DeviceMaintenanceLog.updateOne(
-        { requestId }, { $set: { status: "failed", errorMessage: error.message, completedAt: new Date() } }
+        { requestId },
+        { $set: { status: "failed", errorMessage: error.message, completedAt: new Date() } }
       );
       throw error;
     }
-
-    return res.status(202).json({
-      success: true, message: "Device ID change sent. Waiting for device acknowledgement.",
-      requestId, oldDeviceId: oldId, newDeviceId: newId, status: "published",
-    });
   } catch (error) {
     return responseError(res, error);
   }
