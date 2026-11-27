@@ -440,7 +440,9 @@ async function handleProductionConfigAck({
       updatedBy: "mqtt",
     };
 
-    if (successful) {
+    // A maintenance config ACK after dispatch must not move the
+    // production record backwards from dispatch to calibration.
+    if (successful && device.stage === ProductionDevice.STAGE.GROUP_B) {
       updateFields.stage = ProductionDevice.STAGE.CALIBRATION;
       updateFields.stageUpdatedAt = now;
     }
