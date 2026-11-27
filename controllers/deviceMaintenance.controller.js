@@ -361,9 +361,14 @@ const payload = {
     device.wifiSSID = ssid;
     device.wifiPassword = changes.wifiPassword;
     production.groupB.nvsVersion = nextNvsVersion;
-    production.groupB.configAck = {
-      status: "pending", action: "setConfig", requestId, nvsVersion: nextNvsVersion,
-    };
+
+production.groupB.configAck = {
+  status: "pending",
+  action: "setConfig",
+  requestId: request,
+  nvsVersion: nextNvsVersion,
+};
+
     await device.save();
     await production.save();
 
@@ -387,9 +392,15 @@ const payload = {
       throw error;
     }
 
-    return res.status(202).json({
-      success: true, requestId, status: "published", topic, nvsVersion: nextNvsVersion,
-    });
+
+return res.status(202).json({
+  success: true,
+  requestId: request,
+  status: "published",
+  topic,
+  nvsVersion: nextNvsVersion,
+});
+
   } catch (error) {
     return responseError(res, error);
   }

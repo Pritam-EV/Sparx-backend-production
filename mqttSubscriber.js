@@ -289,39 +289,52 @@ if (
   }
 
 
-// Backward compatibility for firmware V3.0.0.
-// Older firmware sends action: "configAck" for both
-// configuration and calibration acknowledgements.
+
+// Backward compatibility for firmware that sends
+// action: "configAck" for setConfig operations.
 //
-// Only interpret it as setConfig when a matching
-// Device ID migration request exists.
+// Only normalize when the exact request ID belongs to
+// a pending/published Wi-Fi update or Device ID migration.
 if (action === "configAck") {
   try {
-    const migrationRequest = await DeviceMaintenanceLog.findOne({
+    const matchingConfigRequest = await DeviceMaintenanceLog.findOne({
       requestId,
       serialNumber,
-      category: "deviceIdMigration",
       status: { $in: ["pending", "published"] },
+      $or: [
+        {
+          category: "deviceIdMigration",
+        },
+        {
+          category: "firmware",
+          operation: "wifi_update",
+        },
+      ],
     })
-      .select("category")
+      .select("category operation")
       .lean();
 
-    if (migrationRequest) {
+    if (matchingConfigRequest) {
       action = "setConfig";
 
       console.log(
-        "[CONFIG ACK] Recognized legacy Device ID migration ACK:",
-        requestId
+        "[CONFIG ACK] Recognized legacy config ACK:",
+        {
+          requestId,
+          operation: matchingConfigRequest.operation,
+          category: matchingConfigRequest.category,
+        }
       );
     }
   } catch (error) {
     console.error(
-      "[CONFIG ACK] Could not validate legacy ACK:",
+      "[CONFIG ACK] Could not validate legacy config ACK:",
       error
     );
     return;
   }
 }
+
 
 if (!["setConfig", "setCalibration"].includes(action)) {
   console.warn(
@@ -410,19 +423,6 @@ const normalizedAck = {
       const isMigration =
         logEntry?.category === "deviceIdMigration";
 
-        if (!isMigration) {
-  const expectedDeviceId = normalizeDeviceId(
-    device?.device_id || provision?.deviceId
-  );
-
-  if (
-    expectedDeviceId &&
-    normalizeDeviceId(ack.deviceId) !== expectedDeviceId
-  ) {
-    console.warn("[CONFIG ACK] Legacy Device ID mismatch.");
-    return;
-  }
-}
 
       // A setConfig ACK must have an exact NVS version.
       if (action === "setConfig") {
