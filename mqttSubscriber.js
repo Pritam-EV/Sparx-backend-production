@@ -197,7 +197,7 @@ if (
 
     if (result.requestId && result.status && result.status !== "pending") {
       await DeviceMaintenanceLog.updateOne(
-        { requestId: result.requestId, status: "published" },
+        { requestId: result.requestId, status: { $in: ["pending", "published"] } },
         {
           $set: {
             status: result.status === "failed" ? "failed" : "acknowledged",
