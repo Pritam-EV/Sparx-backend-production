@@ -627,113 +627,217 @@ exports.getHistory = async (req, res) => {
   }
 };
 
+
 exports.updateDeviceId = async (req, res) => {
   try {
-    const { device, production, profile } = await service.findDevice(req.params.id);
+    const { device, production, profile } =
+      await service.findDevice(req.params.id);
+
     const oldId = device.device_id;
-    const newId = String(req.body?.newDeviceId || "").trim().toUpperCase();
+    const newId = String(req.body?.newDeviceId || "")
+      .trim()
+      .toUpperCase();
 
     if (!/^[A-Z0-9_-]{3,40}$/.test(newId)) {
-      return res.status(400).json({ success: false, message: "Invalid new Device ID" });
-    }
-    if (oldId === newId) {
-      return res.status(400).json({ success: false, message: "New Device ID is the same as current ID" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid new Device ID",
+      });
     }
 
-    const duplicateDevice = await service.Device.findOne({ device_id: newId });
-    if (duplicateDevice) {
-      return res.status(409).json({ success: false, message: "Device ID already exists" });
-    }
-    const duplicateProvision = await service.DeviceProvision.findOne({
-      deviceId: newId, serialNumber: { $ne: device.serialNumber },
-    });
-    if (duplicateProvision) {
-      return res.status(409).json({ success: false, message: "Device ID already exists in DeviceProvision" });
-    }
-    if (profile === "v3") {
-      const duplicateProduction = await service.ProductionDevice.findOne({
-        "groupB.deviceId": newId, _id: { $ne: production._id },
+    if (oldId === newId) {
+      return res.status(400).json({
+        success: false,
+        message: "New Device ID is the same as current ID",
       });
+    }
+
+    const duplicateDevice = await service.Device.findOne({
+      device_id: newId,
+    });
+
+    if (duplicateDevice) {
+      return res.status(409).json({
+        success: false,
+        message: "Device ID already exists",
+      });
+    }
+
+    const duplicateProvision = await service.DeviceProvision.findOne({
+      deviceId: newId,
+      serialNumber: { $ne: device.serialNumber },
+    });
+
+    if (duplicateProvision) {
+      return res.status(409).json({
+        success: false,
+        message: "Device ID already exists in DeviceProvision",
+      });
+    }
+
+    if (profile === "v3") {
+      const duplicateProduction =
+        await service.ProductionDevice.findOne({
+          "groupB.deviceId": newId,
+          _id: { $ne: production._id },
+        });
+
       if (duplicateProduction) {
-        return res.status(409).json({ success: false, message: "Device ID already exists in Production" });
+        return res.status(409).json({
+          success: false,
+          message: "Device ID already exists in Production",
+        });
       }
     }
 
+    // Generate one request ID and use it consistently everywhere.
     const request = service.requestId();
-    const nextNvsVersion = Number(
-      profile === "v3" ? production.groupB.nvsVersion : device.nvsVersion
-    ) + 1;
+
+    const currentNvsVersion =
+      profile === "v3"
+        ? production.groupB.nvsVersion
+        : device.nvsVersion;
+
+    const nextNvsVersion =
+      Number(currentNvsVersion || 0) + 1;
+
+    if (!Number.isInteger(nextNvsVersion) || nextNvsVersion < 1) {
+      throw Object.assign(
+        new Error("Unable to generate a valid NVS version"),
+        { statusCode: 400 }
+      );
+    }
+
     const topic = service.buildConfigTopic(device.serialNumber);
+
     const payload = {
-      action: "setConfig", schemaVersion: 1, requestId: request,
-      serialNumber: device.serialNumber, deviceId: newId,
-      ssid: device.wifiSSID || "", password: device.wifiPassword || "",
-      ...(profile === "legacy" ? {
-        cf: device.cf,
-        vf: device.vf,
-        currentRF: device.currentRF,
-      } : {}),
+      action: "setConfig",
+      schemaVersion: 1,
+      requestId: request,
+      serialNumber: device.serialNumber,
+      deviceId: newId,
+      ssid: device.wifiSSID || "",
+      password: device.wifiPassword || "",
+      ...(profile === "legacy"
+        ? {
+            cf: device.cf,
+            vf: device.vf,
+            currentRF: device.currentRF,
+          }
+        : {}),
       nvsVersion: nextNvsVersion,
     };
 
     await service.log({
-      requestId: request, serialNumber: device.serialNumber, deviceId: oldId,
-      category: "deviceIdMigration", operation: "device_id_update",
+      requestId: request,
+      serialNumber: device.serialNumber,
+      deviceId: oldId,
+      category: "deviceIdMigration",
+      operation: "device_id_update",
       firmwareProfile: profile,
-      changes: { oldDeviceId: oldId, newDeviceId: newId, nvsVersion: nextNvsVersion },
-      status: "pending", mqttTopic: topic, performedBy: service.actorId(req),
+      changes: {
+        oldDeviceId: oldId,
+        newDeviceId: newId,
+        nvsVersion: nextNvsVersion,
+      },
+      status: "pending",
+      mqttTopic: topic,
+      performedBy: service.actorId(req),
     });
 
-    const previous = profile === "v3"
-      ? { nvsVersion: production.groupB.nvsVersion, configAck: production.groupB.configAck?.toObject
-          ? production.groupB.configAck.toObject() : production.groupB.configAck }
-      : { nvsVersion: device.nvsVersion, configAck: device.configAck?.toObject
-          ? device.configAck.toObject() : device.configAck };
+    const previous =
+      profile === "v3"
+        ? {
+            nvsVersion: production.groupB.nvsVersion,
+            configAck: production.groupB.configAck?.toObject
+              ? production.groupB.configAck.toObject()
+              : production.groupB.configAck,
+          }
+        : {
+            nvsVersion: device.nvsVersion,
+            configAck: device.configAck?.toObject
+              ? device.configAck.toObject()
+              : device.configAck,
+          };
 
     try {
       if (profile === "v3") {
         production.groupB.nvsVersion = nextNvsVersion;
+
         production.groupB.configAck = {
-          status: "pending", action: "setConfig", requestId, nvsVersion: nextNvsVersion,
+          status: "pending",
+          action: "setConfig",
+          requestId: request,
+          nvsVersion: nextNvsVersion,
         };
+
         await production.save();
       } else {
         device.nvsVersion = nextNvsVersion;
+
         device.configAck = {
-          status: "pending", action: "setConfig", requestId, nvsVersion: nextNvsVersion,
+          status: "pending",
+          action: "setConfig",
+          requestId: request,
+          nvsVersion: nextNvsVersion,
         };
+
         await device.save();
       }
 
+      // Publish to the permanent serial-based config topic.
       await service.publish(topic, payload);
+
       await service.DeviceMaintenanceLog.updateOne(
-        { requestId: request, status: "pending" },
-        { $set: { status: "published" } }
+        {
+          requestId: request,
+          status: "pending",
+        },
+        {
+          $set: {
+            status: "published",
+          },
+        }
       );
 
-      // Keep the device ID unchanged until the firmware ACK arrives.
+      // Do not change the database Device ID here.
+      // Commit the new ID only after a matching firmware ACK.
       return res.status(202).json({
         success: true,
-        message: "Device ID change sent. Waiting for device acknowledgement.",
-        requestId, oldDeviceId: oldId, newDeviceId: newId, status: "published",
+        message:
+          "Device ID change sent. Waiting for device acknowledgement.",
+        requestId: request,
+        oldDeviceId: oldId,
+        newDeviceId: newId,
+        status: "published",
       });
     } catch (error) {
+      // Restore the previous NVS and ACK state if publishing fails.
       if (profile === "v3") {
         production.groupB.nvsVersion = previous.nvsVersion;
-        production.groupB.configAck = previous.configAck;
+        production.groupB.configAck = previous.configAck || {};
         await production.save();
       } else {
         device.nvsVersion = previous.nvsVersion;
-        device.configAck = previous.configAck;
+        device.configAck = previous.configAck || {};
         await device.save();
       }
+
       await service.DeviceMaintenanceLog.updateOne(
-        { requestId },
-        { $set: { status: "failed", errorMessage: error.message, completedAt: new Date() } }
+        { requestId: request },
+        {
+          $set: {
+            status: "failed",
+            errorMessage: error.message,
+            completedAt: new Date(),
+          },
+        }
       );
+
       throw error;
     }
   } catch (error) {
     return responseError(res, error);
   }
 };
+
