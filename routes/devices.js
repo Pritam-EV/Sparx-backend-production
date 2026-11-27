@@ -1047,95 +1047,11 @@ router.patch(
   '/admin/:deviceId/identity',
   authMiddleware,
   authorizeRoles('admin'),
-  async (req, res) => {
-    const session = await mongoose.startSession();
-
-    try {
-      const oldDeviceId = normalizeDeviceId(req.params.deviceId);
-      const newDeviceId = normalizeDeviceId(req.body.newDeviceId);
-
-      if (!newDeviceId) {
-        return res.status(400).json({
-          error: 'newDeviceId is required',
-        });
-      }
-
-      if (oldDeviceId === newDeviceId) {
-        return res.status(400).json({
-          error: 'newDeviceId must be different from current device ID',
-        });
-      }
-
-      let updatedDevice;
-
-      await session.withTransaction(async () => {
-        const device = await Device.findOne({
-          device_id: oldDeviceId,
-        }).session(session);
-
-        if (!device) {
-          const error = new Error('Device not found');
-          error.statusCode = 404;
-          throw error;
-        }
-
-        const duplicate = await Device.findOne({
-          device_id: newDeviceId,
-          _id: { $ne: device._id },
-        }).session(session).lean();
-
-        if (duplicate) {
-          const error = new Error('New device ID is already in use');
-          error.statusCode = 409;
-          throw error;
-        }
-
-        const provision = await DeviceProvision.findOne({
-          serialNumber: device.serialNumber,
-        }).session(session);
-
-        device.device_id = newDeviceId;
-
-        await device.save({
-          session,
-          validateModifiedOnly: true,
-        });
-
-        if (provision) {
-          provision.deviceId = newDeviceId;
-          await provision.save({
-            session,
-            validateModifiedOnly: true,
-          });
-        }
-
-        updatedDevice = device;
-      });
-
-      const publishResult = await publishDeviceConfig(newDeviceId);
-
-      return res.json({
-        success: true,
-        message: 'Device ID updated and configuration published',
-        previousDeviceId: oldDeviceId,
-        deviceId: newDeviceId,
-        serialNumber: updatedDevice.serialNumber,
-        device: sanitizeDevice(updatedDevice),
-        config: {
-          topic: publishResult.topic,
-          nvsVersion: publishResult.nvsVersion,
-        },
-      });
-    } catch (error) {
-      console.error('[DEVICE ID MIGRATION]', error);
-      return res.status(error.statusCode || 502).json({
-        success: false,
-        error: error.message,
-      });
-    } finally {
-      await session.endSession();
-    }
-  }
+  (req, res) => res.status(410).json({
+    success: false,
+    message: 'Direct Device ID changes are disabled.',
+    use: 'POST /api/device-maintenance/devices/:id/firmware/device-id',
+  })
 );
 
 router.post(
