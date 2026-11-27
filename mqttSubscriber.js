@@ -484,11 +484,6 @@ if (migrationRequestId && ackStatus === CONFIG_ACK_STATUS.OK) {
   return;
 }
 
-
-  }
-}
-  return;
-}
     const device = await Device.findOne({
       serialNumber,
     });
