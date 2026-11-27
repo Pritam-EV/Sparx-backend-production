@@ -668,6 +668,11 @@ exports.updateDeviceId = async (req, res) => {
       action: "setConfig", schemaVersion: 1, requestId: request,
       serialNumber: device.serialNumber, deviceId: newId,
       ssid: device.wifiSSID || "", password: device.wifiPassword || "",
+      ...(profile === "legacy" ? {
+        cf: device.cf,
+        vf: device.vf,
+        currentRF: device.currentRF,
+      } : {}),
       nvsVersion: nextNvsVersion,
     };
 
