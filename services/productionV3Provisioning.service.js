@@ -779,6 +779,7 @@ const update = await ProductionDevice.updateOne(
     return {
       matched: true,
       reason: "duplicate_or_stale_command_ack",
+      requestId,
     };
   }
 
