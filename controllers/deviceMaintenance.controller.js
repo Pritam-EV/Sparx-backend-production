@@ -202,46 +202,57 @@ exports.getDevice = async (req, res) => {
 
 exports.updateDatabase = async (req, res) => {
   try {
-    const { device } = await service.findDevice(req.params.id);
+    const { device, production, profile } = await service.findDevice(req.params.id);
     const changes = req.body?.changes;
 
-    if (
-      !changes ||
-      typeof changes !== "object" ||
-      Array.isArray(changes) ||
-      Object.keys(changes).length === 0
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Provide at least one field to update",
-      });
+    if (!changes || typeof changes !== "object" || Array.isArray(changes) ||
+        Object.keys(changes).length === 0) {
+      return res.status(400).json({ success: false, message: "Provide at least one field to update" });
     }
 
     const oldValues = {};
     const newValues = {};
+    const productionDispatchMap = {
+      project: "project",
+      charger_type: "chargerType",
+      location: "location",
+      area: "area",
+      city: "city",
+      state: "state",
+      lat: "lat",
+      lng: "lng",
+      rate: "rate",
+      meterType: "meterType",
+      meterConsumerNumber: "meterConsumerNumber",
+      "commercial.electricityBearer": "commercial.electricityBearer",
+      "commercial.userRatePerKwh": "commercial.userRatePerKwh",
+      "commercial.vjraMarginPerKwh": "commercial.vjraMarginPerKwh",
+      "commercial.ownerSharePerKwh": "commercial.ownerSharePerKwh",
+      "commercial.pgPercent": "commercial.pgPercent",
+      "commercial.gstPercent": "commercial.gstPercent",
+    };
 
     for (const [field, rawValue] of Object.entries(changes)) {
       const value = validateField(field, rawValue);
-
-      oldValues[field] = field.split(".").reduce(
-        (obj, key) => obj?.[key],
-        device
-      );
-
+      oldValues[field] = field.split(".").reduce((obj, key) => obj?.[key], device);
       newValues[field] = value;
 
       if (field === "rate") {
-        device.setRate(
-          value,
-          service.actorId(req),
-          "admin"
-        );
+        device.setRate(value, service.actorId(req), "admin");
       } else {
         setNested(device, field, value);
+      }
+
+      if (production && productionDispatchMap[field]) {
+        setNested(production.dispatch, productionDispatchMap[field], value);
       }
     }
 
     await device.save();
+    if (production) {
+      production.updatedBy = service.actorId(req);
+      await production.save();
+    }
 
     await service.log({
       requestId: service.requestId(),
@@ -249,10 +260,8 @@ exports.updateDatabase = async (req, res) => {
       deviceId: device.device_id,
       category: "database",
       operation: "selective_update",
-      changes: {
-        oldValues,
-        newValues,
-      },
+      firmwareProfile: profile,
+      changes: { oldValues, newValues },
       status: "completed",
       performedBy: service.actorId(req),
       completedAt: new Date(),
@@ -261,7 +270,7 @@ exports.updateDatabase = async (req, res) => {
     return res.json({
       success: true,
       message: "Device database updated successfully",
-      data: service.publicDevice(device, "unknown"),
+      data: service.publicDevice(device, profile),
     });
   } catch (error) {
     return responseError(res, error);
@@ -509,6 +518,7 @@ exports.sendCommand = async (req, res) => {
   try {
     const { device, production, profile } = await service.findDevice(req.params.id);
     const action = String(req.body?.action || "");
+
     if (!["relayStart", "relayStop"].includes(action)) {
       throw Object.assign(new Error("Unsupported command. Use existing admin session endpoints for session start/stop."), { statusCode: 400 });
     }
@@ -524,30 +534,56 @@ exports.sendCommand = async (req, res) => {
       ? production.groupB.lastCommand.toObject()
       : production.groupB.lastCommand;
 
+    await service.log({
+      requestId: request,
+      serialNumber: device.serialNumber,
+      deviceId: device.device_id,
+      category: "command",
+      operation: action,
+      firmwareProfile: profile,
+      changes: { durationSeconds: req.body.durationSeconds || null },
+      status: "pending",
+      performedBy: service.actorId(req),
+    });
+
     production.groupB.lastCommand = {
-      requestId: request, deviceId: device.device_id, action,
+      requestId: request,
+      deviceId: device.device_id,
+      action,
       status: service.ProductionDevice.COMMAND_STATUS.PENDING,
-      sentAt: new Date(), acknowledgedAt: null, message: null,
+      sentAt: new Date(),
+      acknowledgedAt: null,
+      message: null,
     };
     await production.save();
 
     try {
       const published = await service.publishProductionCommand({
-        deviceId: device.device_id, action, requestId: request,
-        testMode: req.body.testMode, durationSeconds: req.body.durationSeconds,
+        deviceId: device.device_id,
+        action,
+        requestId: request,
+        testMode: req.body.testMode,
+        durationSeconds: req.body.durationSeconds,
       });
-      await service.log({
-        requestId: request, serialNumber: device.serialNumber, deviceId: device.device_id,
-        category: "command", operation: action, firmwareProfile: profile,
-        changes: { durationSeconds: req.body.durationSeconds || null },
-        status: "published", mqttTopic: published.topic, performedBy: service.actorId(req),
-      });
+
+      await service.DeviceMaintenanceLog.updateOne(
+        { requestId: request, status: "pending" },
+        { $set: { status: "published", mqttTopic: published.topic } }
+      );
+
       return res.status(202).json({
-        success: true, requestId: request, status: "published", topic: published.topic,
+        success: true,
+        requestId: request,
+        status: "published",
+        topic: published.topic,
       });
     } catch (error) {
       production.groupB.lastCommand = previous || {};
       await production.save();
+      await service.DeviceMaintenanceLog.updateOne(
+        { requestId: request },
+        { $set: { status: "failed", errorMessage: error.message, completedAt: new Date() } }
+      );
       throw error;
     }
   } catch (error) {
@@ -665,8 +701,12 @@ exports.updateDeviceId = async (req, res) => {
       }
 
       await service.publish(topic, payload);
+      await service.DeviceMaintenanceLog.updateOne(
+        { requestId: request, status: "pending" },
+        { $set: { status: "published" } }
+      );
 
-      // Keep the request in pending state until the device ACK arrives.
+      // Keep the device ID unchanged until the firmware ACK arrives.
       return res.status(202).json({
         success: true,
         message: "Device ID change sent. Waiting for device acknowledgement.",
