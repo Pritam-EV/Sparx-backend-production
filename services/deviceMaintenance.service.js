@@ -30,7 +30,7 @@ function requestId() {
 }
 
 function actorId(req) {
-  return String(req.user?.userId || "admin");
+  return String(req.user?.userId || req.user?.uid || req.user?._id || "admin");
 }
 
 function publish(topic, payload) {
