@@ -35,7 +35,8 @@ const accountantRoutes        = require("./routes/accountant");
 const adminOwnerFinanceRoutes = require("./routes/adminOwnerFinance");
 const productionV3Routes =
   require("./routes/productionV3.routes");
-
+const deviceMaintenanceRoutes =
+  require("./routes/deviceMaintenance.routes");
 // MQTT Subscriber
 const startMqttSubscriber = require("./mqttSubscriber");
 
@@ -147,7 +148,10 @@ app.use(
   "/api/production/v3",
   productionV3Routes
 );
-
+app.use(
+  "/api/device-maintenance",
+  deviceMaintenanceRoutes
+);
 
 app.get("/api/getDevice", async (req, res) => {
   try {
