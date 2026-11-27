@@ -263,7 +263,7 @@ if (
   const topicSerial = String(parts[1] || "").trim();
   const serialNumber = String(ack.serialNumber || "").trim();
   const requestId = String(ack.requestId || "").trim();
-  const action = String(ack.action || "").trim();
+  let action = String(ack.action || "").trim();
   const ackStatus = String(ack.status || "").trim().toLowerCase();
 
   const receivedNvsVersion =
@@ -288,10 +288,55 @@ if (
     return;
   }
 
-  if (!["setConfig", "setCalibration"].includes(action)) {
-    console.warn("[CONFIG ACK] Invalid action.");
+
+// Backward compatibility for firmware V3.0.0.
+// Older firmware sends action: "configAck" for both
+// configuration and calibration acknowledgements.
+//
+// Only interpret it as setConfig when a matching
+// Device ID migration request exists.
+if (action === "configAck") {
+  try {
+    const migrationRequest = await DeviceMaintenanceLog.findOne({
+      requestId,
+      serialNumber,
+      category: "deviceIdMigration",
+      status: { $in: ["pending", "published"] },
+    })
+      .select("category")
+      .lean();
+
+    if (migrationRequest) {
+      action = "setConfig";
+
+      console.log(
+        "[CONFIG ACK] Recognized legacy Device ID migration ACK:",
+        requestId
+      );
+    }
+  } catch (error) {
+    console.error(
+      "[CONFIG ACK] Could not validate legacy ACK:",
+      error
+    );
     return;
   }
+}
+
+if (!["setConfig", "setCalibration"].includes(action)) {
+  console.warn(
+    "[CONFIG ACK] Invalid action:",
+    action
+  );
+  return;
+}
+
+// Pass the normalized action to the Production ACK service.
+const normalizedAck = {
+  ...ack,
+  action,
+};
+
 
   const ackFields = {
     status: ackStatus,
@@ -457,10 +502,10 @@ if (
       // The production service validates the request ID,
       // action, NVS version and pending state before updating
       // ProductionDevice.
-      const productionAck = await handleProductionConfigAck({
-        serialNumber,
-        ack,
-      });
+const productionAck = await handleProductionConfigAck({
+  serialNumber,
+  ack: normalizedAck,
+});
 
       // Do not update the live Device for unmatched/stale ACKs.
       if (
