@@ -455,14 +455,26 @@ if (migrationRequestId && ackStatus === CONFIG_ACK_STATUS.OK) {
       return;
     }
 
-    await ProductionDevice.updateOne(
+    const productionUpdate = await ProductionDevice.updateOne(
       { _id: productionRecord._id, "groupB.deviceId": oldId },
       { $set: { "groupB.deviceId": newId, "groupB.nvsVersion": nvsVersion } }
     );
-    await Device.updateOne(
+    const liveUpdate = await Device.updateOne(
       { _id: productionRecord.dispatch.liveDeviceId, device_id: oldId },
       { $set: { device_id: newId, nvsVersion } }
     );
+
+    const productionMatched = productionUpdate.matchedCount ?? productionUpdate.n ?? 0;
+    const liveMatched = liveUpdate.matchedCount ?? liveUpdate.n ?? 0;
+
+    if (!productionMatched || !liveMatched) {
+      await DeviceMaintenanceLog.updateOne(
+        { requestId: migrationRequestId },
+        { $set: { status: "failed", errorMessage: "V3 identity update did not match both linked records", completedAt: new Date() } }
+      );
+      return;
+    }
+
     await DeviceMaintenanceLog.updateOne(
       { requestId: migrationRequestId },
       { $set: { status: "completed", acknowledgement: ack, completedAt: new Date(), errorMessage: null } }
