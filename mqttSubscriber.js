@@ -242,87 +242,48 @@ if (
     //   { "status": "ok" | "error", "fwVersion": "<string>", "message": "<string>" }
     // ─────────────────────────────────────────────────────────────────────────
 if (
-  parts[0] === 'viz' &&
-  parts[2] === 'configAck'
+  parts[0] === "viz" &&
+  parts[2] === "configAck"
 ) {
   let ack;
 
   try {
     ack = JSON.parse(payload);
-    if (
-  !ack ||
-  typeof ack !== "object" ||
-  Array.isArray(ack)
-) {
-  console.error("[CONFIG ACK] Invalid ACK payload.");
-  return;
-}
   } catch (error) {
-    console.error(
-      '[CONFIG ACK] Invalid JSON:',
-      error.message
-    );
+    console.error("[CONFIG ACK] Invalid JSON:", error.message);
     return;
   }
 
-  const serialNumber = String(
-    ack.serialNumber || parts[1] || ''
-  ).trim();
-
-  const deviceId = normalizeDeviceId(
-    ack.deviceId
-  );
-
-  const ackStatus = String(
-    ack.status || ''
-  ).toLowerCase();
-
-  const nvsVersion =
-    ack.nvsVersion !== undefined
-      ? Number(ack.nvsVersion)
-      : null;
-
-  if (!serialNumber) {
-    // console.warn(
-    //   '[CONFIG ACK] Missing serialNumber'
-    // );
+  if (!ack || typeof ack !== "object" || Array.isArray(ack)) {
+    console.error("[CONFIG ACK] Invalid ACK payload.");
     return;
   }
 
-  if (
-    ![
-      CONFIG_ACK_STATUS.OK,
-      CONFIG_ACK_STATUS.ERROR,
-    ].includes(ackStatus)
-  ) {
-    // console.warn(
-    //   '[CONFIG ACK] Invalid status:',
-    //   ackStatus
-    // );
+  const serialNumber = String(ack.serialNumber || parts[1] || "").trim();
+  const ackStatus = String(ack.status || "").trim().toLowerCase();
+  const nvsVersion = ack.nvsVersion === undefined ? null : Number(ack.nvsVersion);
+  const requestId = String(ack.requestId || "").trim();
+
+  if (!serialNumber || ![CONFIG_ACK_STATUS.OK, CONFIG_ACK_STATUS.ERROR].includes(ackStatus)) {
     return;
   }
 
   const ackFields = {
     status: ackStatus,
+    action: ack.action || "setConfig",
+    requestId: requestId || null,
     ackedAt: new Date(),
     message: ack.message || null,
     fwVersion: ack.fwVersion || null,
-    nvsVersion:
-      Number.isFinite(nvsVersion)
-        ? nvsVersion
-        : null,
-        requestId: ack.requestId || null,
-action: ack.action || "setConfig",
+    nvsVersion: Number.isFinite(nvsVersion) ? nvsVersion : null,
   };
+
   try {
-    const productionAck = await handleProductionConfigAck({
-      serialNumber,
-      ack,
-    });
+    const productionAck = await handleProductionConfigAck({ serialNumber, ack });
 
     if (productionAck.matched) {
       const productionLink = await ProductionDevice.findOne({ serialNumber })
-        .select("dispatch.liveDeviceId")
+        .select("_id dispatch.liveDeviceId groupB.deviceId groupB.nvsVersion")
         .lean();
 
       if (productionLink?.dispatch?.liveDeviceId) {
@@ -340,71 +301,109 @@ action: ack.action || "setConfig",
         );
       }
 
-      const migrationRequestId = String(ack.requestId || "").trim();
-      if (migrationRequestId && ackStatus === CONFIG_ACK_STATUS.OK) {
-        const migration = await DeviceMaintenanceLog.findOne({
-          requestId: migrationRequestId,
+      if (requestId) {
+        const logEntry = await DeviceMaintenanceLog.findOne({
+          requestId,
           serialNumber,
-          category: "deviceIdMigration",
-          firmwareProfile: "v3",
-          status: "acknowledged",
+          status: { $in: ["pending", "published"] },
         }).lean();
 
-        if (migration) {
-          const oldId = normalizeDeviceId(migration.changes?.oldDeviceId);
-          const newId = normalizeDeviceId(migration.changes?.newDeviceId);
-          const productionRecord = await ProductionDevice.findOne({
-            serialNumber,
-            "dispatch.liveDeviceId": { $exists: true },
-          }).select("_id groupB.deviceId dispatch.liveDeviceId").lean();
+        if (logEntry) {
+          const isMigration = logEntry.category === "deviceIdMigration";
+          const expectedNvs = Number(logEntry.changes?.nvsVersion);
+          const receivedNvs = Number(ack.nvsVersion);
 
-          if (!productionRecord || normalizeDeviceId(productionRecord.groupB?.deviceId) !== oldId) {
-            await DeviceMaintenanceLog.updateOne(
-              { requestId: migrationRequestId },
-              { $set: { status: "failed", errorMessage: "V3 production identity no longer matches migration source", completedAt: new Date() } }
-            );
-            return;
-          }
-
-          const duplicateProduction = await ProductionDevice.exists({
-            "groupB.deviceId": newId, _id: { $ne: productionRecord._id },
-          });
-          const duplicateLiveDevice = await Device.exists({
-            device_id: newId, _id: { $ne: productionRecord.dispatch.liveDeviceId },
-          });
-
-          if (duplicateProduction || duplicateLiveDevice) {
-            await DeviceMaintenanceLog.updateOne(
-              { requestId: migrationRequestId },
-              { $set: { status: "failed", errorMessage: "New V3 Device ID is already assigned", completedAt: new Date() } }
-            );
-            return;
-          }
-
-          const productionUpdate = await ProductionDevice.updateOne(
-            { _id: productionRecord._id, "groupB.deviceId": oldId },
-            { $set: { "groupB.deviceId": newId, "groupB.nvsVersion": nvsVersion } }
-          );
-          const liveUpdate = await Device.updateOne(
-            { _id: productionRecord.dispatch.liveDeviceId, device_id: oldId },
-            { $set: { device_id: newId, nvsVersion } }
+          const ackMatchesMigration = !isMigration || (
+            Number.isFinite(expectedNvs) &&
+            Number.isFinite(receivedNvs) &&
+            expectedNvs === receivedNvs &&
+            normalizeDeviceId(ack.deviceId) === normalizeDeviceId(logEntry.changes?.newDeviceId)
           );
 
-          const productionMatched = productionUpdate.matchedCount ?? productionUpdate.n ?? 0;
-          const liveMatched = liveUpdate.matchedCount ?? liveUpdate.n ?? 0;
+          const productionOperationSucceeded =
+            productionAck.successful === true &&
+            productionAck.operation === "setConfig";
 
-          if (!productionMatched || !liveMatched) {
-            await DeviceMaintenanceLog.updateOne(
-              { requestId: migrationRequestId },
-              { $set: { status: "failed", errorMessage: "V3 identity update did not match both linked records", completedAt: new Date() } }
-            );
-            return;
-          }
+          const success = ackStatus === CONFIG_ACK_STATUS.OK &&
+            (!isMigration || (ackMatchesMigration && productionOperationSucceeded));
 
           await DeviceMaintenanceLog.updateOne(
-            { requestId: migrationRequestId },
-            { $set: { status: "completed", acknowledgement: ack, completedAt: new Date(), errorMessage: null } }
+            { requestId, serialNumber, status: { $in: ["pending", "published"] } },
+            {
+              $set: {
+                status: success ? (isMigration ? "acknowledged" : "acknowledged") : "failed",
+                acknowledgement: ackFields,
+                errorMessage: success ? null : (
+                  ackMatchesMigration
+                    ? String(ack.message || productionAck.reason || "Device rejected configuration").slice(0, 500)
+                    : "Device ID migration ACK did not match requested ID/NVS version"
+                ),
+                completedAt: new Date(),
+              },
+            }
           );
+
+          if (success && isMigration) {
+            const oldId = normalizeDeviceId(logEntry.changes?.oldDeviceId);
+            const newId = normalizeDeviceId(logEntry.changes?.newDeviceId);
+
+            const productionRecord = await ProductionDevice.findOne({
+              serialNumber,
+              "dispatch.liveDeviceId": { $exists: true },
+            }).select("_id groupB.deviceId dispatch.liveDeviceId").lean();
+
+            if (!productionRecord || normalizeDeviceId(productionRecord.groupB?.deviceId) !== oldId) {
+              await DeviceMaintenanceLog.updateOne(
+                { requestId },
+                { $set: { status: "failed", errorMessage: "V3 production identity no longer matches migration source", completedAt: new Date() } }
+              );
+              return;
+            }
+
+            const [duplicateProduction, duplicateLiveDevice] = await Promise.all([
+              ProductionDevice.exists({
+                "groupB.deviceId": newId,
+                _id: { $ne: productionRecord._id },
+              }),
+              Device.exists({
+                device_id: newId,
+                _id: { $ne: productionRecord.dispatch.liveDeviceId },
+              }),
+            ]);
+
+            if (duplicateProduction || duplicateLiveDevice) {
+              await DeviceMaintenanceLog.updateOne(
+                { requestId },
+                { $set: { status: "failed", errorMessage: "New V3 Device ID is already assigned", completedAt: new Date() } }
+              );
+              return;
+            }
+
+            const productionUpdate = await ProductionDevice.updateOne(
+              { _id: productionRecord._id, "groupB.deviceId": oldId },
+              { $set: { "groupB.deviceId": newId, "groupB.nvsVersion": receivedNvs } }
+            );
+            const liveUpdate = await Device.updateOne(
+              { _id: productionRecord.dispatch.liveDeviceId, device_id: oldId },
+              { $set: { device_id: newId, nvsVersion: receivedNvs } }
+            );
+
+            const productionMatched = productionUpdate.matchedCount ?? productionUpdate.n ?? 0;
+            const liveMatched = liveUpdate.matchedCount ?? liveUpdate.n ?? 0;
+
+            if (!productionMatched || !liveMatched) {
+              await DeviceMaintenanceLog.updateOne(
+                { requestId },
+                { $set: { status: "failed", errorMessage: "V3 identity update did not match both linked records", completedAt: new Date() } }
+              );
+              return;
+            }
+
+            await DeviceMaintenanceLog.updateOne(
+              { requestId },
+              { $set: { status: "completed", acknowledgement: ackFields, completedAt: new Date(), errorMessage: null } }
+            );
+          }
         }
       }
 
@@ -414,73 +413,100 @@ action: ack.action || "setConfig",
     const device = await Device.findOne({ serialNumber });
     const provision = await DeviceProvision.findOne({ serialNumber });
 
-    const legacyMigrationRequestId = String(ack.requestId || "").trim();
-    if (legacyMigrationRequestId && ackStatus === CONFIG_ACK_STATUS.OK && device) {
-      const migration = await DeviceMaintenanceLog.findOne({
-        requestId: legacyMigrationRequestId,
-        serialNumber,
-        category: "deviceIdMigration",
-        firmwareProfile: "legacy",
-        status: "acknowledged",
-      }).lean();
-
-      if (migration) {
-        const oldId = normalizeDeviceId(migration.changes?.oldDeviceId);
-        const newId = normalizeDeviceId(migration.changes?.newDeviceId);
-        const expectedVersion = Number(migration.changes?.nvsVersion);
-        const receivedVersion = Number(ack.nvsVersion);
-
-        const validAck =
-          normalizeDeviceId(device.device_id) === oldId &&
-          normalizeDeviceId(ack.deviceId) === newId &&
-          Number.isFinite(expectedVersion) &&
-          Number.isFinite(receivedVersion) &&
-          receivedVersion === expectedVersion;
-
-        if (!validAck) {
-          await DeviceMaintenanceLog.updateOne(
-            { requestId: legacyMigrationRequestId },
-            { $set: { status: "failed", errorMessage: "Legacy Device ID migration ACK validation failed", acknowledgement: ack, completedAt: new Date() } }
-          );
-          return;
-        }
-
-        const [duplicateDevice, duplicateProvision] = await Promise.all([
-          Device.exists({ device_id: newId, _id: { $ne: device._id } }),
-          DeviceProvision.exists({ deviceId: newId, serialNumber: { $ne: serialNumber } }),
-        ]);
-
-        if (duplicateDevice || duplicateProvision) {
-          await DeviceMaintenanceLog.updateOne(
-            { requestId: legacyMigrationRequestId },
-            { $set: { status: "failed", errorMessage: "New Device ID is already assigned", acknowledgement: ack, completedAt: new Date() } }
-          );
-          return;
-        }
-
-        device.device_id = newId;
-        device.nvsVersion = receivedVersion;
-        await device.save();
-
-        if (provision) {
-          provision.deviceId = newId;
-          provision.nvsVersion = receivedVersion;
-          await provision.save();
-        }
-
-        await DeviceMaintenanceLog.updateOne(
-          { requestId: legacyMigrationRequestId },
-          { $set: { status: "completed", acknowledgement: ack, completedAt: new Date(), errorMessage: null } }
-        );
-      }
+    if (!device && !provision) {
+      return;
     }
 
-    if (!device && !provision) return;
+    if (requestId) {
+      const logEntry = await DeviceMaintenanceLog.findOne({
+        requestId,
+        serialNumber,
+        status: { $in: ["pending", "published"] },
+      }).lean();
+
+      if (logEntry) {
+        const isMigration = logEntry.category === "deviceIdMigration";
+        const expectedNvs = Number(logEntry.changes?.nvsVersion);
+        const receivedNvs = Number(ack.nvsVersion);
+        const ackMatchesMigration = !isMigration || (
+          Number.isFinite(expectedNvs) &&
+          Number.isFinite(receivedNvs) &&
+          expectedNvs === receivedNvs &&
+          normalizeDeviceId(ack.deviceId) === normalizeDeviceId(logEntry.changes?.newDeviceId)
+        );
+
+        const success = ackStatus === CONFIG_ACK_STATUS.OK && ackMatchesMigration;
+        await DeviceMaintenanceLog.updateOne(
+          { requestId, serialNumber, status: { $in: ["pending", "published"] } },
+          {
+            $set: {
+              status: success ? "acknowledged" : "failed",
+              acknowledgement: ackFields,
+              errorMessage: success ? null : (
+                ackMatchesMigration
+                  ? String(ack.message || "Device rejected configuration").slice(0, 500)
+                  : "Legacy Device ID migration ACK did not match requested ID/NVS version"
+              ),
+              completedAt: new Date(),
+            },
+          }
+        );
+
+        if (success && isMigration) {
+          if (!device) {
+            await DeviceMaintenanceLog.updateOne(
+              { requestId },
+              { $set: { status: "failed", errorMessage: "Live Device record not found for migration", completedAt: new Date() } }
+            );
+            return;
+          }
+
+          const oldId = normalizeDeviceId(logEntry.changes?.oldDeviceId);
+          const newId = normalizeDeviceId(logEntry.changes?.newDeviceId);
+
+          if (normalizeDeviceId(device.device_id) !== oldId) {
+            await DeviceMaintenanceLog.updateOne(
+              { requestId },
+              { $set: { status: "failed", errorMessage: "Legacy Device ID no longer matches migration source", completedAt: new Date() } }
+            );
+            return;
+          }
+
+          const [duplicateDevice, duplicateProvision] = await Promise.all([
+            Device.exists({ device_id: newId, _id: { $ne: device._id } }),
+            DeviceProvision.exists({ deviceId: newId, serialNumber: { $ne: serialNumber } }),
+          ]);
+
+          if (duplicateDevice || duplicateProvision) {
+            await DeviceMaintenanceLog.updateOne(
+              { requestId },
+              { $set: { status: "failed", errorMessage: "New Device ID is already assigned", completedAt: new Date() } }
+            );
+            return;
+          }
+
+          device.device_id = newId;
+          device.nvsVersion = receivedNvs;
+          await device.save();
+
+          if (provision) {
+            provision.deviceId = newId;
+            provision.nvsVersion = receivedNvs;
+            await provision.save();
+          }
+
+          await DeviceMaintenanceLog.updateOne(
+            { requestId },
+            { $set: { status: "completed", acknowledgement: ackFields, completedAt: new Date(), errorMessage: null } }
+          );
+        }
+      }
+    }
 
     if (device) {
       const deviceUpdate = { configAck: ackFields };
       if (ack.fwVersion && typeof ack.fwVersion === "string") {
-        deviceUpdate.lastKnownFirmwareVersion = ack.fwVersion;
+        deviceUpdate.lastKnownFirmwareVersion = String(ack.fwVersion).slice(0, 100);
       }
       await Device.updateOne({ _id: device._id }, { $set: deviceUpdate });
     }
@@ -504,248 +530,8 @@ action: ack.action || "setConfig",
   }
 
   return;
-}  try {
-    // Production 3.0 config ACKs are handled by the V3 subscriber.
-// Never mutate legacy Device / DeviceProvision records for V3 devices.
-// Process Production ACK before legacy provisioning ACKs.
-// Matching Production records must never fall through to legacy updates.
-const productionAck = await handleProductionConfigAck({
-  serialNumber,
-  ack,
-});
-
-if (productionAck.matched) {
-  const productionLink = await ProductionDevice.findOne({
-    serialNumber,
-  })
-    .select("dispatch.liveDeviceId")
-    .lean();
-
-  if (productionLink?.dispatch?.liveDeviceId) {
-    await Device.updateOne(
-      {
-        _id: productionLink.dispatch.liveDeviceId,
-      },
-      {
-        $set: {
-          configAck: ackFields,
-
-          ...(ack.fwVersion
-            ? {
-                lastKnownFirmwareVersion:
-                  String(ack.fwVersion).slice(0, 100),
-              }
-            : {}),
-
-          ...(Number.isFinite(nvsVersion)
-            ? { nvsVersion }
-            : {}),
-        },
-      }
-    );
-  }
-const migrationRequestId = String(ack.requestId || "").trim();
-
-if (migrationRequestId && ackStatus === CONFIG_ACK_STATUS.OK) {
-  const migration = await DeviceMaintenanceLog.findOne({
-    requestId: migrationRequestId,
-    serialNumber,
-    category: "deviceIdMigration",
-    firmwareProfile: "v3",
-    status: "acknowledged",
-  }).lean();
-
-  if (migration) {
-    const oldId = normalizeDeviceId(migration.changes?.oldDeviceId);
-    const newId = normalizeDeviceId(migration.changes?.newDeviceId);
-    const productionRecord = await ProductionDevice.findOne({
-      serialNumber,
-      "dispatch.liveDeviceId": { $exists: true },
-    }).select("_id groupB.deviceId dispatch.liveDeviceId").lean();
-
-    if (!productionRecord || normalizeDeviceId(productionRecord.groupB?.deviceId) !== oldId) {
-      await DeviceMaintenanceLog.updateOne(
-        { requestId: migrationRequestId },
-        { $set: { status: "failed", errorMessage: "V3 production identity no longer matches migration source", completedAt: new Date() } }
-      );
-      return;
-    }
-
-    const duplicateProduction = await ProductionDevice.exists({
-      "groupB.deviceId": newId, _id: { $ne: productionRecord._id },
-    });
-    const duplicateLiveDevice = await Device.exists({
-      device_id: newId, _id: { $ne: productionRecord.dispatch.liveDeviceId },
-    });
-
-    if (duplicateProduction || duplicateLiveDevice) {
-      await DeviceMaintenanceLog.updateOne(
-        { requestId: migrationRequestId },
-        { $set: { status: "failed", errorMessage: "New V3 Device ID is already assigned", completedAt: new Date() } }
-      );
-      return;
-    }
-
-    const productionUpdate = await ProductionDevice.updateOne(
-      { _id: productionRecord._id, "groupB.deviceId": oldId },
-      { $set: { "groupB.deviceId": newId, "groupB.nvsVersion": nvsVersion } }
-    );
-    const liveUpdate = await Device.updateOne(
-      { _id: productionRecord.dispatch.liveDeviceId, device_id: oldId },
-      { $set: { device_id: newId, nvsVersion } }
-    );
-
-    const productionMatched = productionUpdate.matchedCount ?? productionUpdate.n ?? 0;
-    const liveMatched = liveUpdate.matchedCount ?? liveUpdate.n ?? 0;
-
-    if (!productionMatched || !liveMatched) {
-      await DeviceMaintenanceLog.updateOne(
-        { requestId: migrationRequestId },
-        { $set: { status: "failed", errorMessage: "V3 identity update did not match both linked records", completedAt: new Date() } }
-      );
-      return;
-    }
-
-    await DeviceMaintenanceLog.updateOne(
-      { requestId: migrationRequestId },
-      { $set: { status: "completed", acknowledgement: ack, completedAt: new Date(), errorMessage: null } }
-    );
-  }
-}
-  return;
 }
 
-    const device = await Device.findOne({
-      serialNumber,
-    });
-
-    const provision = await DeviceProvision.findOne({
-      serialNumber,
-    });
-
-    // Commit legacy Device ID changes only after an exact successful ACK.
-const legacyMigrationRequestId = String(ack.requestId || "").trim();
-
-if (legacyMigrationRequestId && ackStatus === CONFIG_ACK_STATUS.OK && device) {
-  const migration = await DeviceMaintenanceLog.findOne({
-    requestId: legacyMigrationRequestId,
-    serialNumber,
-    category: "deviceIdMigration",
-    firmwareProfile: "legacy",
-    status: "acknowledged",
-  }).lean();
-
-  if (migration) {
-    const oldId = normalizeDeviceId(migration.changes?.oldDeviceId);
-    const newId = normalizeDeviceId(migration.changes?.newDeviceId);
-    const expectedVersion = Number(migration.changes?.nvsVersion);
-    const receivedVersion = Number(ack.nvsVersion);
-
-    const validAck =
-      normalizeDeviceId(device.device_id) === oldId &&
-      normalizeDeviceId(ack.deviceId) === newId &&
-      Number.isFinite(expectedVersion) &&
-      Number.isFinite(receivedVersion) &&
-      receivedVersion === expectedVersion;
-
-    if (!validAck) {
-      await DeviceMaintenanceLog.updateOne(
-        { requestId: legacyMigrationRequestId },
-        { $set: { status: "failed", errorMessage: "Legacy Device ID migration ACK validation failed", acknowledgement: ack, completedAt: new Date() } }
-      );
-      return;
-    }
-
-    const [duplicateDevice, duplicateProvision] = await Promise.all([
-      Device.exists({ device_id: newId, _id: { $ne: device._id } }),
-      DeviceProvision.exists({ deviceId: newId, serialNumber: { $ne: serialNumber } }),
-    ]);
-
-    if (duplicateDevice || duplicateProvision) {
-      await DeviceMaintenanceLog.updateOne(
-        { requestId: legacyMigrationRequestId },
-        { $set: { status: "failed", errorMessage: "New Device ID is already assigned", acknowledgement: ack, completedAt: new Date() } }
-      );
-      return;
-    }
-
-    device.device_id = newId;
-    device.nvsVersion = receivedVersion;
-    await device.save();
-
-    if (provision) {
-      provision.deviceId = newId;
-      provision.nvsVersion = receivedVersion;
-      await provision.save();
-    }
-
-    await DeviceMaintenanceLog.updateOne(
-      { requestId: legacyMigrationRequestId },
-      { $set: { status: "completed", acknowledgement: ack, completedAt: new Date(), errorMessage: null } }
-    );
-  }
-}
-
-    if (!device && !provision) {
-      // console.warn(
-      //   `[CONFIG ACK] No record for serial ${serialNumber}`
-      // );
-      return;
-    }
-
-    if (device) {
-      const deviceUpdate = {
-        configAck: ackFields,
-      };
-
-      if (
-        ack.fwVersion &&
-        typeof ack.fwVersion === 'string'
-      ) {
-        deviceUpdate.lastKnownFirmwareVersion =
-          ack.fwVersion;
-      }
-
-      await Device.updateOne(
-        { _id: device._id },
-        { $set: deviceUpdate }
-      );
-    }
-
-    if (provision) {
-      await DeviceProvision.updateOne(
-        { _id: provision._id },
-        {
-          $set: {
-            configAck: ackFields,
-            provisionStatus:
-              ackStatus === CONFIG_ACK_STATUS.OK
-                ? PROVISION_STATUS.ACKNOWLEDGED
-                : PROVISION_STATUS.FAILED,
-            lastKnownFirmwareVersion:
-              ack.fwVersion ||
-              provision.lastKnownFirmwareVersion,
-          },
-        }
-      );
-    }
-
-    // console.log(
-    //   `[CONFIG ACK] serial=${serialNumber} ` +
-    //   `deviceId=${deviceId} status=${ackStatus} ` +
-    //   `nvsVersion=${nvsVersion}`
-    // );
-  } catch (error) {
-    console.error(
-      '[CONFIG ACK] Database update failed:',
-      error.message
-    );
-  }
-
-  return;
-}
-
-// --------------------------------------------------
 // PRODUCTION GROUP A STATUS BEACON
 // Topic: viz/<SERIAL_NUMBER>/status
 // Payload: { serial, status, fwVersion }
