@@ -1,7 +1,8 @@
-const mqttClient = require('../mqttClient');
 
-const DeviceProvision = require('../models/DeviceProvision');
-const Device = require('../models/device');
+const mqttClient = require("../mqttClient");
+
+const DeviceProvision = require("../models/DeviceProvision");
+const Device = require("../models/device");
 
 const {
   CONFIG_ACTION,
@@ -10,22 +11,20 @@ const {
   PROVISION_STATUS,
   buildConfigTopic,
   normalizeDeviceId,
-} = require('../config/deviceProtocol');
+} = require("../config/deviceProtocol");
 
 function publishAsync(topic, payload) {
   return new Promise((resolve, reject) => {
+    if (!mqttClient.connected) {
+      return reject(new Error("MQTT broker is not connected"));
+    }
+
     mqttClient.publish(
       topic,
       JSON.stringify(payload),
-      {
-        qos: 1,
-        retain: false,
-      },
+      { qos: 1, retain: false },
       (error) => {
-        if (error) {
-          return reject(error);
-        }
-
+        if (error) return reject(error);
         resolve();
       }
     );
@@ -46,6 +45,7 @@ function buildFirmwareConfig({
   return {
     action: CONFIG_ACTION,
     schemaVersion: CONFIG_SCHEMA_VERSION,
+    requestId: requestId || null,
 
     serialNumber,
     deviceId: normalizeDeviceId(deviceId),
@@ -54,37 +54,26 @@ function buildFirmwareConfig({
     vf,
     currentRF,
 
-    // Firmware names.
-    ssid: wifiSSID || '',
-    password: wifiPassword || '',
+    ssid: wifiSSID || "",
+    password: wifiPassword || "",
 
     nvsVersion,
   };
 }
 
-async function publishProvisionConfig(
-  provisionId
-) {
-  const provision =
-    await DeviceProvision.findById(provisionId);
+async function publishProvisionConfig(provisionId, options = {}) {
+  const provision = await DeviceProvision.findById(provisionId);
 
   if (!provision) {
-    throw new Error(
-      'DeviceProvision not found'
-    );
+    throw new Error("DeviceProvision not found");
   }
 
-  if (
-    !provision.serialNumber ||
-    !provision.deviceId
-  ) {
-    throw new Error(
-      'Provision requires serialNumber and deviceId'
-    );
+  if (!provision.serialNumber || !provision.deviceId) {
+    throw new Error("Provision requires serialNumber and deviceId");
   }
 
-  const nextNvsVersion =
-    Number(provision.nvsVersion || 0) + 1;
+  const requestId = options.requestId || require("crypto").randomUUID();
+  const nextNvsVersion = Number(provision.nvsVersion || 0) + 1;
 
   const payload = buildFirmwareConfig({
     serialNumber: provision.serialNumber,
@@ -95,61 +84,53 @@ async function publishProvisionConfig(
     wifiSSID: provision.wifiSSID,
     wifiPassword: provision.wifiPassword,
     nvsVersion: nextNvsVersion,
-    requestId: options.requestId,
+    requestId,
   });
 
-  const topic = buildConfigTopic(
-    provision.serialNumber
-  );
+  const topic = buildConfigTopic(provision.serialNumber);
 
-  await publishAsync(topic, payload);
-
+  // Persist pending request before publishing, so a fast ACK can be matched.
   provision.nvsVersion = nextNvsVersion;
-  provision.provisionStatus =
-    PROVISION_STATUS.SENT;
+  provision.provisionStatus = PROVISION_STATUS.SENT;
   provision.lastProvisionSentAt = new Date();
-
-device.configAck = {
-  status: CONFIG_ACK_STATUS.PENDING,
-  action: CONFIG_ACTION,
-  requestId: options.requestId || null,
-  ackedAt: null,
-  message: null,
-  fwVersion: null,
-  nvsVersion: nextNvsVersion,
-};
+  provision.configAck = {
+    status: CONFIG_ACK_STATUS.PENDING,
+    action: CONFIG_ACTION,
+    requestId,
+    ackedAt: null,
+    message: null,
+    fwVersion: null,
+    nvsVersion: nextNvsVersion,
+  };
 
   await provision.save();
+  await publishAsync(topic, payload);
 
   return {
     topic,
     payload,
+    requestId,
     nvsVersion: nextNvsVersion,
   };
 }
 
-async function publishDeviceConfig(deviceId) {
-  const normalizedDeviceId =
-    normalizeDeviceId(deviceId);
+async function publishDeviceConfig(deviceId, options = {}) {
+  const normalizedDeviceId = normalizeDeviceId(deviceId);
 
   const device = await Device.findOne({
     device_id: normalizedDeviceId,
   });
 
   if (!device) {
-    throw new Error(
-      `Device ${normalizedDeviceId} not found`
-    );
+    throw new Error(`Device ${normalizedDeviceId} not found`);
   }
 
   if (!device.serialNumber) {
-    throw new Error(
-      `Device ${normalizedDeviceId} has no serialNumber`
-    );
+    throw new Error(`Device ${normalizedDeviceId} has no serialNumber`);
   }
 
-  const nextNvsVersion =
-    Number(device.nvsVersion || 0) + 1;
+  const requestId = options.requestId || require("crypto").randomUUID();
+  const nextNvsVersion = Number(device.nvsVersion || 0) + 1;
 
   const payload = buildFirmwareConfig({
     serialNumber: device.serialNumber,
@@ -160,17 +141,17 @@ async function publishDeviceConfig(deviceId) {
     wifiSSID: device.wifiSSID,
     wifiPassword: device.wifiPassword,
     nvsVersion: nextNvsVersion,
+    requestId,
   });
 
-  const topic = buildConfigTopic(
-    device.serialNumber
-  );
+  const topic = buildConfigTopic(device.serialNumber);
 
-  await publishAsync(topic, payload);
-
+  // Persist pending request before publishing, so a fast ACK can be matched.
   device.nvsVersion = nextNvsVersion;
   device.configAck = {
     status: CONFIG_ACK_STATUS.PENDING,
+    action: CONFIG_ACTION,
+    requestId,
     ackedAt: null,
     message: null,
     fwVersion: null,
@@ -178,10 +159,12 @@ async function publishDeviceConfig(deviceId) {
   };
 
   await device.save();
+  await publishAsync(topic, payload);
 
   return {
     topic,
     payload,
+    requestId,
     nvsVersion: nextNvsVersion,
   };
 }

@@ -123,7 +123,6 @@ async function listDevices({ search, page = 1, limit = 25 }) {
 
   const [devices, total] = await Promise.all([
     Device.find(filter)
-      .select("-wifiPassword")
       .sort({ updatedAt: -1 })
       .skip((currentPage - 1) * pageLimit)
       .limit(pageLimit)
@@ -203,4 +202,5 @@ module.exports = {
   Device,
   ProductionDevice,
   DeviceProvision,
+  DeviceMaintenanceLog,
 };

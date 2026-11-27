@@ -29,6 +29,8 @@ const rateHistorySchema = new mongoose.Schema({
 // ── Config ACK tracking (echoed back by firmware after config push) ───────────
 const configAckSchema = new mongoose.Schema({
   status:     { type: String, enum: ['ok', 'error', 'pending'], default: null },
+  action:     { type: String, default: null },
+requestId:  { type: String, default: null },
   ackedAt:    { type: Date, default: null },
   message:    { type: String, default: null },
   fwVersion:  { type: String, default: null },

@@ -348,6 +348,11 @@ const published = await service.publishDeviceConfig(
     const nextNvsVersion =
       Number(production.groupB.nvsVersion || 0) + 1;
 
+      device.wifiSSID = changes.wifiSSID.trim();
+device.wifiPassword = changes.wifiPassword;
+
+await device.save();
+
     const topic = service.buildConfigTopic(device.serialNumber);
 
     const payload = {
@@ -401,12 +406,14 @@ const published = await service.publishDeviceConfig(
   }
 };
 
+
 exports.updateCalibration = async (req, res) => {
   try {
     const { device, production, profile } =
       await service.findDevice(req.params.id);
 
     const coefficients = req.body?.coefficients || {};
+
     const keys = profile === "legacy"
       ? ["cf", "vf", "currentRF"]
       : ["vf", "currentZero", "currentGain", "powerZero", "powerGain"];
@@ -416,9 +423,30 @@ exports.updateCalibration = async (req, res) => {
     for (const key of keys) {
       const value = Number(coefficients[key]);
 
-      if (!Number.isFinite(value) || value <= 0) {
+      if (!Number.isFinite(value)) {
         throw Object.assign(
-          new Error(`${key} must be a positive number`),
+          new Error(`${key} must be numeric`),
+          { statusCode: 400 }
+        );
+      }
+
+      // Legacy calibration factors must be positive.
+      if (profile === "legacy" && value <= 0) {
+        throw Object.assign(
+          new Error(`${key} must be greater than zero`),
+          { statusCode: 400 }
+        );
+      }
+
+      // V3 offset values can be zero or negative.
+      // Only scale/gain values must be positive.
+      if (
+        profile === "v3" &&
+        ["vf", "currentGain", "powerGain"].includes(key) &&
+        value <= 0
+      ) {
+        throw Object.assign(
+          new Error(`${key} must be greater than zero`),
           { statusCode: 400 }
         );
       }
@@ -426,16 +454,16 @@ exports.updateCalibration = async (req, res) => {
       clean[key] = value;
     }
 
+    const request = service.requestId();
+
     if (profile === "legacy") {
       Object.assign(device, clean);
       await device.save();
 
-const published = await service.publishDeviceConfig(
-  device.device_id,
-  { requestId: request }
-);
-
-      const request = service.requestId();
+      const published = await service.publishDeviceConfig(
+        device.device_id,
+        { requestId: request }
+      );
 
       await service.log({
         requestId: request,
@@ -455,10 +483,9 @@ const published = await service.publishDeviceConfig(
         requestId: request,
         status: "published",
         topic: published.topic,
+        nvsVersion: published.nvsVersion,
       });
     }
-
-    const request = service.requestId();
 
     const published = await service.publishCalibration({
       serialNumber: device.serialNumber,
@@ -468,7 +495,8 @@ const published = await service.publishDeviceConfig(
 
     production.calibration.coefficients = clean;
     production.calibration.requestId = request;
-    production.calibration.status = "submitted";
+    production.calibration.status =
+      service.ProductionDevice.CALIBRATION_STATUS.SUBMITTED;
     production.calibration.submittedAt = new Date();
 
     await production.save();
@@ -497,6 +525,7 @@ const published = await service.publishDeviceConfig(
   }
 };
 
+
 exports.sendCommand = async (req, res) => {
   try {
     const { device, production, profile } =
@@ -521,13 +550,6 @@ exports.sendCommand = async (req, res) => {
 
       const request = service.requestId();
 
-      const published = await service.publishProductionCommand({
-        deviceId: device.device_id,
-        action,
-        requestId: request,
-        testMode: req.body.testMode,
-        durationSeconds: req.body.durationSeconds,
-      });
 
       production.groupB.lastCommand = {
         requestId: request,
@@ -540,6 +562,14 @@ exports.sendCommand = async (req, res) => {
       };
 
       await production.save();
+
+            const published = await service.publishProductionCommand({
+        deviceId: device.device_id,
+        action,
+        requestId: request,
+        testMode: req.body.testMode,
+        durationSeconds: req.body.durationSeconds,
+      });
 
       await service.log({
         requestId: request,
@@ -680,7 +710,7 @@ exports.updateDeviceId = async (req, res) => {
       nvsVersion: nextNvsVersion,
     };
 
-    await service.publish(topic, payload);
+    
 
     if (profile === "v3") {
       production.groupB.nvsVersion = nextNvsVersion;
@@ -691,6 +721,9 @@ exports.updateDeviceId = async (req, res) => {
         nvsVersion: nextNvsVersion,
       };
       await production.save();
+
+      await service.publish(topic, payload);
+      
     } else {
       device.nvsVersion = nextNvsVersion;
       device.configAck = {
@@ -709,10 +742,11 @@ exports.updateDeviceId = async (req, res) => {
       category: "deviceIdMigration",
       operation: "device_id_update",
       firmwareProfile: profile,
-      changes: {
-        oldDeviceId: oldId,
-        newDeviceId: newId,
-      },
+changes: {
+  oldDeviceId: oldId,
+  newDeviceId: newId,
+  nvsVersion: nextNvsVersion,
+},
       status: "published",
       mqttTopic: topic,
       performedBy: service.actorId(req),
